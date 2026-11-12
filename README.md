@@ -68,7 +68,10 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 | Left / Right | Seek -10 s / +10 s |
 | R | Recenter, yaw only (keeps the horizon level) |
 | Shift+R | Recenter, full |
-| [ / ] | Zoom out / in (x1.1 per step, 0.25 to 4) |
+| [ / ] | Zoom out / in (x1.1 per step, 0.25 to 4); prints `zoom: 1.10` |
+| , / . | Convergence -0.1 / +0.1 degrees (-5 to 5); prints `convergence: 0.3 deg` |
+| / | Convergence back to the `--convergence` value |
+| F | Toggle bicubic / bilinear sampling; prints `filter: bicubic` or `filter: bilinear` |
 | S | Swap eyes |
 | M | Cycle layout: sbs-lr, sbs-rl, mono |
 | Q | Quit |
@@ -80,7 +83,19 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 `--require-hwdec` (exit 1 unless mpv decodes with VA-API), `--timing-log PATH`,
 `--content-fov HxV`, `--proj hequirect` (the only projection so far, so optional),
 `--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)), `--mpv-profile NAME`,
-`--mpv-opt KEY=VALUE` (repeatable, up to 16).
+`--mpv-opt KEY=VALUE` (repeatable, up to 16), `--mpv-log LEVEL`, `--convergence DEG`,
+`--filter bilinear|bicubic`.
+
+`--convergence DEG` (default 0, -5 to 5) turns each eye's view by half the angle in opposite
+directions; positive turns the eyes inwards. `--filter` chooses how the eye pass samples the
+video: `bicubic` (Catmull-Rom, the default) or `bilinear`. Both are command-line flags only; see
+[Viewing comfort and sharpness](#viewing-comfort-and-sharpness).
+
+`--mpv-log LEVEL` (default `warn`; one of `no`, `fatal`, `error`, `warn`, `info`, `v`, `debug`)
+forwards mpv's own log messages at that level and above to stderr, one line each as
+`mpv: [<module>] <text>`, for example
+`mpv: [ao/alsa] Playback open error: Device or resource busy`. `no` turns them off. Use `info` or
+`v` when audio or decoding fails without an obvious reason.
 
 `--content-fov HxV` says how many degrees of longitude (H) and latitude (V) each eye of the file
 covers, centred straight ahead. The default is `180x180`; each value is 10 to 180. For a
@@ -147,6 +162,33 @@ zoom = 1.0
 [device.mydevice]
 fov_diag = 50
 ```
+
+## Viewing comfort and sharpness
+
+**Convergence.** The glasses show both eyes' images on a virtual screen a few metres away, so
+content that is identical in both eyes appears at that distance, not at infinity. A VR180 camera
+was set up for objects at infinity to line up, so anything close to the camera needs more
+eye-crossing on the glasses than it did in the scene, and a near subject can split into two
+images that will not fuse. Press `.` a few times (0.1 degrees per step) until the near subject
+becomes one image, `,` to go back, and `/` to return to the starting value. Each step prints the
+current value; to start a file with it, pass it on the command line, e.g. `--convergence 1.5`.
+Convergence is a display-side adjustment, not a property of the file: it shifts the left eye's
+picture left and the right eye's picture right (by half the angle each), the same in every
+layout, and does not change what the camera recorded. Positive values suit near subjects: they
+move everything in the scene further away, so the larger the value, the more your eyes must
+diverge for distant content; use the smallest value that fuses the subject. Negative values
+bring the scene nearer.
+
+**Sharpness.** The glasses show about 51 display pixels per degree, while a 4K VR180 file has
+about 11 source pixels per degree, so every source pixel is enlarged about five times. Two things
+help:
+
+- Zoom out (`[`): a wider view puts fewer display pixels on each source pixel, so the enlargement
+  and the blur that comes with it shrink. Zooming in (`]`) magnifies the softness.
+- Bicubic sampling (the default; `F` toggles it): bilinear filtering, the GPU's built-in
+  enlargement, turns every edge into a straight ramp a whole source pixel wide, which is the
+  blurriest way to enlarge. Catmull-Rom keeps edges steeper, at the cost of a faint halo next to
+  high-contrast edges. Press `F` on a still frame to compare.
 
 ## Diagnostics
 

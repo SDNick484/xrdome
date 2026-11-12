@@ -152,6 +152,87 @@ static void recenter_zeroes_mouse_angles_only(void **state)
     assert_float_equal(fabsf(q.w), 1.0f, TOL);
 }
 
+static void init_display_defaults_and_values(void **state)
+{
+    (void)state;
+    xrd_controls c;
+    xrd_controls_init(&c, 1.0f, XRD_LAYOUT_SBS_LR);
+    assert_float_equal(c.convergence_deg, 0.0f, TOL);
+    assert_int_equal(c.filter, XRD_FILTER_BICUBIC);
+    xrd_controls_init_display(&c, 1.5f, XRD_FILTER_BILINEAR);
+    assert_float_equal(c.convergence_deg, 1.5f, TOL);
+    assert_int_equal(c.filter, XRD_FILTER_BILINEAR);
+}
+
+static void convergence_steps_by_tenth(void **state)
+{
+    (void)state;
+    xrd_controls c;
+    xrd_controls_init(&c, 1.0f, XRD_LAYOUT_SBS_LR);
+    xrd_controls_convergence_inc(&c);
+    assert_float_equal(c.convergence_deg, 0.1f, TOL);
+    for (int i = 0; i < 9; i++)
+        xrd_controls_convergence_inc(&c);
+    assert_float_equal(c.convergence_deg, 1.0f, TOL);
+    for (int i = 0; i < 13; i++)
+        xrd_controls_convergence_dec(&c);
+    assert_float_equal(c.convergence_deg, -0.3f, TOL);
+    for (int i = 0; i < 3; i++)
+        xrd_controls_convergence_inc(&c);
+    /* back at zero after many steps: exactly zero, not a negative zero */
+    assert_true(c.convergence_deg == 0.0f);
+    assert_false(signbit(c.convergence_deg));
+}
+
+static void convergence_clamps_to_5(void **state)
+{
+    (void)state;
+    xrd_controls c;
+    xrd_controls_init(&c, 1.0f, XRD_LAYOUT_SBS_LR);
+    for (int i = 0; i < 100; i++)
+        xrd_controls_convergence_inc(&c);
+    assert_float_equal(c.convergence_deg, 5.0f, TOL);
+    assert_true(c.convergence_deg <= 5.0f);
+    for (int i = 0; i < 200; i++)
+        xrd_controls_convergence_dec(&c);
+    assert_float_equal(c.convergence_deg, -5.0f, TOL);
+    assert_true(c.convergence_deg >= -5.0f);
+    /* from just inside the limit a step lands exactly on it */
+    xrd_controls_init_display(&c, 4.95f, XRD_FILTER_BICUBIC);
+    xrd_controls_convergence_inc(&c);
+    assert_true(c.convergence_deg == 5.0f);
+}
+
+static void convergence_reset_returns_to_configured(void **state)
+{
+    (void)state;
+    xrd_controls c;
+    xrd_controls_init(&c, 1.0f, XRD_LAYOUT_SBS_LR);
+    xrd_controls_init_display(&c, 2.0f, XRD_FILTER_BICUBIC);
+    for (int i = 0; i < 7; i++)
+        xrd_controls_convergence_dec(&c);
+    assert_float_equal(c.convergence_deg, 1.3f, TOL);
+    xrd_controls_convergence_reset(&c);
+    assert_float_equal(c.convergence_deg, 2.0f, TOL);
+
+    /* default configuration resets to 0 */
+    xrd_controls_init(&c, 1.0f, XRD_LAYOUT_SBS_LR);
+    xrd_controls_convergence_inc(&c);
+    xrd_controls_convergence_reset(&c);
+    assert_true(c.convergence_deg == 0.0f);
+}
+
+static void filter_toggles(void **state)
+{
+    (void)state;
+    xrd_controls c;
+    xrd_controls_init(&c, 1.0f, XRD_LAYOUT_SBS_LR);
+    xrd_controls_toggle_filter(&c);
+    assert_int_equal(c.filter, XRD_FILTER_BILINEAR);
+    xrd_controls_toggle_filter(&c);
+    assert_int_equal(c.filter, XRD_FILTER_BICUBIC);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -164,6 +245,11 @@ int main(void)
         cmocka_unit_test(pitch_clamps_to_89),
         cmocka_unit_test(yaw_is_not_clamped),
         cmocka_unit_test(recenter_zeroes_mouse_angles_only),
+        cmocka_unit_test(init_display_defaults_and_values),
+        cmocka_unit_test(convergence_steps_by_tenth),
+        cmocka_unit_test(convergence_clamps_to_5),
+        cmocka_unit_test(convergence_reset_returns_to_configured),
+        cmocka_unit_test(filter_toggles),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

@@ -101,6 +101,11 @@ else
     ! grep '^xrdome:' "$work/play.err" | grep -qv 'not vaapi'; check "no other xrdome warnings or errors" $?
 fi
 grep -q '^timing: [0-9]* frames, [0-9]* missed vsyncs' "$work/play.err"; check "exit summary reports missed vsyncs" $?
+# mpv's own warnings are forwarded as "mpv: [<prefix>] <text>" (headless runs
+# have no VA-API or audio device, so some are expected); they are allowed, and
+# the only other mpv line is xrdome's own "mpv: profile=" report.
+! grep '^mpv: ' "$work/play.err" | grep -qv '^mpv: \[[^]]*\] .\|^mpv: profile='
+check "mpv lines are 'mpv: [prefix] text' or 'mpv: profile='" $?
 
 check_frame "$work/out.ppm"
 check "dumped frame: colours and orientation" $?
@@ -114,7 +119,7 @@ xvfb "$xrdome" --windowed --pose null --content-fov 90x90 --frames 30 \
 st=$?
 cat "$work/fov90.err"
 check "--content-fov 90x90 playback exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
-! grep -q 'aspect' "$work/fov90.err"; check "--content-fov 90x90: no aspect warning" $?
+! grep -v '^mpv: \[' "$work/fov90.err" | grep -q 'aspect'; check "--content-fov 90x90: no aspect warning" $?
 python3 -I - "$work/out.ppm" "$work/out90.ppm" <<'PY'
 import sys
 
@@ -158,6 +163,16 @@ for e, name in ((0, "left"), (1, "right")):
 sys.exit(0 if ok else 1)
 PY
 check "--content-fov 90x90 dump: centre colours, content larger than at 180x180" $?
+
+# 1a1. --convergence 2 --filter bilinear: each eye turns 1 degree inwards and
+# samples bilinearly; the centre, the box band and the orientation still hold.
+xvfb "$xrdome" --windowed --pose null --convergence 2 --filter bilinear --frames 30 \
+     --dump-frame "$work/outconv.ppm" "$work/pattern.mp4" >"$work/conv.err" 2>&1
+st=$?
+cat "$work/conv.err"
+check "--convergence 2 --filter bilinear exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+check_frame "$work/outconv.ppm"
+check "--convergence 2 --filter bilinear: colours and orientation" $?
 
 # 1a2. mpv options: --mpv-opt that mpv rejects exits 1 naming the key; the
 # default (fast) profile is reported; a bogus profile fails naming it.

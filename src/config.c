@@ -19,6 +19,7 @@
 #define ZOOM_MAX 4.f
 #define CONTENT_FOV_MIN 10.f
 #define CONTENT_FOV_MAX 180.f
+#define CONVERGENCE_MAX 5.f /* and -5 */
 
 static const struct { const char *name; float fov_diag; } builtin_devices[] = {
     {"viture-pro", 43.0f},
@@ -144,6 +145,9 @@ void xrd_config_defaults(xrd_config *c)
     c->content_hfov = 180.0f;
     c->content_vfov = 180.0f;
     copy_str(c->mpv_profile, sizeof c->mpv_profile, "fast");
+    copy_str(c->mpv_log, sizeof c->mpv_log, "warn");
+    c->convergence = 0.0f;
+    c->filter = XRD_FILTER_BICUBIC;
 }
 
 int xrd_config_default_path(char *buf, size_t len)
@@ -268,7 +272,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
 {
     enum { OPT_PROJ = 256, OPT_LAYOUT, OPT_POSE, OPT_OUTPUT, OPT_DEVICE, OPT_ZOOM,
            OPT_CONTENT_FOV, OPT_HWDEC, OPT_WINDOWED, OPT_TIMING, OPT_SYNC, OPT_FRAMES, OPT_DUMP,
-           OPT_MPV_PROFILE, OPT_MPV_OPT };
+           OPT_MPV_PROFILE, OPT_MPV_OPT, OPT_MPV_LOG, OPT_CONVERGENCE, OPT_FILTER };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
         {"layout", required_argument, NULL, OPT_LAYOUT},
@@ -285,6 +289,9 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"dump-frame", required_argument, NULL, OPT_DUMP},
         {"mpv-profile", required_argument, NULL, OPT_MPV_PROFILE},
         {"mpv-opt", required_argument, NULL, OPT_MPV_OPT},
+        {"mpv-log", required_argument, NULL, OPT_MPV_LOG},
+        {"convergence", required_argument, NULL, OPT_CONVERGENCE},
+        {"filter", required_argument, NULL, OPT_FILTER},
         {NULL, 0, NULL, 0},
     };
 
@@ -371,6 +378,29 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
                 copy_str(c->mpv_opts[c->mpv_opt_count++], sizeof c->mpv_opts[0], optarg);
             break;
         }
+        case OPT_MPV_LOG:
+            if (!xrd_mpv_log_level_valid(optarg)) {
+                set_err(err, errlen, "--mpv-log: unknown level '%s' "
+                        "(expected no, fatal, error, warn, info, v or debug)", optarg);
+                rc = -1;
+            } else
+                copy_str(c->mpv_log, sizeof c->mpv_log, optarg);
+            break;
+        case OPT_CONVERGENCE:
+            rc = parse_ranged("--convergence", optarg, -CONVERGENCE_MAX, CONVERGENCE_MAX,
+                              &c->convergence, err, errlen);
+            break;
+        case OPT_FILTER:
+            if (!strcmp(optarg, "bilinear"))
+                c->filter = XRD_FILTER_BILINEAR;
+            else if (!strcmp(optarg, "bicubic"))
+                c->filter = XRD_FILTER_BICUBIC;
+            else {
+                set_err(err, errlen, "--filter: unknown filter '%s' (expected bilinear or bicubic)",
+                        optarg);
+                rc = -1;
+            }
+            break;
         case ':':
             set_err(err, errlen, "option '%s' requires an argument", argv[optind - 1]);
             rc = -1;

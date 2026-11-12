@@ -65,6 +65,48 @@ bool xrd_video_is_sbs_2to1(int w, int h)
     return w > 0 && h > 0 && w == 2 * h;
 }
 
+bool xrd_mpv_log_level_valid(const char *level)
+{
+    static const char *const levels[] = {"no", "fatal", "error", "warn", "info", "v", "debug"};
+    if (!level)
+        return false;
+    for (size_t i = 0; i < sizeof levels / sizeof levels[0]; i++)
+        if (!strcmp(level, levels[i]))
+            return true;
+    return false;
+}
+
+void xrd_mpv_log_print(FILE *f, const char *prefix, const char *text)
+{
+    const char *s = text;
+    while (*s) {
+        size_t n = strcspn(s, "\n");
+        size_t len = n;
+        while (len > 0 && s[len - 1] == '\r')
+            len--;
+        if (len > 0)
+            fprintf(f, "mpv: [%s] %.*s\n", prefix, (int)len, s);
+        s += n;
+        if (*s == '\n')
+            s++;
+    }
+}
+
+/* Prints any log messages queued in mpv, dropping other events. Used on the
+ * failure path of open, where the update loop will never run. */
+static void drain_log(mpv_handle *mpv)
+{
+    for (;;) {
+        mpv_event *ev = mpv_wait_event(mpv, 0);
+        if (ev->event_id == MPV_EVENT_NONE)
+            return;
+        if (ev->event_id == MPV_EVENT_LOG_MESSAGE) {
+            const mpv_event_log_message *m = ev->data;
+            xrd_mpv_log_print(stderr, m->prefix, m->text);
+        }
+    }
+}
+
 static int set_opt(xrd_player *p, const char *name, const char *value, char *err, size_t errlen)
 {
     int rc = mpv_set_option_string(p->mpv, name, value);
@@ -113,6 +155,14 @@ xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void 
         set_err(err, errlen, "mpv_create failed");
         free(p);
         return NULL;
+    }
+    /* mpv's own warnings and errors (e.g. why audio output failed) go to
+     * stderr from the event drain. */
+    const char *log_level = opt && opt->log_level ? opt->log_level : "warn";
+    int lrc = mpv_request_log_messages(p->mpv, log_level);
+    if (lrc < 0) {
+        set_err(err, errlen, "mpv log level '%s': %s", log_level, mpv_error_string(lrc));
+        goto fail;
     }
     /* The profile goes first so every explicit option below wins over it. */
     const char *profile = opt && opt->profile ? opt->profile : "fast";
@@ -184,6 +234,8 @@ xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void 
     return p;
 
 fail:
+    if (p->mpv)
+        drain_log(p->mpv);
     xrd_player_free(p);
     return NULL;
 }
@@ -312,6 +364,11 @@ static int handle_events(xrd_player *p)
         case MPV_EVENT_SHUTDOWN:
             p->finished = true;
             break;
+        case MPV_EVENT_LOG_MESSAGE: {
+            const mpv_event_log_message *m = ev->data;
+            xrd_mpv_log_print(stderr, m->prefix, m->text);
+            break;
+        }
         default:
             break;
         }

@@ -5,6 +5,7 @@
 #include <stddef.h>
 
 #include "render/projection.h"
+#include "render/renderer_gl.h"
 
 typedef struct {
     char file[4096];
@@ -23,6 +24,9 @@ typedef struct {
     char mpv_profile[32];  /* --mpv-profile; default "fast"; "default" = apply no profile */
     char mpv_opts[16][256]; /* --mpv-opt KEY=VALUE, in order */
     int mpv_opt_count;
+    char mpv_log[8];       /* --mpv-log LEVEL; default "warn"; "no" = none */
+    float convergence;     /* --convergence DEG, -5 .. 5, default 0 */
+    xrd_filter filter;     /* --filter bilinear|bicubic, default bicubic */
     /* development only (smoke test), not documented: */
     int frames;            /* --frames N: exit 0 after N presented frames
                               once a video frame has been rendered; 0 = off */

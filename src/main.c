@@ -87,9 +87,32 @@ static bool handle_key(const SDL_KeyboardEvent *k, xrd_controls *ctl, xrd_tracke
         break;
     case SDLK_LEFTBRACKET:
         xrd_controls_zoom_out(ctl);
+        fprintf(stderr, "zoom: %.2f\n", (double)ctl->zoom);
         break;
     case SDLK_RIGHTBRACKET:
         xrd_controls_zoom_in(ctl);
+        fprintf(stderr, "zoom: %.2f\n", (double)ctl->zoom);
+        break;
+    case SDLK_COMMA:
+        xrd_controls_convergence_dec(ctl);
+        fprintf(stderr, "convergence: %.1f deg\n", (double)ctl->convergence_deg);
+        break;
+    case SDLK_PERIOD:
+        xrd_controls_convergence_inc(ctl);
+        fprintf(stderr, "convergence: %.1f deg\n", (double)ctl->convergence_deg);
+        break;
+    case SDLK_SLASH:
+        if (!k->repeat) {
+            xrd_controls_convergence_reset(ctl);
+            fprintf(stderr, "convergence: %.1f deg\n", (double)ctl->convergence_deg);
+        }
+        break;
+    case SDLK_f:
+        if (!k->repeat) {
+            xrd_controls_toggle_filter(ctl);
+            fprintf(stderr, "filter: %s\n",
+                    ctl->filter == XRD_FILTER_BICUBIC ? "bicubic" : "bilinear");
+        }
         break;
     case SDLK_s:
         if (!k->repeat)
@@ -225,7 +248,7 @@ int main(int argc, char **argv)
     for (int i = 0; i < cfg.mpv_opt_count; i++)
         mpv_opts[i] = cfg.mpv_opts[i];
     xrd_player_options popt = {.profile = cfg.mpv_profile, .opts = mpv_opts,
-                               .opt_count = cfg.mpv_opt_count};
+                               .opt_count = cfg.mpv_opt_count, .log_level = cfg.mpv_log};
     p = xrd_player_open_ex(cfg.file, gl_get_proc, wm.info.x11.display, &popt, err, sizeof err);
     if (!p) {
         fail("%s", err);
@@ -238,6 +261,7 @@ int main(int argc, char **argv)
 
     xrd_controls ctl;
     xrd_controls_init(&ctl, cfg.zoom, cfg.layout);
+    xrd_controls_init_display(&ctl, cfg.convergence, cfg.filter);
     const bool mouse_look = strcmp(pose->name, "null") == 0;
     float eye_aspect = 1.f;
     bool size_dirty = true; /* recompute the per-eye aspect and tans on the next frame */
@@ -334,6 +358,8 @@ int main(int argc, char **argv)
             float rot[9], tan_h, tan_v;
             xrd_quat_to_mat3(view, rot);
             xrd_fov_tan_half(cfg.fov_diag, eye_aspect, ctl.zoom, &tan_h, &tan_v);
+            xrd_renderer_set_convergence(r, ctl.convergence_deg);
+            xrd_renderer_set_filter(r, ctl.filter);
             xrd_renderer_draw(r, tex, rot, tan_h, tan_v, ctl.layout, ctl.swap_eyes,
                               out_w, out_h);
         } else {

@@ -2,8 +2,10 @@
 #include <stddef.h>
 #include <setjmp.h>
 #include <stdbool.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <cmocka.h>
 
@@ -35,6 +37,22 @@ static const uint8_t *quad_colour(int eye, int right, int top)
                      {{255, 255, 255}, {255, 0, 255}}},
     };
     return c[eye][right][top];
+}
+
+/* RGBA8 texture with GL_LINEAR filtering and clamp-to-edge, as the renderer's
+ * contract asks. px is w * h RGBA, row 0 = v = 0 (the image bottom). */
+static GLuint make_tex(int w, int h, const uint8_t *px)
+{
+    GLuint t;
+    glGenTextures(1, &t);
+    glBindTexture(GL_TEXTURE_2D, t);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return t;
 }
 
 static int setup(void **state)
@@ -216,9 +234,12 @@ static void behind_is_black(void **state)
     expect_px(288, 54, 0, 0, 0);
 }
 
-static void no_seam_bleed(void **state)
+/* Looking 89 degrees right, the left eye samples the right edge of its
+ * sub-image, next to the right eye's blue; looking 89 degrees left, the right
+ * eye samples the left edge of its sub-image, next to the left eye's red.
+ * Neither may show any of the other eye's colour. */
+static void check_no_seam_bleed(void)
 {
-    (void)state;
     draw(xrd_quat_from_ypr_deg(-89, 0, 0), XRD_LAYOUT_SBS_LR, false);
     int blue_max = 0, red_seen = 0;
     for (int y = 0; y < H; y++)
@@ -231,6 +252,25 @@ static void no_seam_bleed(void **state)
         }
     assert_int_equal(blue_max, 0);
     assert_true(red_seen > 0); /* the test really reached the seam region */
+
+    draw(xrd_quat_from_ypr_deg(89, 0, 0), XRD_LAYOUT_SBS_LR, false);
+    int red_max = 0, blue_seen = 0;
+    for (int y = 0; y < H; y++)
+        for (int x = W / 2; x < W; x++) {
+            const uint8_t *p = &g_img[(y * W + x) * 4];
+            if (p[0] > red_max)
+                red_max = p[0];
+            if (p[2] > 200)
+                blue_seen++;
+        }
+    assert_int_equal(red_max, 0);
+    assert_true(blue_seen > 0);
+}
+
+static void no_seam_bleed(void **state)
+{
+    (void)state;
+    check_no_seam_bleed();
 }
 
 static void draw_ignores_caller_state(void **state)
@@ -357,6 +397,316 @@ static void fov180x90_rejects_only_vertically(void **state)
     expect_px(288, 54, 0, 0, 0);
 }
 
+/* Restores the renderer's defaults after a test that changed them. */
+static int reset_view(void **state)
+{
+    (void)state;
+    xrd_renderer_set_filter(g_r, XRD_FILTER_BILINEAR);
+    xrd_renderer_set_convergence(g_r, 0.f);
+    xrd_renderer_set_content_fov(g_r, 180.f, 180.f);
+    return 0;
+}
+
+/* ---- convergence ---- */
+
+/* Each eye's sub-image is LINE_EW texels wide (odd, so one texel column sits
+ * exactly on u = 0.5), black with one white column at its centre. */
+#define LINE_EW 65
+#define LINE_H 16
+
+static GLuint make_line_tex(void)
+{
+    static uint8_t px[2 * LINE_EW * LINE_H * 4];
+    for (int y = 0; y < LINE_H; y++)
+        for (int x = 0; x < 2 * LINE_EW; x++) {
+            uint8_t *p = &px[(y * 2 * LINE_EW + x) * 4];
+            uint8_t v = (x % LINE_EW) == LINE_EW / 2 ? 255 : 0;
+            p[0] = p[1] = p[2] = v;
+            p[3] = 255;
+        }
+    return make_tex(2 * LINE_EW, LINE_H, px);
+}
+
+/* Red-weighted centroid of the middle row of viewport eye, in pixels from
+ * that viewport's left edge (pixel i covers [i, i + 1), so the centre of a
+ * 192-pixel viewport is 96.0 and pixel 95's centre is 95.5). */
+static double line_centroid(int eye)
+{
+    double sum = 0, wsum = 0;
+    int y = H / 2;
+    for (int x = 0; x < W / 2; x++) {
+        double v = g_img[(y * W + eye * (W / 2) + x) * 4];
+        sum += v * (x + 0.5);
+        wsum += v;
+    }
+    assert_true(wsum > 0);
+    return sum / wsum;
+}
+
+/* Where the content straight ahead (lon 0) lands when the eye looks yaw_right
+ * degrees to the right of it: tan-space, independent of the renderer. Returns
+ * the offset from the viewport centre in pixels (negative = left). */
+static double expected_offset_px(double yaw_right_deg)
+{
+    double t = tan(-yaw_right_deg * 3.14159265358979323846 / 180.0);
+    return t / g_th * (W / 4.0); /* half a viewport is W/4 pixels */
+}
+
+static void draw_converged(GLuint tex, float conv_deg)
+{
+    xrd_renderer_set_convergence(g_r, conv_deg);
+    draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false, false);
+}
+
+static void convergence_zero_centres_line(void **state)
+{
+    (void)state;
+    GLuint tex = make_line_tex();
+    draw_converged(tex, 0.f);
+    double centre = W / 4.0;
+    for (int eye = 0; eye < 2; eye++) {
+        double c = line_centroid(eye);
+        if (fabs(c - centre) > 1.5)
+            fail_msg("eye %d: line at %.2f px, want %.2f", eye, c, centre);
+    }
+    glDeleteTextures(1, &tex);
+}
+
+/* Positive convergence toes the eyes in: the left eye looks right by half the
+ * angle, so straight-ahead content appears LEFT of the left viewport's centre;
+ * the right eye looks left, so it appears RIGHT of the right viewport's
+ * centre. Negative convergence reverses both. */
+static void check_convergence(float conv_deg)
+{
+    GLuint tex = make_line_tex();
+    draw_converged(tex, conv_deg);
+    double centre = W / 4.0;
+    double left = line_centroid(0) - centre, right = line_centroid(1) - centre;
+    /* left eye looks right by conv/2, right eye looks left by conv/2 */
+    double want_left = expected_offset_px(conv_deg / 2.0);
+    double want_right = expected_offset_px(-conv_deg / 2.0);
+    if (conv_deg > 0) {
+        assert_true(want_left < -3.0 && want_right > 3.0); /* the expectation itself */
+        assert_true(left < 0.0);
+        assert_true(right > 0.0);
+    } else {
+        assert_true(want_left > 3.0 && want_right < -3.0);
+        assert_true(left > 0.0);
+        assert_true(right < 0.0);
+    }
+    if (fabs(left - want_left) > 1.5 || fabs(right - want_right) > 1.5)
+        fail_msg("conv %.1f: offsets left %.2f right %.2f px, want %.2f and %.2f",
+                 (double)conv_deg, left, right, want_left, want_right);
+    if (fabs(left + right) > 1.0)
+        fail_msg("conv %.1f: unequal shifts %.2f and %.2f px", (double)conv_deg, left, right);
+    glDeleteTextures(1, &tex);
+}
+
+static void convergence_positive_separates_left_left(void **state)
+{
+    (void)state;
+    check_convergence(4.f);
+}
+
+static void convergence_negative_reverses(void **state)
+{
+    (void)state;
+    check_convergence(-4.f);
+}
+
+/* A display property: it follows the viewport, not the sub-image, so mono and
+ * swapped eyes shift the same way. */
+static void convergence_applies_in_mono_and_swap(void **state)
+{
+    (void)state;
+    GLuint tex = make_line_tex();
+    xrd_renderer_set_convergence(g_r, 4.f);
+    double centre = W / 4.0, want = expected_offset_px(2.0);
+    draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, true, false);
+    assert_true(fabs(line_centroid(0) - centre - want) <= 1.5);
+    assert_true(fabs(line_centroid(1) - centre + want) <= 1.5);
+    glDeleteTextures(1, &tex);
+
+    /* mono: one centred line across the whole texture (odd width) */
+    static uint8_t px[LINE_EW * LINE_H * 4];
+    for (int y = 0; y < LINE_H; y++)
+        for (int x = 0; x < LINE_EW; x++) {
+            uint8_t *p = &px[(y * LINE_EW + x) * 4];
+            p[0] = p[1] = p[2] = x == LINE_EW / 2 ? 255 : 0;
+            p[3] = 255;
+        }
+    tex = make_tex(LINE_EW, LINE_H, px);
+    draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_MONO, false, false);
+    assert_true(fabs(line_centroid(0) - centre - want) <= 1.5);
+    assert_true(fabs(line_centroid(1) - centre + want) <= 1.5);
+    glDeleteTextures(1, &tex);
+}
+
+/* ---- bicubic (Catmull-Rom) ---- */
+
+#define STEP_EW 32
+#define STEP_H 16
+#define STEP_LO 50
+#define STEP_HI 200
+
+/* Each eye's sub-image: grey STEP_LO left of its centre, STEP_HI right of it,
+ * the same in every row. */
+static uint8_t step_value(int x_in_eye)
+{
+    return x_in_eye < STEP_EW / 2 ? STEP_LO : STEP_HI;
+}
+
+static GLuint make_step_tex(void)
+{
+    static uint8_t px[2 * STEP_EW * STEP_H * 4];
+    for (int y = 0; y < STEP_H; y++)
+        for (int x = 0; x < 2 * STEP_EW; x++) {
+            uint8_t *p = &px[(y * 2 * STEP_EW + x) * 4];
+            p[0] = p[1] = p[2] = step_value(x % STEP_EW);
+            p[3] = 255;
+        }
+    return make_tex(2 * STEP_EW, STEP_H, px);
+}
+
+/* Catmull-Rom of one row of n texels at texel-space position p (texel i is
+ * centred on i + 0.5), clamping indices to the row (clamp to edge). */
+static double catmull_rom(const double *row, int n, double p)
+{
+    double s = p - 0.5;
+    int i1 = (int)floor(s);
+    double f = s - i1;
+    double w[4] = {
+        0.5 * (-f * f * f + 2 * f * f - f),
+        0.5 * (3 * f * f * f - 5 * f * f + 2),
+        0.5 * (-3 * f * f * f + 4 * f * f + f),
+        0.5 * (f * f * f - f * f),
+    };
+    double sum = 0;
+    for (int k = 0; k < 4; k++) {
+        int i = i1 - 1 + k;
+        i = i < 0 ? 0 : (i > n - 1 ? n - 1 : i);
+        sum += w[k] * row[i];
+    }
+    return sum;
+}
+
+/* Reference value of viewport pixel (x, y) for the step texture, identity
+ * view, 180 x 180 content: the eye-pass mapping in double precision, the
+ * half-texel seam clamp, then Catmull-Rom across the eye's sub-image. */
+static double step_reference(int x, int y)
+{
+    double ndc_x = (x + 0.5) / (W / 4.0) - 1.0, ndc_y = (y + 0.5) / (H / 2.0) - 1.0;
+    double dx = ndc_x * g_th, dy = ndc_y * g_tv, dz = -1.0;
+    double len = sqrt(dx * dx + dy * dy + dz * dz);
+    dx /= len;
+    dz /= len;
+    double u = atan2(dx, -dz) / 3.14159265358979323846 + 0.5;
+    double m = 0.5 / STEP_EW;
+    u = u < m ? m : (u > 1.0 - m ? 1.0 - m : u);
+    double row[STEP_EW];
+    for (int i = 0; i < STEP_EW; i++)
+        row[i] = step_value(i);
+    double v = catmull_rom(row, STEP_EW, u * STEP_EW);
+    return v < 0 ? 0 : (v > 255 ? 255 : v);
+}
+
+static void bicubic_matches_catmull_rom_reference(void **state)
+{
+    (void)state;
+    GLuint tex = make_step_tex();
+    xrd_renderer_set_filter(g_r, XRD_FILTER_BICUBIC);
+    draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false, false);
+    int y = H / 2;
+    double undershoot = 255, overshoot = 0;
+    for (int eye = 0; eye < 2; eye++)
+        for (int x = 0; x < W / 2; x++) {
+            double want = step_reference(x, y);
+            if (want < undershoot)
+                undershoot = want;
+            if (want > overshoot)
+                overshoot = want;
+            const uint8_t *p = &g_img[(y * W + eye * (W / 2) + x) * 4];
+            for (int c = 0; c < 3; c++)
+                if (fabs(p[c] - want) > 3.0)
+                    fail_msg("eye %d pixel %d channel %d = %d, Catmull-Rom reference %.2f",
+                             eye, x, c, p[c], want);
+        }
+    /* The reference really rings around the edge, so it is not bilinear. */
+    assert_true(undershoot < STEP_LO - 5);
+    assert_true(overshoot > STEP_HI + 5);
+    glDeleteTextures(1, &tex);
+}
+
+static void bicubic_differs_from_bilinear_near_edge(void **state)
+{
+    (void)state;
+    GLuint tex = make_step_tex();
+    static uint8_t lin[W * H * 4];
+    xrd_renderer_set_filter(g_r, XRD_FILTER_BILINEAR);
+    draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false, false);
+    memcpy(lin, g_img, sizeof lin);
+    xrd_renderer_set_filter(g_r, XRD_FILTER_BICUBIC);
+    draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false, false);
+    int y = H / 2, max_diff = 0, at = -1;
+    for (int x = 0; x < W / 2; x++) {
+        int d = abs((int)g_img[(y * W + x) * 4] - (int)lin[(y * W + x) * 4]);
+        if (d > max_diff) {
+            max_diff = d;
+            at = x;
+        }
+    }
+    assert_true(max_diff >= 6);
+    /* ...and that difference is near the edge (the viewport centre). */
+    assert_true(abs(at - W / 4) < W / 8);
+    glDeleteTextures(1, &tex);
+}
+
+static void bicubic_keeps_flat_colour(void **state)
+{
+    (void)state;
+    static uint8_t px[TEX_W * TEX_H * 4];
+    for (int i = 0; i < TEX_W * TEX_H; i++) {
+        px[i * 4 + 0] = 37;
+        px[i * 4 + 1] = 140;
+        px[i * 4 + 2] = 201;
+        px[i * 4 + 3] = 255;
+    }
+    GLuint tex = make_tex(TEX_W, TEX_H, px);
+    xrd_renderer_set_filter(g_r, XRD_FILTER_BICUBIC);
+    const xrd_quat views[] = {XRD_QUAT_IDENTITY, xrd_quat_from_ypr_deg(-60, 25, 0),
+                              xrd_quat_from_ypr_deg(80, -70, 10)};
+    for (size_t v = 0; v < sizeof views / sizeof views[0]; v++) {
+        draw_tex(tex, views[v], XRD_LAYOUT_SBS_LR, false, false);
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++) {
+                const uint8_t *p = &g_img[(y * W + x) * 4];
+                if (p[0] + p[1] + p[2] == 0)
+                    continue; /* behind the viewer: black by design */
+                if (abs(p[0] - 37) > 1 || abs(p[1] - 140) > 1 || abs(p[2] - 201) > 1)
+                    fail_msg("view %zu pixel (%d,%d) = (%d,%d,%d), want (37,140,201)", v, x, y,
+                             p[0], p[1], p[2]);
+            }
+    }
+    glDeleteTextures(1, &tex);
+}
+
+static void bicubic_no_seam_bleed(void **state)
+{
+    (void)state;
+    xrd_renderer_set_filter(g_r, XRD_FILTER_BICUBIC);
+    check_no_seam_bleed();
+}
+
+/* The red/blue texture's eye centres are flat, so bicubic shows the same. */
+static void bicubic_identity_left_is_red(void **state)
+{
+    (void)state;
+    xrd_renderer_set_filter(g_r, XRD_FILTER_BICUBIC);
+    draw(XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false);
+    expect_px(96, 54, 255, 0, 0);
+    expect_px(288, 54, 0, 0, 255);
+}
+
 static void no_gl_error(void **state)
 {
     (void)state;
@@ -389,6 +739,15 @@ int main(void)
         cmocka_unit_test(fov90_pitch_outside_is_black),
         cmocka_unit_test(fov90_edge_splits_the_view),
         cmocka_unit_test(fov180x90_rejects_only_vertically),
+        cmocka_unit_test_teardown(convergence_zero_centres_line, reset_view),
+        cmocka_unit_test_teardown(convergence_positive_separates_left_left, reset_view),
+        cmocka_unit_test_teardown(convergence_negative_reverses, reset_view),
+        cmocka_unit_test_teardown(convergence_applies_in_mono_and_swap, reset_view),
+        cmocka_unit_test_teardown(bicubic_matches_catmull_rom_reference, reset_view),
+        cmocka_unit_test_teardown(bicubic_differs_from_bilinear_near_edge, reset_view),
+        cmocka_unit_test_teardown(bicubic_keeps_flat_colour, reset_view),
+        cmocka_unit_test_teardown(bicubic_no_seam_bleed, reset_view),
+        cmocka_unit_test_teardown(bicubic_identity_left_is_red, reset_view),
         cmocka_unit_test(no_gl_error),
     };
     return cmocka_run_group_tests(tests, setup, teardown);

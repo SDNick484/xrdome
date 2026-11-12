@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <setjmp.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 #include <cmocka.h>
 
@@ -115,6 +116,58 @@ static void opt_split_rejects(void **state)
     assert_false(xrd_mpv_opt_split("longkey=1", k, 4, v, sizeof v)); /* does not fit */
 }
 
+static void log_level_valid(void **state)
+{
+    (void)state;
+    const char *ok[] = {"no", "fatal", "error", "warn", "info", "v", "debug"};
+    for (size_t i = 0; i < sizeof ok / sizeof ok[0]; i++)
+        assert_true(xrd_mpv_log_level_valid(ok[i]));
+    const char *bad[] = {"", "trace", "warning", "Warn", "vv", "debug ", NULL};
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++)
+        assert_false(xrd_mpv_log_level_valid(bad[i]));
+}
+
+/* Runs xrd_mpv_log_print into a temp file and returns what it wrote. */
+static const char *log_print(const char *prefix, const char *text)
+{
+    static char out[1024];
+    FILE *f = tmpfile();
+    assert_non_null(f);
+    xrd_mpv_log_print(f, prefix, text);
+    rewind(f);
+    size_t n = fread(out, 1, sizeof out - 1, f);
+    out[n] = '\0';
+    fclose(f);
+    return out;
+}
+
+static void log_print_one_line(void **state)
+{
+    (void)state;
+    assert_string_equal(log_print("ao/alsa", "Playback open error: Device or resource busy\n"),
+                        "mpv: [ao/alsa] Playback open error: Device or resource busy\n");
+    /* no trailing newline in the message: still one terminated line */
+    assert_string_equal(log_print("vd", "x"), "mpv: [vd] x\n");
+}
+
+static void log_print_skips_empty(void **state)
+{
+    (void)state;
+    assert_string_equal(log_print("cplayer", "\n"), "");
+    assert_string_equal(log_print("cplayer", ""), "");
+    assert_string_equal(log_print("cplayer", "\r\n"), "");
+}
+
+static void log_print_splits_lines(void **state)
+{
+    (void)state;
+    /* every output line carries the mpv prefix, so none can start with xrdome: */
+    assert_string_equal(log_print("ffmpeg", "first\n\nxrdome: fake\r\nlast\n"),
+                        "mpv: [ffmpeg] first\n"
+                        "mpv: [ffmpeg] xrdome: fake\n"
+                        "mpv: [ffmpeg] last\n");
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -128,6 +181,10 @@ int main(void)
         cmocka_unit_test(sbs_2to1),
         cmocka_unit_test(opt_split_basic),
         cmocka_unit_test(opt_split_rejects),
+        cmocka_unit_test(log_level_valid),
+        cmocka_unit_test(log_print_one_line),
+        cmocka_unit_test(log_print_skips_empty),
+        cmocka_unit_test(log_print_splits_lines),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

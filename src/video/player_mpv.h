@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 
 #include "render/projection.h"
 
@@ -18,11 +19,15 @@ xrd_player *xrd_player_open(const char *file, xrd_gl_get_proc get_proc, void *x1
 
 /* mpv tuning, applied before mpv_initialize. profile: an mpv profile name,
  * "default" for none, NULL for "fast". opts: opt_count "KEY=VALUE" strings,
- * applied after the profile and xrdome's own fixed options, so they win. */
+ * applied after the profile and xrdome's own fixed options, so they win.
+ * log_level: the least severe mpv log level printed to stderr as
+ * "mpv: [<prefix>] <text>" lines (see xrd_mpv_log_level_valid); NULL for
+ * "warn", "no" for none. */
 typedef struct {
     const char *profile;
     const char *const *opts;
     int opt_count;
+    const char *log_level;
 } xrd_player_options;
 
 /* As xrd_player_open; opt may be NULL (profile "fast", no extra options).
@@ -63,6 +68,13 @@ bool xrd_video_aspect_matches(int w, int h, xrd_layout layout, float hfov_deg, f
 /* Splits "KEY=VALUE" at the first '='. The value may contain '=' and be empty.
  * False for no '=', an empty key, or a key or value that does not fit. */
 bool xrd_mpv_opt_split(const char *s, char *key, size_t keylen, char *val, size_t vallen);
+/* True for an mpv log level xrdome accepts: no, fatal, error, warn, info, v,
+ * debug. False for NULL. */
+bool xrd_mpv_log_level_valid(const char *level);
+/* Writes one mpv log message to f as "mpv: [<prefix>] <line>\n" per line of
+ * text, dropping empty lines and trailing CR/LF, so every line written starts
+ * with "mpv: ". */
+void xrd_mpv_log_print(FILE *f, const char *prefix, const char *text);
 /* True for an exactly 2:1 frame (two square eyes side by side). */
 bool xrd_video_is_sbs_2to1(int w, int h);
 

@@ -59,6 +59,9 @@ static void defaults_match_spec(void **state)
     assert_string_equal(c.timing_log, "");
     assert_int_equal(c.frames, 0);
     assert_string_equal(c.dump_frame, "");
+    assert_float_equal(c.convergence, 0.0f, TOL);
+    assert_int_equal(c.filter, XRD_FILTER_BICUBIC);
+    assert_string_equal(c.mpv_log, "warn");
 }
 
 static void ini_absent_is_ok(void **state)
@@ -475,6 +478,102 @@ static void args_mpv_opt_limits(void **state)
     assert_non_null(strstr(err, "mpv-opt"));
 }
 
+static void args_convergence(void **state)
+{
+    (void)state;
+    const char *ok[] = {"2", "-5", "5", "0.3", "-1.25"};
+    const float want[] = {2.f, -5.f, 5.f, 0.3f, -1.25f};
+    for (size_t i = 0; i < sizeof ok / sizeof ok[0]; i++) {
+        char err[256] = "";
+        xrd_config c;
+        xrd_config_defaults(&c);
+        char *a[] = {"xrdome", "--convergence", (char *)ok[i], "a.mp4", NULL};
+        assert_int_equal(xrd_config_parse_args(&c, 4, a, err, sizeof err), 0);
+        assert_float_equal(c.convergence, want[i], TOL);
+    }
+}
+
+static void args_convergence_bad_values(void **state)
+{
+    (void)state;
+    const char *bad[] = {"5.1", "-5.01", "10", "abc", "", "2deg", "nan", "inf"};
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        char err[256] = "";
+        xrd_config c;
+        xrd_config_defaults(&c);
+        char *a[] = {"xrdome", "--convergence", (char *)bad[i], "a.mp4", NULL};
+        assert_int_equal(xrd_config_parse_args(&c, 4, a, err, sizeof err), -1);
+        assert_non_null(strstr(err, "convergence"));
+        assert_non_null(strstr(err, bad[i]));
+        assert_float_equal(c.convergence, 0.0f, TOL);
+    }
+}
+
+static void args_filter(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    xrd_config c;
+    xrd_config_defaults(&c);
+    char *a[] = {"xrdome", "--filter", "bilinear", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, a, err, sizeof err), 0);
+    assert_int_equal(c.filter, XRD_FILTER_BILINEAR);
+    char *b[] = {"xrdome", "--filter", "bicubic", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, b, err, sizeof err), 0);
+    assert_int_equal(c.filter, XRD_FILTER_BICUBIC);
+
+    const char *bad[] = {"lanczos", "Bicubic", "", "nearest"};
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        xrd_config_defaults(&c);
+        char *x[] = {"xrdome", "--filter", (char *)bad[i], "a.mp4", NULL};
+        assert_int_equal(xrd_config_parse_args(&c, 4, x, err, sizeof err), -1);
+        assert_non_null(strstr(err, "filter"));
+        assert_non_null(strstr(err, bad[i]));
+        assert_int_equal(c.filter, XRD_FILTER_BICUBIC);
+    }
+}
+
+static void args_mpv_log(void **state)
+{
+    (void)state;
+    const char *ok[] = {"no", "fatal", "error", "warn", "info", "v", "debug"};
+    for (size_t i = 0; i < sizeof ok / sizeof ok[0]; i++) {
+        char err[256] = "";
+        xrd_config c;
+        xrd_config_defaults(&c);
+        char *a[] = {"xrdome", "--mpv-log", (char *)ok[i], "a.mp4", NULL};
+        assert_int_equal(xrd_config_parse_args(&c, 4, a, err, sizeof err), 0);
+        assert_string_equal(c.mpv_log, ok[i]);
+    }
+    const char *bad[] = {"trace", "warning", "WARN", "", "debugx"};
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        char err[256] = "";
+        xrd_config c;
+        xrd_config_defaults(&c);
+        char *a[] = {"xrdome", "--mpv-log", (char *)bad[i], "a.mp4", NULL};
+        assert_int_equal(xrd_config_parse_args(&c, 4, a, err, sizeof err), -1);
+        assert_non_null(strstr(err, "mpv-log"));
+        assert_non_null(strstr(err, bad[i]));
+        assert_string_equal(c.mpv_log, "warn");
+    }
+}
+
+static void ini_new_flags_are_not_keys(void **state)
+{
+    (void)state;
+    const char *keys[] = {"convergence = 1", "filter = bilinear", "mpv_log = info"};
+    for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
+        char path[64], err[256] = "", text[128];
+        snprintf(text, sizeof text, "[device.viture-pro]\n%s\n", keys[i]);
+        write_tmp(path, text);
+        xrd_config c;
+        xrd_config_defaults(&c);
+        assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), -1);
+        assert_non_null(strstr(err, "unknown key"));
+        unlink(path);
+    }
+}
+
 static void ini_content_fov_is_not_a_key(void **state)
 {
     (void)state;
@@ -735,6 +834,11 @@ int main(void)
         cmocka_unit_test(args_mpv_opt_stored_in_order),
         cmocka_unit_test(args_mpv_opt_bad_forms),
         cmocka_unit_test(args_mpv_opt_limits),
+        cmocka_unit_test(args_convergence),
+        cmocka_unit_test(args_convergence_bad_values),
+        cmocka_unit_test(args_filter),
+        cmocka_unit_test(args_mpv_log),
+        cmocka_unit_test(ini_new_flags_are_not_keys),
         cmocka_unit_test(ini_content_fov_is_not_a_key),
         cmocka_unit_test(load_unknown_device_names_it),
         cmocka_unit_test(load_ini_defined_device_ok),
