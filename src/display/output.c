@@ -1,6 +1,7 @@
 #include "display/output.h"
 
 #include <SDL.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -10,6 +11,13 @@
 static int is_sbs(const xrd_output_info *o)
 {
     return o->w == XRD_SBS_W && o->h == XRD_SBS_H;
+}
+
+/* SDL names are "<product or RandR name> <diag>\"": match whole or up to a space. */
+static bool name_matches(const char *name, const char *want)
+{
+    size_t n = strlen(want);
+    return strncmp(name, want, n) == 0 && (name[n] == '\0' || name[n] == ' ');
 }
 
 int xrd_output_select(const xrd_output_info *outs, int n, const char *want, int *idx)
@@ -22,7 +30,7 @@ int xrd_output_select(const xrd_output_info *outs, int n, const char *want, int 
                 *idx = i;
                 return XRD_OUT_OK;
             }
-        } else if (strcmp(outs[i].name, want) == 0) {
+        } else if (name_matches(outs[i].name, want)) {
             if (!is_sbs(&outs[i]))
                 return XRD_OUT_NOT_SBS;
             *idx = i;
@@ -30,6 +38,25 @@ int xrd_output_select(const xrd_output_info *outs, int n, const char *want, int 
         }
     }
     return XRD_OUT_NOT_FOUND;
+}
+
+void xrd_output_list(const xrd_output_info *outs, int n, char *buf, size_t len)
+{
+    if (!buf || len == 0)
+        return;
+    buf[0] = '\0';
+    if (n <= 0) {
+        snprintf(buf, len, "none");
+        return;
+    }
+    size_t used = 0;
+    for (int i = 0; i < n && used < len - 1; i++) {
+        int w = snprintf(buf + used, len - used, "%s%s (%dx%d)", i ? ", " : "",
+                         outs[i].name, outs[i].w, outs[i].h);
+        if (w < 0)
+            break;
+        used += (size_t)w;
+    }
 }
 
 int xrd_output_enumerate(xrd_output_info *outs, int max)

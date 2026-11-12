@@ -2,7 +2,9 @@
 
 A Linux player for VR180 video on XR glasses (Viture Pro XR, XREAL Air 2 Pro) with head tracking.
 
-Status: design and plan are written, implementation has not started. See
+Status: the hardware-free core modules (math, projection, config, pose backends,
+tracker, renderer, output selection) are implemented with tests; the player and
+main loop are not yet. See
 `docs/superpowers/specs/2026-11-11-xrdome-design.md` and
 `docs/superpowers/plans/2026-11-11-xrdome.md`.
 

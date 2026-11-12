@@ -21,9 +21,21 @@
 
 static EGLDisplay g_dpy;
 static EGLContext g_ctx;
-static GLuint g_fbo, g_color, g_tex;
+static GLuint g_fbo, g_color, g_tex, g_quad_tex;
 static xrd_renderer *g_r;
 static float g_th, g_tv;
+
+/* Colour of quadrant (eye, right half?, top half?) of the quadrant texture. */
+static const uint8_t *quad_colour(int eye, int right, int top)
+{
+    static const uint8_t c[2][2][2][3] = {
+        /* eye 0 */ {{{0, 0, 255}, {255, 0, 0}},       /* left:  bottom, top */
+                     {{128, 0, 255}, {255, 128, 0}}},  /* right: bottom, top */
+        /* eye 1 */ {{{0, 255, 255}, {255, 255, 0}},
+                     {{255, 255, 255}, {255, 0, 255}}},
+    };
+    return c[eye][right][top];
+}
 
 static int setup(void **state)
 {
@@ -80,6 +92,26 @@ static int setup(void **state)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
+    /* Quadrant texture: each eye half has four distinct colours. Row 0 is v = 0
+     * (image bottom); rows >= TEX_H/2 are the image top. */
+    for (int y = 0; y < TEX_H; y++)
+        for (int x = 0; x < TEX_W; x++) {
+            uint8_t *p = &px[(y * TEX_W + x) * 4];
+            const uint8_t *c = quad_colour(x / (TEX_W / 2), (x % (TEX_W / 2)) >= TEX_W / 4,
+                                           y >= TEX_H / 2);
+            p[0] = c[0];
+            p[1] = c[1];
+            p[2] = c[2];
+            p[3] = 255;
+        }
+    glGenTextures(1, &g_quad_tex);
+    glBindTexture(GL_TEXTURE_2D, g_quad_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, TEX_W, TEX_H, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
     char err[512] = "";
     g_r = xrd_renderer_new(err, sizeof err);
     if (!g_r) {
@@ -99,7 +131,7 @@ static int teardown(void **state)
 
 static uint8_t g_img[W * H * 4];
 
-static void draw(xrd_quat q, xrd_layout layout, bool swap)
+static void draw_tex(GLuint tex, xrd_quat q, xrd_layout layout, bool swap, bool hostile)
 {
     float rot[9];
     xrd_quat_to_mat3(q, rot);
@@ -107,10 +139,30 @@ static void draw(xrd_quat q, xrd_layout layout, bool swap)
     glViewport(0, 0, W, H);
     glClearColor(0.f, 1.f, 0.f, 1.f); /* green: any uncovered pixel fails */
     glClear(GL_COLOR_BUFFER_BIT);
-    xrd_renderer_draw(g_r, g_tex, rot, g_th, g_tv, layout, swap, W, H);
+    if (hostile) {
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(0, 0, 1, 1);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_ZERO, GL_ZERO);
+        glEnable(GL_CULL_FACE);
+        glCullFace(GL_FRONT_AND_BACK);
+        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    }
+    xrd_renderer_draw(g_r, tex, rot, g_th, g_tv, layout, swap, W, H);
     assert_int_equal(glGetError(), GL_NO_ERROR);
+    if (hostile) {
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_BLEND);
+        glDisable(GL_CULL_FACE);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    }
     glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, g_img);
     assert_int_equal(glGetError(), GL_NO_ERROR);
+}
+
+static void draw(xrd_quat q, xrd_layout layout, bool swap)
+{
+    draw_tex(g_tex, q, layout, swap, false);
 }
 
 static void expect_px(int x, int y, int r, int g, int b)
@@ -173,6 +225,58 @@ static void no_seam_bleed(void **state)
     assert_true(red_seen > 0); /* the test really reached the seam region */
 }
 
+static void draw_ignores_caller_state(void **state)
+{
+    (void)state;
+    draw_tex(g_tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false, true);
+    expect_px(96, 54, 255, 0, 0);
+    expect_px(288, 54, 0, 0, 255);
+}
+
+/* Pixel (dx, y) of each eye viewport must show quadrant (right, top) of that
+ * eye's image. The exact centre sits on the quadrant boundaries (a 50/50
+ * blend), so tests probe the boundary-free axis at the centre and the other
+ * axis near the viewport edge, which stays at least 2 texels from a boundary. */
+static void expect_quadrant(int dx, int y, int right, int top)
+{
+    for (int eye = 0; eye < 2; eye++) {
+        const uint8_t *c = quad_colour(eye, right, top);
+        expect_px(eye * (W / 2) + dx, y, c[0], c[1], c[2]);
+    }
+}
+
+static void yaw_left_samples_left(void **state)
+{
+    (void)state;
+    draw_tex(g_quad_tex, xrd_quat_from_ypr_deg(30, 0, 0), XRD_LAYOUT_SBS_LR, false, false);
+    expect_quadrant(W / 4, H - 1, 0, 1);
+    expect_quadrant(W / 4, 0, 0, 0);
+}
+
+static void yaw_right_samples_right(void **state)
+{
+    (void)state;
+    draw_tex(g_quad_tex, xrd_quat_from_ypr_deg(-30, 0, 0), XRD_LAYOUT_SBS_LR, false, false);
+    expect_quadrant(W / 4, H - 1, 1, 1);
+    expect_quadrant(W / 4, 0, 1, 0);
+}
+
+static void pitch_up_samples_top(void **state)
+{
+    (void)state;
+    draw_tex(g_quad_tex, xrd_quat_from_ypr_deg(0, 20, 0), XRD_LAYOUT_SBS_LR, false, false);
+    expect_quadrant(4, H / 2, 0, 1);
+    expect_quadrant(W / 2 - 5, H / 2, 1, 1);
+}
+
+static void pitch_down_samples_bottom(void **state)
+{
+    (void)state;
+    draw_tex(g_quad_tex, xrd_quat_from_ypr_deg(0, -20, 0), XRD_LAYOUT_SBS_LR, false, false);
+    expect_quadrant(4, H / 2, 0, 0);
+    expect_quadrant(W / 2 - 5, H / 2, 1, 0);
+}
+
 static void no_gl_error(void **state)
 {
     (void)state;
@@ -194,6 +298,11 @@ int main(void)
         cmocka_unit_test(layout_rl),
         cmocka_unit_test(behind_is_black),
         cmocka_unit_test(no_seam_bleed),
+        cmocka_unit_test(draw_ignores_caller_state),
+        cmocka_unit_test(yaw_left_samples_left),
+        cmocka_unit_test(yaw_right_samples_right),
+        cmocka_unit_test(pitch_up_samples_top),
+        cmocka_unit_test(pitch_down_samples_bottom),
         cmocka_unit_test(no_gl_error),
     };
     return cmocka_run_group_tests(tests, setup, teardown);

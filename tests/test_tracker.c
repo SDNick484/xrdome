@@ -177,6 +177,41 @@ static void run_recenter_yaw_only(xrd_quat W)
     xrd_tracker_free(t);
 }
 
+static void recenter_yaw_only_from_tilted_ref(void **st)
+{
+    (void)st;
+    fake_src f;
+    fake_init(&f);
+    xrd_tracker *t = xrd_tracker_new(&f.base);
+    xrd_quat q0 = ypr(30, 10, 5), q1 = ypr(70, 20, 5);
+    fake_set(&f, q0, 100);
+    xrd_tracker_view(t, 100); /* first pose: q_ref = q0 */
+    fake_set(&f, q1, 110);
+    xrd_tracker_view(t, 110);
+    xrd_tracker_recenter(t, true);
+
+    xrd_quat yaw = xrd_quat_yaw_only(xrd_quat_mul(xrd_quat_conj(q0), q1));
+    xrd_quat ref_new = xrd_quat_mul(q0, yaw);
+    xrd_quat want = xrd_quat_mul(xrd_quat_conj(ref_new), q1);
+    xrd_quat got = xrd_tracker_view(t, 110);
+    assert_same_rotation(got, want);
+
+    /* The wrong composition order (yaw * q_ref) must be distinguishable. */
+    xrd_quat wrong_ref = xrd_quat_mul(yaw, q0);
+    xrd_quat wrong = xrd_quat_mul(xrd_quat_conj(wrong_ref), q1);
+    const float v[3] = {1, 0, 0};
+    float a[3], b[3];
+    xrd_quat_rotate(got, v, a);
+    xrd_quat_rotate(wrong, v, b);
+    double dot = (double)a[0] * b[0] + (double)a[1] * b[1] + (double)a[2] * b[2];
+    if (dot > 1.0)
+        dot = 1.0;
+    if (dot < -1.0)
+        dot = -1.0;
+    assert_true(acos(dot) * 180.0 / 3.14159265358979323846 > 1.0);
+    xrd_tracker_free(t);
+}
+
 static void run_relative(xrd_quat W)
 {
     fake_src f;
@@ -317,6 +352,7 @@ int main(void)
         cmocka_unit_test(test_recenter_full),
         cmocka_unit_test(test_recenter_yaw_only),
         cmocka_unit_test(test_world_frame_invariant),
+        cmocka_unit_test(recenter_yaw_only_from_tilted_ref),
         cmocka_unit_test(test_stale_holds_last),
         cmocka_unit_test(test_stale_boundary),
         cmocka_unit_test(test_fresh_clears_stale),

@@ -90,6 +90,15 @@ void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
                        float tan_h, float tan_v, xrd_layout layout, bool swap_eyes,
                        int out_w, int out_h)
 {
+    /* Own the fixed-function state the pass depends on. */
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_FRAMEBUFFER_SRGB);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
     glUseProgram(r->prog);
     glBindVertexArray(r->vao);
     glActiveTexture(GL_TEXTURE0);

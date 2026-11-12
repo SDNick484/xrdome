@@ -351,6 +351,34 @@ static void load_ini_defined_device_ok(void **state)
     assert_float_equal(c.fov_diag, 50.0f, TOL);
 }
 
+static void load_ini_device_without_fov_is_error(void **state)
+{
+    (void)state;
+    char path[64], err[256] = "";
+    write_tmp(path, "[device.rokid-max]\nzoom = 1.5\n");
+    char *argv[] = {"xrdome", "--device", "rokid-max", "a.mp4", NULL};
+    xrd_config c;
+    int rc = xrd_config_load(&c, path, 4, argv, err, sizeof err);
+    unlink(path);
+    assert_int_equal(rc, -1);
+    assert_non_null(strstr(err, "rokid-max"));
+    assert_non_null(strstr(err, "fov_diag"));
+}
+
+static void load_builtin_keeps_fov_when_ini_omits_it(void **state)
+{
+    (void)state;
+    char path[64], err[256] = "";
+    write_tmp(path, "[device.xreal-air2pro]\nzoom = 1.5\n");
+    char *argv[] = {"xrdome", "--device", "xreal-air2pro", "a.mp4", NULL};
+    xrd_config c;
+    int rc = xrd_config_load(&c, path, 4, argv, err, sizeof err);
+    unlink(path);
+    assert_int_equal(rc, 0);
+    assert_float_equal(c.fov_diag, 45.0f, TOL);
+    assert_float_equal(c.zoom, 1.5f, TOL);
+}
+
 static void load_null_ini_and_builtin_fov(void **state)
 {
     (void)state;
@@ -402,6 +430,8 @@ int main(void)
         cmocka_unit_test(args_bad_values_and_unknown_option),
         cmocka_unit_test(load_unknown_device_names_it),
         cmocka_unit_test(load_ini_defined_device_ok),
+        cmocka_unit_test(load_ini_device_without_fov_is_error),
+        cmocka_unit_test(load_builtin_keeps_fov_when_ini_omits_it),
         cmocka_unit_test(load_null_ini_and_builtin_fov),
         cmocka_unit_test(load_bad_ini_reports_key),
     };

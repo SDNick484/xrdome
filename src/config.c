@@ -312,12 +312,20 @@ int xrd_config_load(xrd_config *c, const char *ini_path, int argc, char **argv,
         }
     }
 
+    if (!builtin)
+        c->fov_diag = 0.f; /* sentinel: the ini must supply it (range check forbids 0) */
+
     bool found = false;
     if (ini_path && ini_read(c, ini_path, &found, err, errlen) != 0)
         return -1;
     if (!builtin && !found) {
         set_err(err, errlen,
                 "unknown device '%s' (built in: viture-pro, xreal-air2pro; or add a [device.%s] section)",
+                device, device);
+        return -1;
+    }
+    if (!builtin && c->fov_diag == 0.f) {
+        set_err(err, errlen, "device '%s': [device.%s] is missing required key fov_diag",
                 device, device);
         return -1;
     }

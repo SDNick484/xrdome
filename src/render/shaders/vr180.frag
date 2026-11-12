@@ -11,7 +11,8 @@ void main()
 {
     vec3 d = u_rot * normalize(vec3(v_ndc * u_tan_half, -1.0));
     if (d.z > 0.0) { o_color = vec4(0.0, 0.0, 0.0, 1.0); return; }
-    float lon = atan(d.x, -d.z);
+    // atan(0,0) is undefined in GLSL; mirror xrd_dir_to_uv at the exact pole.
+    float lon = (d.x == 0.0 && d.z == 0.0) ? 0.0 : atan(d.x, -d.z);
     float lat = asin(clamp(d.y, -1.0, 1.0));
     vec2 uv = vec2(lon / 3.14159265 + 0.5, lat / 3.14159265 + 0.5);
     // Clamp by half a texel of this eye's sub-image so GL_LINEAR never
