@@ -71,7 +71,18 @@ static void uv_up(void **state)
     const float d[3] = {0.f, 1.f, 0.f};
     float uv[2];
     assert_true(xrd_dir_to_uv(d, uv));
+    assert_float_equal(uv[0], 0.5f, TOL);
     assert_float_equal(uv[1], 1.0f, 0.f);
+}
+
+static void uv_down(void **state)
+{
+    (void)state;
+    const float d[3] = {0.f, -1.f, 0.f};
+    float uv[2];
+    assert_true(xrd_dir_to_uv(d, uv));
+    assert_float_equal(uv[0], 0.5f, TOL);
+    assert_float_equal(uv[1], 0.0f, 0.f);
 }
 
 static void uv_behind(void **state)
@@ -120,8 +131,8 @@ static void uv_clamped_in_range(void **state)
     for (size_t i = 0; i < sizeof dirs / sizeof dirs[0]; i++) {
         float uv[2];
         assert_true(xrd_dir_to_uv(dirs[i], uv));
-        assert_in_range(uv[0], 0.f, 1.f);
-        assert_in_range(uv[1], 0.f, 1.f);
+        assert_true(uv[0] >= 0.f && uv[0] <= 1.f);
+        assert_true(uv[1] >= 0.f && uv[1] <= 1.f);
     }
 }
 
@@ -174,6 +185,7 @@ int main(void)
         cmocka_unit_test(uv_right_edge),
         cmocka_unit_test(uv_left_edge),
         cmocka_unit_test(uv_up),
+        cmocka_unit_test(uv_down),
         cmocka_unit_test(uv_behind),
         cmocka_unit_test(uv_just_behind),
         cmocka_unit_test(uv_unnormalised_input),
