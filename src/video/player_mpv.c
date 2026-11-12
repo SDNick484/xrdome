@@ -14,6 +14,9 @@ struct xrd_player {
     char file[4096];
     GLuint fbo, tex;
     int w, h;          /* FBO size, 0 until mpv reports the video size */
+    xrd_fbo_format fbo_format; /* requested; becomes RGBA8 after a fallback */
+    int fbo_internal;  /* GL internal format of tex, 0 before the FBO exists */
+    int fbo_depth;     /* bits per channel of tex: 10 or 8, 0 before the FBO exists */
     bool have_frame;   /* a frame has been rendered into the FBO */
     bool finished;
     bool warned_aspect;
@@ -63,6 +66,21 @@ bool xrd_video_aspect_matches(int w, int h, xrd_layout layout, float hfov_deg, f
 bool xrd_video_is_sbs_2to1(int w, int h)
 {
     return w > 0 && h > 0 && w == 2 * h;
+}
+
+int xrd_fbo_format_gl(xrd_fbo_format f, int *depth)
+{
+    if (f == XRD_FBO_RGB10) {
+        *depth = 10;
+        return GL_RGB10_A2;
+    }
+    *depth = 8;
+    return GL_RGBA8;
+}
+
+const char *xrd_texture_bits_name(int bits)
+{
+    return bits == 10 ? "rgb10_a2" : bits == 8 ? "rgba8" : "none";
 }
 
 bool xrd_mpv_log_level_valid(const char *level)
@@ -149,6 +167,7 @@ xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void 
     p->layout = XRD_LAYOUT_SBS_LR;
     p->hfov_deg = 180.f;
     p->vfov_deg = 180.f;
+    p->fbo_format = opt ? opt->fbo_format : XRD_FBO_RGBA8;
 
     p->mpv = mpv_create();
     if (!p->mpv) {
@@ -263,6 +282,30 @@ void xrd_player_free(xrd_player *p)
     free(p);
 }
 
+/* (Re)allocates p->tex as a w x h texture of the given internal format,
+ * attaches it to p->fbo and returns the framebuffer status. */
+static GLenum attach_texture(xrd_player *p, int internal, int w, int h)
+{
+    if (!p->tex)
+        glGenTextures(1, &p->tex);
+    glBindTexture(GL_TEXTURE_2D, p->tex);
+    /* No data is uploaded; format and type only have to be a valid pair. */
+    glTexImage2D(GL_TEXTURE_2D, 0, internal, w, h, 0, GL_RGBA,
+                 internal == GL_RGB10_A2 ? GL_UNSIGNED_INT_2_10_10_10_REV : GL_UNSIGNED_BYTE,
+                 NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, p->fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, p->tex, 0);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return status;
+}
+
 /* (Re)creates the FBO for a w x h video. Returns <0 with p->err set. */
 static int ensure_fbo(xrd_player *p, int w, int h)
 {
@@ -282,26 +325,26 @@ static int ensure_fbo(xrd_player *p, int w, int h)
         p->warned_aspect = true;
     }
 
-    if (!p->tex)
-        glGenTextures(1, &p->tex);
-    glBindTexture(GL_TEXTURE_2D, p->tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
-
     if (!p->fbo)
         glGenFramebuffers(1, &p->fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, p->fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, p->tex, 0);
-    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    int depth;
+    int internal = xrd_fbo_format_gl(p->fbo_format, &depth);
+    GLenum status = attach_texture(p, internal, w, h);
+    if (status != GL_FRAMEBUFFER_COMPLETE && p->fbo_format == XRD_FBO_RGB10) {
+        fprintf(stderr, "xrdome: note: 10-bit video texture unavailable, using 8-bit\n");
+        p->fbo_format = XRD_FBO_RGBA8; /* later resizes go straight to 8-bit */
+        while (glGetError() != GL_NO_ERROR) {
+            /* drop any error the 10-bit allocation raised */
+        }
+        internal = xrd_fbo_format_gl(p->fbo_format, &depth);
+        status = attach_texture(p, internal, w, h);
+    }
     if (status != GL_FRAMEBUFFER_COMPLETE) {
         set_err(p->err, sizeof p->err, "video FBO %dx%d incomplete (0x%x)", w, h, status);
         return -1;
     }
+    p->fbo_internal = internal;
+    p->fbo_depth = depth;
     p->w = w;
     p->h = h;
     p->have_frame = false; /* new size: wait for a frame drawn at it */
@@ -383,8 +426,9 @@ int xrd_player_update(xrd_player *p)
     uint64_t flags = mpv_render_context_update(p->rctx);
     if ((flags & MPV_RENDER_UPDATE_FRAME) && p->fbo) {
         mpv_opengl_fbo fbo = {.fbo = (int)p->fbo, .w = p->w, .h = p->h,
-                              .internal_format = GL_RGBA8};
+                              .internal_format = p->fbo_internal};
         int flip_y = 1; /* GL orientation: t = 1 is the image top */
+        int depth = p->fbo_depth; /* what mpv targets (and dithers to, if enabled) */
         /* Do not wait for the frame's display time inside render: the loop
          * is paced by the swap, and a wait here would sit between the pose
          * sample and the swap. */
@@ -392,6 +436,7 @@ int xrd_player_update(xrd_player *p)
         mpv_render_param params[] = {
             {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
             {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
+            {MPV_RENDER_PARAM_DEPTH, &depth},
             {MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &block},
             {MPV_RENDER_PARAM_INVALID, NULL},
         };
@@ -414,6 +459,11 @@ void xrd_player_report_swap(xrd_player *p)
 unsigned xrd_player_texture(const xrd_player *p)
 {
     return p->have_frame ? p->tex : 0;
+}
+
+int xrd_player_texture_bits(const xrd_player *p)
+{
+    return p->fbo_depth;
 }
 
 void xrd_player_video_size(const xrd_player *p, int *w, int *h)

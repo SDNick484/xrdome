@@ -107,8 +107,23 @@ grep -q '^timing: [0-9]* frames, [0-9]* missed vsyncs' "$work/play.err"; check "
 ! grep '^mpv: ' "$work/play.err" | grep -qv '^mpv: \[[^]]*\] .\|^mpv: profile='
 check "mpv lines are 'mpv: [prefix] text' or 'mpv: profile='" $?
 
+# The default video texture is 10-bit and the eye pass dithers.
+grep -q '^video texture: rgb10_a2 dither=on$' "$work/play.err"
+check "stderr reports video texture rgb10_a2 dither=on" $?
+
 check_frame "$work/out.ppm"
 check "dumped frame: colours and orientation" $?
+
+# 1-8bit. --fbo-format rgba8 --dither off: the previous 8-bit output.
+xvfb "$xrdome" --windowed --pose null --fbo-format rgba8 --dither off --frames 30 \
+     --dump-frame "$work/out8.ppm" "$work/pattern.mp4" >"$work/rgba8.err" 2>&1
+st=$?
+cat "$work/rgba8.err"
+check "--fbo-format rgba8 --dither off exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+grep -q '^video texture: rgba8 dither=off$' "$work/rgba8.err"
+check "--fbo-format rgba8 --dither off reported" $?
+check_frame "$work/out8.ppm"
+check "--fbo-format rgba8 --dither off: colours and orientation" $?
 
 # 1a. --content-fov 90x90 on the same 180-degree pattern: the content fills twice
 # the angle, so the yellow box (1.8 to 4.4 degrees up) now sits lower in the
@@ -182,7 +197,7 @@ xvfb "$xrdome" --windowed --pose null --frames 5 --mpv-opt bogus-option-xyz=1 \
 st=$?
 cat "$work/badopt.err"
 check "bad --mpv-opt exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
-grep -q 'bogus-option-xyz' "$work/badopt.err"; check "bad --mpv-opt names the key" $?
+grep -q '^xrdome: .*bogus-option-xyz' "$work/badopt.err"; check "bad --mpv-opt names the key" $?
 
 # 1a3. --mpv-profile default: no profile, same picture.
 xvfb "$xrdome" --windowed --pose null --frames 30 --mpv-profile default \
@@ -240,13 +255,13 @@ xvfb "$xrdome" --windowed --pose null /nonexistent/clip.mp4 >"$work/missing.err"
 st=$?
 cat "$work/missing.err"
 check "missing file exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
-grep -q "/nonexistent/clip.mp4': loading failed" "$work/missing.err"; check "missing file names mpv error" $?
+grep -q "^xrdome: cannot play '/nonexistent/clip.mp4': loading failed" "$work/missing.err"; check "missing file names mpv error" $?
 
 # 3. No 3840x1080 output (Xvfb screen is 1920x1080): exit 1, tells the user to switch to SBS.
 xvfb "$xrdome" --pose null "$work/pattern.mp4" >"$work/nosbs.err" 2>&1
 st=$?
 cat "$work/nosbs.err"
 check "non-SBS output exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
-grep -q "switch the glasses to SBS" "$work/nosbs.err"; check "non-SBS message" $?
+grep -q "^xrdome: .*switch the glasses to SBS" "$work/nosbs.err"; check "non-SBS message" $?
 
 exit $fail

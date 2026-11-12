@@ -6,6 +6,8 @@
 #include <string.h>
 #include <cmocka.h>
 
+#include <epoxy/gl.h>
+
 #include "render/projection.h"
 #include "video/player_mpv.h"
 
@@ -168,6 +170,24 @@ static void log_print_splits_lines(void **state)
                         "mpv: [ffmpeg] last\n");
 }
 
+static void fbo_format_gl(void **state)
+{
+    (void)state;
+    int depth = -1;
+    assert_int_equal(xrd_fbo_format_gl(XRD_FBO_RGB10, &depth), GL_RGB10_A2);
+    assert_int_equal(depth, 10);
+    assert_int_equal(xrd_fbo_format_gl(XRD_FBO_RGBA8, &depth), GL_RGBA8);
+    assert_int_equal(depth, 8);
+}
+
+static void texture_bits_name(void **state)
+{
+    (void)state;
+    assert_string_equal(xrd_texture_bits_name(10), "rgb10_a2");
+    assert_string_equal(xrd_texture_bits_name(8), "rgba8");
+    assert_string_equal(xrd_texture_bits_name(0), "none");
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -185,6 +205,8 @@ int main(void)
         cmocka_unit_test(log_print_one_line),
         cmocka_unit_test(log_print_skips_empty),
         cmocka_unit_test(log_print_splits_lines),
+        cmocka_unit_test(fbo_format_gl),
+        cmocka_unit_test(texture_bits_name),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

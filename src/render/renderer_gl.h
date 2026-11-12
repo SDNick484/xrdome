@@ -32,6 +32,14 @@ void xrd_renderer_set_convergence(xrd_renderer *r, float deg);
  * bilinear path. Takes effect on the next xrd_renderer_draw. */
 void xrd_renderer_set_filter(xrd_renderer *r, xrd_filter f);
 
+/* Ordered dithering of the 8-bit output (default off): adds a per-pixel offset
+ * in [-0.5, 0.5) of one 8-bit level to r, g and b (interleaved gradient noise
+ * from the window position), so a video texture with more than 8 bits keeps
+ * its precision on average instead of banding. The black drawn behind the
+ * viewer and outside the content is not dithered. Takes effect on the next
+ * xrd_renderer_draw. */
+void xrd_renderer_set_dither(xrd_renderer *r, bool on);
+
 /* Draws both eyes into the currently bound framebuffer: left eye in the left half.
  * rot is column-major (xrd_quat_to_mat3).
  *

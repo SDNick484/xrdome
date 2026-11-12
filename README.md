@@ -72,6 +72,9 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 | , / . | Convergence -0.1 / +0.1 degrees (-5 to 5); prints `convergence: 0.3 deg` |
 | / | Convergence back to the `--convergence` value |
 | F | Toggle bicubic / bilinear sampling; prints `filter: bicubic` or `filter: bilinear` |
+
+The `zoom:`, `convergence:` and `filter:` lines are printed only when the value changes (not for
+a press at a limit, or a reset to the value already set).
 | S | Swap eyes |
 | M | Cycle layout: sbs-lr, sbs-rl, mono |
 | Q | Quit |
@@ -84,12 +87,27 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 `--content-fov HxV`, `--proj hequirect` (the only projection so far, so optional),
 `--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)), `--mpv-profile NAME`,
 `--mpv-opt KEY=VALUE` (repeatable, up to 16), `--mpv-log LEVEL`, `--convergence DEG`,
-`--filter bilinear|bicubic`.
+`--filter bilinear|bicubic`, `--fbo-format rgb10|rgba8`, `--dither on|off`.
 
 `--convergence DEG` (default 0, -5 to 5) turns each eye's view by half the angle in opposite
 directions; positive turns the eyes inwards. `--filter` chooses how the eye pass samples the
 video: `bicubic` (Catmull-Rom, the default) or `bilinear`. Both are command-line flags only; see
 [Viewing comfort and sharpness](#viewing-comfort-and-sharpness).
+
+`--fbo-format rgb10|rgba8` (default `rgb10`) is the format of the texture mpv renders each
+video frame into before the eye pass reads it. `rgb10` (`GL_RGB10_A2`, 10 bits per colour, the
+same 4 bytes per pixel as 8-bit) keeps a 10-bit file's precision through the eye pass; `rgba8`
+quantises to 8 bits first, which shows as banding in skies and smooth gradients. If the GPU
+cannot render to `GL_RGB10_A2`, xrdome prints
+`xrdome: note: 10-bit video texture unavailable, using 8-bit` and continues. `--dither on|off`
+(default `on`) adds ordered dithering (an offset under half an 8-bit step per pixel) to the eye
+pass's final write: the window is 8-bit, so without it the extra precision is rounded away again
+at the very end. Black outside the video (behind you, or outside `--content-fov`) is never
+dithered. After the first frame stderr shows which texture was used, e.g.
+`video texture: rgb10_a2 dither=on`. Both are command-line flags only. To compare against the old
+output, run the same file twice, the second time with `--fbo-format rgba8 --dither off` (which
+reproduces the output from before these flags existed), and look at a sky or a slow gradient. 8-bit files
+gain little from either flag.
 
 `--mpv-log LEVEL` (default `warn`; one of `no`, `fatal`, `error`, `warn`, `info`, `v`, `debug`)
 forwards mpv's own log messages at that level and above to stderr, one line each as
@@ -189,6 +207,13 @@ help:
   enlargement, turns every edge into a straight ramp a whole source pixel wide, which is the
   blurriest way to enlarge. Catmull-Rom keeps edges steeper, at the cost of a faint halo next to
   high-contrast edges. Press `F` on a still frame to compare.
+
+Bicubic reads 9 texture samples per output pixel instead of 1. Its cost on the owner's GPU has
+not been measured. To measure it, make two separate runs of the same file, one with
+`--filter bilinear` and one with `--filter bicubic`, each with its own `--timing-log`, and
+compare the logs; toggling `F` live mixes both filters in one log. `--mpv-log v` and
+`--mpv-log debug` are for diagnosis only: they print a lot and affect timing, so leave them off
+for measurements.
 
 ## Diagnostics
 

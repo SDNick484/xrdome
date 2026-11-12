@@ -404,6 +404,7 @@ static int reset_view(void **state)
     xrd_renderer_set_filter(g_r, XRD_FILTER_BILINEAR);
     xrd_renderer_set_convergence(g_r, 0.f);
     xrd_renderer_set_content_fov(g_r, 180.f, 180.f);
+    xrd_renderer_set_dither(g_r, false);
     return 0;
 }
 
@@ -430,10 +431,9 @@ static GLuint make_line_tex(void)
 /* Red-weighted centroid of the middle row of viewport eye, in pixels from
  * that viewport's left edge (pixel i covers [i, i + 1), so the centre of a
  * 192-pixel viewport is 96.0 and pixel 95's centre is 95.5). */
-static double line_centroid(int eye)
+static double line_centroid_row(int eye, int y)
 {
     double sum = 0, wsum = 0;
-    int y = H / 2;
     for (int x = 0; x < W / 2; x++) {
         double v = g_img[(y * W + eye * (W / 2) + x) * 4];
         sum += v * (x + 0.5);
@@ -441,6 +441,11 @@ static double line_centroid(int eye)
     }
     assert_true(wsum > 0);
     return sum / wsum;
+}
+
+static double line_centroid(int eye)
+{
+    return line_centroid_row(eye, H / 2);
 }
 
 /* Where the content straight ahead (lon 0) lands when the eye looks yaw_right
@@ -542,6 +547,42 @@ static void convergence_applies_in_mono_and_swap(void **state)
     glDeleteTextures(1, &tex);
 }
 
+/* Convergence with the head pitched up 30 degrees: the eye yaw is applied in
+ * head space after the view rotation (rot * eye_yaw), so the meridian under
+ * the line still projects to a vertical line in each viewport, shifted by the
+ * same tan-space amount as with a level head, in opposite directions. Applying
+ * the yaw in world space first (eye_yaw * rot) would tilt the line and shrink
+ * the shift by cos(30). */
+static void check_convergence_pitched(float conv_deg)
+{
+    GLuint tex = make_line_tex();
+    xrd_renderer_set_convergence(g_r, conv_deg);
+    draw_tex(tex, xrd_quat_from_ypr_deg(0, 30, 0), XRD_LAYOUT_SBS_LR, false, false);
+    double centre = W / 4.0;
+    double want_left = expected_offset_px(conv_deg / 2.0);
+    double want_right = expected_offset_px(-conv_deg / 2.0);
+    const int rows[] = {H / 8, H / 2, H - 1 - H / 8};
+    for (size_t i = 0; i < sizeof rows / sizeof rows[0]; i++) {
+        double left = line_centroid_row(0, rows[i]) - centre;
+        double right = line_centroid_row(1, rows[i]) - centre;
+        if (fabs(left - want_left) > 0.75 || fabs(right - want_right) > 0.75)
+            fail_msg("pitched, conv %.1f, row %d: offsets left %.2f right %.2f px, "
+                     "want %.2f and %.2f", (double)conv_deg, rows[i], left, right,
+                     want_left, want_right);
+        if (fabs(left + right) > 0.75)
+            fail_msg("pitched, conv %.1f, row %d: unequal shifts %.2f and %.2f px",
+                     (double)conv_deg, rows[i], left, right);
+    }
+    glDeleteTextures(1, &tex);
+}
+
+static void convergence_pitched_shifts_horizontally(void **state)
+{
+    (void)state;
+    check_convergence_pitched(4.f);
+    check_convergence_pitched(-4.f);
+}
+
 /* ---- bicubic (Catmull-Rom) ---- */
 
 #define STEP_EW 32
@@ -637,6 +678,74 @@ static void bicubic_matches_catmull_rom_reference(void **state)
     glDeleteTextures(1, &tex);
 }
 
+/* Transposed step: each eye's sub-image is STEP_LO in its lower half and
+ * STEP_HI in its upper half, the same in every column, so the vertical taps of
+ * the Catmull-Rom filter decide every pixel of a column. */
+#define VSTEP_EW 8
+#define VSTEP_H 32
+
+static uint8_t vstep_value(int y)
+{
+    return y < VSTEP_H / 2 ? STEP_LO : STEP_HI;
+}
+
+static GLuint make_vstep_tex(void)
+{
+    static uint8_t px[2 * VSTEP_EW * VSTEP_H * 4];
+    for (int y = 0; y < VSTEP_H; y++)
+        for (int x = 0; x < 2 * VSTEP_EW; x++) {
+            uint8_t *p = &px[(y * 2 * VSTEP_EW + x) * 4];
+            p[0] = p[1] = p[2] = vstep_value(y);
+            p[3] = 255;
+        }
+    return make_tex(2 * VSTEP_EW, VSTEP_H, px);
+}
+
+/* Reference value of viewport pixel (x, y) for the transposed step texture,
+ * identity view, 180 x 180 content: v from the latitude, the half-texel clamp
+ * on v, then Catmull-Rom down the column. */
+static double vstep_reference(int x, int y)
+{
+    double ndc_x = (x + 0.5) / (W / 4.0) - 1.0, ndc_y = (y + 0.5) / (H / 2.0) - 1.0;
+    double dx = ndc_x * g_th, dy = ndc_y * g_tv, dz = -1.0;
+    double len = sqrt(dx * dx + dy * dy + dz * dz);
+    double v = asin(dy / len) / 3.14159265358979323846 + 0.5;
+    double m = 0.5 / VSTEP_H;
+    v = v < m ? m : (v > 1.0 - m ? 1.0 - m : v);
+    double col[VSTEP_H];
+    for (int i = 0; i < VSTEP_H; i++)
+        col[i] = vstep_value(i);
+    double r = catmull_rom(col, VSTEP_H, v * VSTEP_H);
+    return r < 0 ? 0 : (r > 255 ? 255 : r);
+}
+
+static void bicubic_vertical_matches_catmull_rom_reference(void **state)
+{
+    (void)state;
+    GLuint tex = make_vstep_tex();
+    xrd_renderer_set_filter(g_r, XRD_FILTER_BICUBIC);
+    draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false, false);
+    int x = W / 4;
+    double undershoot = 255, overshoot = 0;
+    for (int eye = 0; eye < 2; eye++)
+        for (int y = 0; y < H; y++) {
+            double want = vstep_reference(x, y);
+            if (want < undershoot)
+                undershoot = want;
+            if (want > overshoot)
+                overshoot = want;
+            const uint8_t *p = &g_img[(y * W + eye * (W / 2) + x) * 4];
+            for (int c = 0; c < 3; c++)
+                if (fabs(p[c] - want) > 3.0)
+                    fail_msg("eye %d row %d channel %d = %d, Catmull-Rom reference %.2f",
+                             eye, y, c, p[c], want);
+        }
+    /* The reference rings around the edge, so bilinear would not pass. */
+    assert_true(undershoot < STEP_LO - 5);
+    assert_true(overshoot > STEP_HI + 5);
+    glDeleteTextures(1, &tex);
+}
+
 static void bicubic_differs_from_bilinear_near_edge(void **state)
 {
     (void)state;
@@ -707,6 +816,139 @@ static void bicubic_identity_left_is_red(void **state)
     expect_px(288, 54, 0, 0, 255);
 }
 
+/* ---- 10-bit texture and dithering ---- */
+
+/* RGB10_A2 texture of w x h texels, every texel (r, g, b, a) in 10-bit units
+ * (a in 2-bit units), GL_LINEAR and clamp-to-edge. */
+static GLuint make_tex10(int w, int h, unsigned r, unsigned g, unsigned b, unsigned a)
+{
+    uint32_t *px = malloc((size_t)w * h * sizeof *px);
+    assert_non_null(px);
+    for (int i = 0; i < w * h; i++)
+        px[i] = r | g << 10 | b << 20 | (uint32_t)a << 30;
+    GLuint t;
+    glGenTextures(1, &t);
+    glBindTexture(GL_TEXTURE_2D, t);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB10_A2, w, h, 0, GL_RGBA,
+                 GL_UNSIGNED_INT_2_10_10_10_REV, px);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    free(px);
+    assert_int_equal(glGetError(), GL_NO_ERROR);
+    return t;
+}
+
+static GLuint make_flat_tex(uint8_t r, uint8_t g, uint8_t b)
+{
+    static uint8_t px[TEX_W * TEX_H * 4];
+    for (int i = 0; i < TEX_W * TEX_H; i++) {
+        px[i * 4 + 0] = r;
+        px[i * 4 + 1] = g;
+        px[i * 4 + 2] = b;
+        px[i * 4 + 3] = 255;
+    }
+    return make_tex(TEX_W, TEX_H, px);
+}
+
+/* A 32 x 32 block centred in the left eye viewport. */
+#define BLK 32
+#define BLK_X0 (W / 4 - BLK / 2)
+#define BLK_Y0 (H / 2 - BLK / 2)
+
+/* Grey 514/1023 = 128.12 in 8-bit units, between two 8-bit levels. Its alpha
+ * is 0, so the test also shows the eye pass writes alpha 1 itself. */
+#define GREY10 514u
+
+static void tenbit_precision_survives_dither(void **state)
+{
+    (void)state;
+    GLuint tex = make_tex10(TEX_W, TEX_H, GREY10, GREY10, GREY10, 0);
+    const double want_mean = GREY10 * 255.0 / 1023.0;
+    xrd_renderer_set_dither(g_r, true);
+    draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false, false);
+    for (int c = 0; c < 3; c++) {
+        int n128 = 0, n129 = 0;
+        double sum = 0;
+        for (int y = BLK_Y0; y < BLK_Y0 + BLK; y++)
+            for (int x = BLK_X0; x < BLK_X0 + BLK; x++) {
+                const uint8_t *p = &g_img[(y * W + x) * 4];
+                if (p[c] != 128 && p[c] != 129)
+                    fail_msg("dither on: pixel (%d,%d) channel %d = %d, want 128 or 129",
+                             x, y, c, p[c]);
+                n128 += p[c] == 128;
+                n129 += p[c] == 129;
+                sum += p[c];
+                assert_int_equal(p[3], 255);
+            }
+        double mean = sum / (BLK * BLK);
+        if (n128 == 0 || n129 == 0 || fabs(mean - want_mean) > 0.1)
+            fail_msg("dither on: channel %d: %d x 128, %d x 129, mean %.3f, want %.3f", c,
+                     n128, n129, mean, want_mean);
+    }
+
+    xrd_renderer_set_dither(g_r, false);
+    draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false, false);
+    for (int y = BLK_Y0; y < BLK_Y0 + BLK; y++)
+        for (int x = BLK_X0; x < BLK_X0 + BLK; x++) {
+            const uint8_t *p = &g_img[(y * W + x) * 4];
+            if (p[0] != 128 || p[1] != 128 || p[2] != 128 || p[3] != 255)
+                fail_msg("dither off: pixel (%d,%d) = (%d,%d,%d,%d), want (128,128,128,255)",
+                         x, y, p[0], p[1], p[2], p[3]);
+        }
+    glDeleteTextures(1, &tex);
+}
+
+/* Dithering moves an exact 8-bit value by at most one level, everywhere, with
+ * either filter. */
+static void dither_is_bounded(void **state)
+{
+    (void)state;
+    GLuint tex = make_flat_tex(128, 128, 128);
+    xrd_renderer_set_dither(g_r, true);
+    const xrd_filter filters[] = {XRD_FILTER_BILINEAR, XRD_FILTER_BICUBIC};
+    for (size_t f = 0; f < 2; f++) {
+        xrd_renderer_set_filter(g_r, filters[f]);
+        draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false, false);
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++) {
+                const uint8_t *p = &g_img[(y * W + x) * 4];
+                for (int c = 0; c < 3; c++)
+                    if (abs(p[c] - 128) > 1)
+                        fail_msg("filter %zu pixel (%d,%d) channel %d = %d, want 128 +- 1",
+                                 f, x, y, c, p[c]);
+            }
+    }
+    glDeleteTextures(1, &tex);
+}
+
+static void expect_all_black(const char *what)
+{
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++) {
+            const uint8_t *p = &g_img[(y * W + x) * 4];
+            if (p[0] || p[1] || p[2] || p[3] != 255)
+                fail_msg("%s: pixel (%d,%d) = (%d,%d,%d,%d), want (0,0,0,255)", what, x, y,
+                         p[0], p[1], p[2], p[3]);
+        }
+}
+
+/* The "behind the viewer" and "outside the content" blacks are not dithered. */
+static void dither_keeps_black_black(void **state)
+{
+    (void)state;
+    GLuint tex = make_flat_tex(128, 128, 128);
+    xrd_renderer_set_dither(g_r, true);
+    draw_tex(tex, xrd_quat_from_ypr_deg(180, 0, 0), XRD_LAYOUT_SBS_LR, false, false);
+    expect_all_black("behind");
+    /* looking 70 degrees right: the view spans about 51 to 89, content ends at 45 */
+    draw_fov(tex, 90.f, 90.f, xrd_quat_from_ypr_deg(-70, 0, 0));
+    expect_all_black("outside the content");
+    glDeleteTextures(1, &tex);
+}
+
 static void no_gl_error(void **state)
 {
     (void)state;
@@ -743,11 +985,16 @@ int main(void)
         cmocka_unit_test_teardown(convergence_positive_separates_left_left, reset_view),
         cmocka_unit_test_teardown(convergence_negative_reverses, reset_view),
         cmocka_unit_test_teardown(convergence_applies_in_mono_and_swap, reset_view),
+        cmocka_unit_test_teardown(convergence_pitched_shifts_horizontally, reset_view),
         cmocka_unit_test_teardown(bicubic_matches_catmull_rom_reference, reset_view),
+        cmocka_unit_test_teardown(bicubic_vertical_matches_catmull_rom_reference, reset_view),
         cmocka_unit_test_teardown(bicubic_differs_from_bilinear_near_edge, reset_view),
         cmocka_unit_test_teardown(bicubic_keeps_flat_colour, reset_view),
         cmocka_unit_test_teardown(bicubic_no_seam_bleed, reset_view),
         cmocka_unit_test_teardown(bicubic_identity_left_is_red, reset_view),
+        cmocka_unit_test_teardown(tenbit_precision_survives_dither, reset_view),
+        cmocka_unit_test_teardown(dither_is_bounded, reset_view),
+        cmocka_unit_test_teardown(dither_keeps_black_black, reset_view),
         cmocka_unit_test(no_gl_error),
     };
     return cmocka_run_group_tests(tests, setup, teardown);

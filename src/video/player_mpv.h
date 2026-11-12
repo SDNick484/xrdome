@@ -17,6 +17,11 @@ typedef void *(*xrd_gl_get_proc)(void *ctx, const char *name);
 xrd_player *xrd_player_open(const char *file, xrd_gl_get_proc get_proc, void *x11_display,
                             char *err, size_t errlen);
 
+/* Format of the video texture mpv renders into. XRD_FBO_RGB10 is GL_RGB10_A2
+ * (10 bits per colour channel, same 4 bytes per texel as RGBA8); when the GPU
+ * cannot render to it the player falls back to GL_RGBA8 with a note. */
+typedef enum { XRD_FBO_RGB10, XRD_FBO_RGBA8 } xrd_fbo_format;
+
 /* mpv tuning, applied before mpv_initialize. profile: an mpv profile name,
  * "default" for none, NULL for "fast". opts: opt_count "KEY=VALUE" strings,
  * applied after the profile and xrdome's own fixed options, so they win.
@@ -28,9 +33,11 @@ typedef struct {
     const char *const *opts;
     int opt_count;
     const char *log_level;
+    xrd_fbo_format fbo_format; /* video texture format */
 } xrd_player_options;
 
-/* As xrd_player_open; opt may be NULL (profile "fast", no extra options).
+/* As xrd_player_open; opt may be NULL (profile "fast", no extra options,
+ * RGBA8 video texture, as xrd_player_open).
  * An mpv option or profile that mpv rejects fails the open, err naming it. */
 xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void *x11_display,
                                const xrd_player_options *opt, char *err, size_t errlen);
@@ -46,6 +53,9 @@ int         xrd_player_update(xrd_player *p);
 /* Call after each buffer swap (mpv_render_context_report_swap). */
 void        xrd_player_report_swap(xrd_player *p);
 unsigned    xrd_player_texture(const xrd_player *p);     /* 0 until the first frame */
+/* Bits per colour channel of the video texture actually allocated: 10 for
+ * GL_RGB10_A2, 8 for GL_RGBA8 (also after a fallback), 0 before the FBO exists. */
+int         xrd_player_texture_bits(const xrd_player *p);
 void        xrd_player_video_size(const xrd_player *p, int *w, int *h);
 const char *xrd_player_hwdec(xrd_player *p);             /* mpv "hwdec-current", "" if unknown */
 bool        xrd_player_finished(const xrd_player *p);    /* end of file or load failure */
@@ -75,6 +85,12 @@ bool xrd_mpv_log_level_valid(const char *level);
  * text, dropping empty lines and trailing CR/LF, so every line written starts
  * with "mpv: ". */
 void xrd_mpv_log_print(FILE *f, const char *prefix, const char *text);
+/* The GL internal format for f (GL_RGB10_A2 or GL_RGBA8), and in *depth the
+ * bits per channel to tell mpv (MPV_RENDER_PARAM_DEPTH): 10 or 8. */
+int xrd_fbo_format_gl(xrd_fbo_format f, int *depth);
+/* Name of a video texture by xrd_player_texture_bits: "rgb10_a2" for 10,
+ * "rgba8" for 8, "none" otherwise. */
+const char *xrd_texture_bits_name(int bits);
 /* True for an exactly 2:1 frame (two square eyes side by side). */
 bool xrd_video_is_sbs_2to1(int w, int h);
 

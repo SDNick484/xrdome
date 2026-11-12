@@ -148,6 +148,8 @@ void xrd_config_defaults(xrd_config *c)
     copy_str(c->mpv_log, sizeof c->mpv_log, "warn");
     c->convergence = 0.0f;
     c->filter = XRD_FILTER_BICUBIC;
+    c->fbo_format = XRD_FBO_RGB10;
+    c->dither = true;
 }
 
 int xrd_config_default_path(char *buf, size_t len)
@@ -272,7 +274,8 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
 {
     enum { OPT_PROJ = 256, OPT_LAYOUT, OPT_POSE, OPT_OUTPUT, OPT_DEVICE, OPT_ZOOM,
            OPT_CONTENT_FOV, OPT_HWDEC, OPT_WINDOWED, OPT_TIMING, OPT_SYNC, OPT_FRAMES, OPT_DUMP,
-           OPT_MPV_PROFILE, OPT_MPV_OPT, OPT_MPV_LOG, OPT_CONVERGENCE, OPT_FILTER };
+           OPT_MPV_PROFILE, OPT_MPV_OPT, OPT_MPV_LOG, OPT_CONVERGENCE, OPT_FILTER,
+           OPT_FBO_FORMAT, OPT_DITHER };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
         {"layout", required_argument, NULL, OPT_LAYOUT},
@@ -292,6 +295,8 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"mpv-log", required_argument, NULL, OPT_MPV_LOG},
         {"convergence", required_argument, NULL, OPT_CONVERGENCE},
         {"filter", required_argument, NULL, OPT_FILTER},
+        {"fbo-format", required_argument, NULL, OPT_FBO_FORMAT},
+        {"dither", required_argument, NULL, OPT_DITHER},
         {NULL, 0, NULL, 0},
     };
 
@@ -398,6 +403,27 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
             else {
                 set_err(err, errlen, "--filter: unknown filter '%s' (expected bilinear or bicubic)",
                         optarg);
+                rc = -1;
+            }
+            break;
+        case OPT_FBO_FORMAT:
+            if (!strcmp(optarg, "rgb10"))
+                c->fbo_format = XRD_FBO_RGB10;
+            else if (!strcmp(optarg, "rgba8"))
+                c->fbo_format = XRD_FBO_RGBA8;
+            else {
+                set_err(err, errlen, "--fbo-format: unknown format '%s' (expected rgb10 or rgba8)",
+                        optarg);
+                rc = -1;
+            }
+            break;
+        case OPT_DITHER:
+            if (!strcmp(optarg, "on"))
+                c->dither = true;
+            else if (!strcmp(optarg, "off"))
+                c->dither = false;
+            else {
+                set_err(err, errlen, "--dither: unknown value '%s' (expected on or off)", optarg);
                 rc = -1;
             }
             break;

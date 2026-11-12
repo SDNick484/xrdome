@@ -63,9 +63,23 @@ static int dump_ppm(const char *path, int w, int h)
     return fclose(f) == 0 ? 0 : -1;
 }
 
+/* Prints the zoom, convergence and filter lines for the values that differ
+ * between before and after (a key press at a limit, or a reset to the value
+ * already set, prints nothing). */
+static void report_display_changes(const xrd_controls *before, const xrd_controls *after)
+{
+    if (after->zoom != before->zoom)
+        fprintf(stderr, "zoom: %.2f\n", (double)after->zoom);
+    if (after->convergence_deg != before->convergence_deg)
+        fprintf(stderr, "convergence: %.1f deg\n", (double)after->convergence_deg);
+    if (after->filter != before->filter)
+        fprintf(stderr, "filter: %s\n",
+                after->filter == XRD_FILTER_BICUBIC ? "bicubic" : "bilinear");
+}
+
 /* Spec 6.4 keys. Returns true when the key asks to quit. */
-static bool handle_key(const SDL_KeyboardEvent *k, xrd_controls *ctl, xrd_tracker *trk,
-                       xrd_player *p)
+static bool handle_key_action(const SDL_KeyboardEvent *k, xrd_controls *ctl, xrd_tracker *trk,
+                              xrd_player *p)
 {
     bool shift = (k->keysym.mod & KMOD_SHIFT) != 0;
     switch (k->keysym.sym) {
@@ -87,32 +101,23 @@ static bool handle_key(const SDL_KeyboardEvent *k, xrd_controls *ctl, xrd_tracke
         break;
     case SDLK_LEFTBRACKET:
         xrd_controls_zoom_out(ctl);
-        fprintf(stderr, "zoom: %.2f\n", (double)ctl->zoom);
         break;
     case SDLK_RIGHTBRACKET:
         xrd_controls_zoom_in(ctl);
-        fprintf(stderr, "zoom: %.2f\n", (double)ctl->zoom);
         break;
     case SDLK_COMMA:
         xrd_controls_convergence_dec(ctl);
-        fprintf(stderr, "convergence: %.1f deg\n", (double)ctl->convergence_deg);
         break;
     case SDLK_PERIOD:
         xrd_controls_convergence_inc(ctl);
-        fprintf(stderr, "convergence: %.1f deg\n", (double)ctl->convergence_deg);
         break;
     case SDLK_SLASH:
-        if (!k->repeat) {
+        if (!k->repeat)
             xrd_controls_convergence_reset(ctl);
-            fprintf(stderr, "convergence: %.1f deg\n", (double)ctl->convergence_deg);
-        }
         break;
     case SDLK_f:
-        if (!k->repeat) {
+        if (!k->repeat)
             xrd_controls_toggle_filter(ctl);
-            fprintf(stderr, "filter: %s\n",
-                    ctl->filter == XRD_FILTER_BICUBIC ? "bicubic" : "bilinear");
-        }
         break;
     case SDLK_s:
         if (!k->repeat)
@@ -126,6 +131,16 @@ static bool handle_key(const SDL_KeyboardEvent *k, xrd_controls *ctl, xrd_tracke
         break;
     }
     return false;
+}
+
+/* handle_key_action, then a status line for each display value it changed. */
+static bool handle_key(const SDL_KeyboardEvent *k, xrd_controls *ctl, xrd_tracker *trk,
+                       xrd_player *p)
+{
+    const xrd_controls before = *ctl;
+    bool quit = handle_key_action(k, ctl, trk, p);
+    report_display_changes(&before, ctl);
+    return quit;
 }
 
 int main(int argc, char **argv)
@@ -248,7 +263,8 @@ int main(int argc, char **argv)
     for (int i = 0; i < cfg.mpv_opt_count; i++)
         mpv_opts[i] = cfg.mpv_opts[i];
     xrd_player_options popt = {.profile = cfg.mpv_profile, .opts = mpv_opts,
-                               .opt_count = cfg.mpv_opt_count, .log_level = cfg.mpv_log};
+                               .opt_count = cfg.mpv_opt_count, .log_level = cfg.mpv_log,
+                               .fbo_format = cfg.fbo_format};
     p = xrd_player_open_ex(cfg.file, gl_get_proc, wm.info.x11.display, &popt, err, sizeof err);
     if (!p) {
         fail("%s", err);
@@ -256,6 +272,7 @@ int main(int argc, char **argv)
     }
     xrd_player_set_content(p, cfg.layout, cfg.content_hfov, cfg.content_vfov);
     xrd_renderer_set_content_fov(r, cfg.content_hfov, cfg.content_vfov);
+    xrd_renderer_set_dither(r, cfg.dither);
     if (cfg.frames > 0)
         xrd_player_hold_at_end(p);
 
@@ -326,6 +343,8 @@ int main(int argc, char **argv)
             for (int i = 0; i < cfg.mpv_opt_count; i++)
                 fprintf(stderr, " %s", cfg.mpv_opts[i]);
             fputc('\n', stderr);
+            fprintf(stderr, "video texture: %s dither=%s\n",
+                    xrd_texture_bits_name(xrd_player_texture_bits(p)), cfg.dither ? "on" : "off");
             if (strcmp(hw, "vaapi") != 0) {
                 snprintf(err, sizeof err, "hardware decoding is '%s', not vaapi",
                          hw[0] ? hw : "unknown");

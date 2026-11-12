@@ -7,6 +7,7 @@ uniform vec2  u_reject;     // 1.0 on an axis whose content FOV is < 180: reject
 uniform float u_u_scale;    // eye sub-image u transform: u_tex = u * scale + offset
 uniform float u_u_offset;
 uniform bool  u_bicubic;    // Catmull-Rom instead of the hardware bilinear filter
+uniform bool  u_dither;     // ordered dithering of the 8-bit output
 in  vec2 v_ndc;             // -1..1 within this eye's viewport
 out vec4 o_color;
 
@@ -66,8 +67,15 @@ void main()
     // margin: the seam clamp on u, the texture edge on v.
     vec2 size = vec2(textureSize(u_video, 0)) * vec2(u_u_scale, 1.0);
     vec2 m = 0.5 / size;
-    if (u_bicubic)
-        o_color = catmull_rom(clamp(uv, m, 1.0 - m), size, m);
-    else
-        o_color = tap(uv, vec2(m.x, 0.0));
+    vec3 c = u_bicubic ? catmull_rom(clamp(uv, m, 1.0 - m), size, m).rgb
+                       : tap(uv, vec2(m.x, 0.0)).rgb;
+    // The window is 8-bit: without dithering a 10-bit texture's extra
+    // precision is rounded away here. Interleaved gradient noise gives each
+    // pixel an offset in [-0.5, 0.5) of one 8-bit level.
+    if (u_dither) {
+        float n = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+        c += (n - 0.5) / 255.0;
+    }
+    // Alpha is ours, not the video texture's (RGB10_A2 has 2 alpha bits).
+    o_color = vec4(c, 1.0);
 }

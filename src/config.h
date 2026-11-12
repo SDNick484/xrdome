@@ -6,6 +6,7 @@
 
 #include "render/projection.h"
 #include "render/renderer_gl.h"
+#include "video/player_mpv.h"
 
 typedef struct {
     char file[4096];
@@ -27,6 +28,8 @@ typedef struct {
     char mpv_log[8];       /* --mpv-log LEVEL; default "warn"; "no" = none */
     float convergence;     /* --convergence DEG, -5 .. 5, default 0 */
     xrd_filter filter;     /* --filter bilinear|bicubic, default bicubic */
+    xrd_fbo_format fbo_format; /* --fbo-format rgb10|rgba8, default rgb10 */
+    bool dither;           /* --dither on|off, default on */
     /* development only (smoke test), not documented: */
     int frames;            /* --frames N: exit 0 after N presented frames
                               once a video frame has been rendered; 0 = off */

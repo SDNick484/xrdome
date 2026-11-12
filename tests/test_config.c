@@ -62,6 +62,8 @@ static void defaults_match_spec(void **state)
     assert_float_equal(c.convergence, 0.0f, TOL);
     assert_int_equal(c.filter, XRD_FILTER_BICUBIC);
     assert_string_equal(c.mpv_log, "warn");
+    assert_int_equal(c.fbo_format, XRD_FBO_RGB10);
+    assert_true(c.dither);
 }
 
 static void ini_absent_is_ok(void **state)
@@ -533,6 +535,61 @@ static void args_filter(void **state)
     }
 }
 
+static void args_fbo_format(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    xrd_config c;
+    xrd_config_defaults(&c);
+    char *a[] = {"xrdome", "--fbo-format", "rgba8", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, a, err, sizeof err), 0);
+    assert_int_equal(c.fbo_format, XRD_FBO_RGBA8);
+    char *b[] = {"xrdome", "--fbo-format", "rgb10", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, b, err, sizeof err), 0);
+    assert_int_equal(c.fbo_format, XRD_FBO_RGB10);
+
+    const char *bad[] = {"rgb10_a2", "RGB10", "", "rgba16f", "8"};
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        xrd_config_defaults(&c);
+        c.fbo_format = XRD_FBO_RGBA8;
+        char *x[] = {"xrdome", "--fbo-format", (char *)bad[i], "a.mp4", NULL};
+        assert_int_equal(xrd_config_parse_args(&c, 4, x, err, sizeof err), -1);
+        assert_non_null(strstr(err, "fbo-format"));
+        if (bad[i][0])
+            assert_non_null(strstr(err, bad[i]));
+        else
+            assert_non_null(strstr(err, "''"));
+        assert_int_equal(c.fbo_format, XRD_FBO_RGBA8);
+    }
+}
+
+static void args_dither(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    xrd_config c;
+    xrd_config_defaults(&c);
+    char *a[] = {"xrdome", "--dither", "off", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, a, err, sizeof err), 0);
+    assert_false(c.dither);
+    char *b[] = {"xrdome", "--dither", "on", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, b, err, sizeof err), 0);
+    assert_true(c.dither);
+
+    const char *bad[] = {"yes", "ON", "", "1", "true"};
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        xrd_config_defaults(&c);
+        char *x[] = {"xrdome", "--dither", (char *)bad[i], "a.mp4", NULL};
+        assert_int_equal(xrd_config_parse_args(&c, 4, x, err, sizeof err), -1);
+        assert_non_null(strstr(err, "dither"));
+        if (bad[i][0])
+            assert_non_null(strstr(err, bad[i]));
+        else
+            assert_non_null(strstr(err, "''"));
+        assert_true(c.dither);
+    }
+}
+
 static void args_mpv_log(void **state)
 {
     (void)state;
@@ -561,7 +618,8 @@ static void args_mpv_log(void **state)
 static void ini_new_flags_are_not_keys(void **state)
 {
     (void)state;
-    const char *keys[] = {"convergence = 1", "filter = bilinear", "mpv_log = info"};
+    const char *keys[] = {"convergence = 1", "filter = bilinear", "mpv_log = info",
+                          "fbo_format = rgba8", "dither = off"};
     for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
         char path[64], err[256] = "", text[128];
         snprintf(text, sizeof text, "[device.viture-pro]\n%s\n", keys[i]);
@@ -837,6 +895,8 @@ int main(void)
         cmocka_unit_test(args_convergence),
         cmocka_unit_test(args_convergence_bad_values),
         cmocka_unit_test(args_filter),
+        cmocka_unit_test(args_fbo_format),
+        cmocka_unit_test(args_dither),
         cmocka_unit_test(args_mpv_log),
         cmocka_unit_test(ini_new_flags_are_not_keys),
         cmocka_unit_test(ini_content_fov_is_not_a_key),

@@ -10,10 +10,11 @@
 struct xrd_renderer {
     GLuint prog;
     GLuint vao;
-    GLint u_video, u_rot, u_tan_half, u_inv_fov, u_reject, u_u_scale, u_u_offset, u_bicubic;
+    GLint u_video, u_rot, u_tan_half, u_inv_fov, u_reject, u_u_scale, u_u_offset, u_bicubic, u_dither;
     float hfov_deg, vfov_deg;
     float convergence_deg;
     xrd_filter filter;
+    bool dither;
 };
 
 static void set_err(char *err, size_t errlen, const char *what, const char *log)
@@ -85,6 +86,8 @@ xrd_renderer *xrd_renderer_new(char *err, size_t errlen)
     r->u_bicubic = glGetUniformLocation(prog, "u_bicubic");
     r->convergence_deg = 0.f;
     r->filter = XRD_FILTER_BILINEAR;
+    r->u_dither = glGetUniformLocation(prog, "u_dither");
+    r->dither = false;
     return r;
 }
 
@@ -106,6 +109,11 @@ void xrd_renderer_set_content_fov(xrd_renderer *r, float hfov_deg, float vfov_de
 void xrd_renderer_set_convergence(xrd_renderer *r, float deg)
 {
     r->convergence_deg = deg;
+}
+
+void xrd_renderer_set_dither(xrd_renderer *r, bool on)
+{
+    r->dither = on;
 }
 
 void xrd_renderer_set_filter(xrd_renderer *r, xrd_filter f)
@@ -145,6 +153,7 @@ void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
     glUniform2f(r->u_reject, r->hfov_deg < XRD_FULL_FOV_DEG ? 1.f : 0.f, r->vfov_deg < XRD_FULL_FOV_DEG ? 1.f : 0.f);
     glUniform2f(r->u_inv_fov, (float)(1.0 / (r->hfov_deg * deg)), (float)(1.0 / (r->vfov_deg * deg)));
     glUniform1i(r->u_bicubic, r->filter == XRD_FILTER_BICUBIC);
+    glUniform1i(r->u_dither, r->dither);
 
     int half = out_w / 2;
     for (int eye = 0; eye < 2; eye++) {
