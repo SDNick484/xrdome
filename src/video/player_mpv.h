@@ -26,6 +26,7 @@ const char *xrd_player_hwdec(xrd_player *p);             /* mpv "hwdec-current",
 bool        xrd_player_finished(const xrd_player *p);    /* end of file or load failure */
 const char *xrd_player_error(const xrd_player *p);
 void        xrd_player_toggle_pause(xrd_player *p);
+void        xrd_player_pause(xrd_player *p);              /* pause (no toggle) */
 void        xrd_player_seek(xrd_player *p, double seconds);
 /* Development (--frames): at end of file keep showing the last frame instead
  * of finishing, so a frame count does not depend on decode speed. */

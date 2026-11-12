@@ -32,6 +32,7 @@ core_sources = files(
   'src/render/renderer_gl.c',
   'src/display/output.c',
   'src/video/player_mpv.c',
+  'src/app/controls.c',
 )
 
 # Test names: each entry NAME builds tests/test_NAME.c into test_NAME.
@@ -45,6 +46,8 @@ test_names = [
   'render',
   'output',
   'player',
+  'timing',
+  'controls',
 ]
 
 inc = include_directories('src')
@@ -70,5 +73,11 @@ xrdome_exe = executable('xrdome', 'src/main.c',
 # Desktop smoke test under Xvfb; skipped (77) without xvfb-run or ffmpeg.
 test('smoke', find_program('tests/smoke_player.sh'),
   args : [xrdome_exe, files('tools/make_pattern.sh')],
+  is_parallel : false,
+  timeout : 300)
+
+# Head tracking end to end under Xvfb, fed by tools/ot_sweep.py over UDP.
+test('smoke_tracking', find_program('tests/smoke_tracking.sh'),
+  args : [xrdome_exe, files('tools/make_pattern.sh'), files('tools/ot_sweep.py')],
   is_parallel : false,
   timeout : 300)

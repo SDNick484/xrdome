@@ -88,9 +88,11 @@ xrd_player *xrd_player_open(const char *file, xrd_gl_get_proc get_proc, void *x1
      * about half of all runs (mpv 0.37, Mesa 25.2). The single-pass dumb mode
      * renders correctly there. Hardware GL keeps mpv's default path. */
     const char *gl_renderer = (const char *)glGetString(GL_RENDERER);
-    if (gl_renderer && (strstr(gl_renderer, "llvmpipe") || strstr(gl_renderer, "softpipe")) &&
-        set_opt(p, "gpu-dumb-mode", "yes", err, errlen))
-        goto fail;
+    if (gl_renderer && (strstr(gl_renderer, "llvmpipe") || strstr(gl_renderer, "softpipe"))) {
+        if (set_opt(p, "gpu-dumb-mode", "yes", err, errlen))
+            goto fail;
+        fprintf(stderr, "note: software GL (%s), using mpv gpu-dumb-mode\n", gl_renderer);
+    }
 
     int rc = mpv_initialize(p->mpv);
     if (rc < 0) {
@@ -191,9 +193,22 @@ static int handle_events(xrd_player *p)
             return 0;
         case MPV_EVENT_VIDEO_RECONFIG: {
             int64_t w = 0, h = 0;
-            if (mpv_get_property(p->mpv, "dwidth", MPV_FORMAT_INT64, &w) >= 0 &&
-                mpv_get_property(p->mpv, "dheight", MPV_FORMAT_INT64, &h) >= 0 &&
-                ensure_fbo(p, (int)w, (int)h) < 0) {
+            int rc = mpv_get_property(p->mpv, "dwidth", MPV_FORMAT_INT64, &w);
+            if (rc >= 0)
+                rc = mpv_get_property(p->mpv, "dheight", MPV_FORMAT_INT64, &h);
+            if (rc < 0) {
+                /* mpv also sends a reconfig when the video output goes away
+                 * (end of file): no size then, and nothing to resize. */
+                int configured = 0;
+                if (mpv_get_property(p->mpv, "vo-configured", MPV_FORMAT_FLAG, &configured) >= 0 &&
+                    !configured)
+                    break;
+                set_err(p->err, sizeof p->err, "cannot read the video size of '%s': %s",
+                        p->file, mpv_error_string(rc));
+                p->finished = true;
+                return -1;
+            }
+            if (ensure_fbo(p, (int)w, (int)h) < 0) {
                 p->finished = true;
                 return -1;
             }
@@ -228,9 +243,14 @@ int xrd_player_update(xrd_player *p)
         mpv_opengl_fbo fbo = {.fbo = (int)p->fbo, .w = p->w, .h = p->h,
                               .internal_format = GL_RGBA8};
         int flip_y = 1; /* GL orientation: t = 1 is the image top */
+        /* Do not wait for the frame's display time inside render: the loop
+         * is paced by the swap, and a wait here would sit between the pose
+         * sample and the swap. */
+        int block = 0;
         mpv_render_param params[] = {
             {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
             {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
+            {MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &block},
             {MPV_RENDER_PARAM_INVALID, NULL},
         };
         int rc = mpv_render_context_render(p->rctx, params);
@@ -282,6 +302,12 @@ void xrd_player_toggle_pause(xrd_player *p)
 {
     const char *cmd[] = {"cycle", "pause", NULL};
     mpv_command_async(p->mpv, 0, cmd);
+}
+
+void xrd_player_pause(xrd_player *p)
+{
+    int yes = 1;
+    mpv_set_property(p->mpv, "pause", MPV_FORMAT_FLAG, &yes);
 }
 
 void xrd_player_seek(xrd_player *p, double seconds)

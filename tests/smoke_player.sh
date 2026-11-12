@@ -16,7 +16,18 @@ trap 'rm -rf "$work"' EXIT
 export LIBGL_ALWAYS_SOFTWARE=1
 
 # xvfb-run merges the program's stderr into its stdout, so callers capture both.
-xvfb() { xvfb-run -a -s "-screen 0 1920x1080x24" "$@"; }
+# Returns the program's own exit status: xvfb-run sometimes fails with
+# "problem while cleaning up temporary directory" (status 5) after the
+# program has already exited.
+xvfb() {
+    _xsf=$(mktemp "$work/status.XXXXXX") || return 99
+    XRD_STATUS=$_xsf xvfb-run -a -s "-screen 0 1920x1080x24" \
+        sh -c '"$@"; echo $? >"$XRD_STATUS"' sh "$@"
+    _xst=$?
+    [ -s "$_xsf" ] && read -r _xst <"$_xsf"
+    rm -f "$_xsf"
+    return "$_xst"
+}
 fail=0
 check() { # check DESCRIPTION CONDITION-EXIT-STATUS
     if [ "$2" -eq 0 ]; then echo "ok:   $1"; else echo "FAIL: $1"; fail=1; fi
@@ -30,7 +41,17 @@ st=$?
 echo "--- stderr:"; cat "$work/play.err"; echo "---"
 check "playback exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
 grep -q '^hwdec: ' "$work/play.err"; check "stderr reports hwdec" $?
-! grep -q '^xrdome:' "$work/play.err"; check "no xrdome warnings or errors" $?
+hwdec=$(sed -n 's/^hwdec: //p' "$work/play.err")
+# Xvfb with software GL normally has no VA-API interop, so hwdec is "no" and
+# the player must warn once; that warning is the only xrdome line allowed.
+if [ "$hwdec" = vaapi ]; then
+    ! grep -q '^xrdome:' "$work/play.err"; check "no xrdome warnings or errors" $?
+else
+    [ "$(grep -c "^xrdome: warning: hardware decoding is '$hwdec', not vaapi" "$work/play.err")" -eq 1 ]
+    check "one hwdec warning (hwdec: $hwdec)" $?
+    ! grep '^xrdome:' "$work/play.err" | grep -qv 'not vaapi'; check "no other xrdome warnings or errors" $?
+fi
+grep -q '^timing: [0-9]* frames, [0-9]* missed vsyncs' "$work/play.err"; check "exit summary reports missed vsyncs" $?
 
 python3 -I - "$work/out.ppm" <<'PY'
 import sys
@@ -78,6 +99,36 @@ for e, name in ((0, "left"), (1, "right")):
 sys.exit(0 if ok else 1)
 PY
 check "dumped frame: colours and orientation" $?
+
+# 1b. --require-hwdec: exit 1 without VA-API, play normally with it.
+xvfb "$xrdome" --windowed --pose null --require-hwdec --frames 5 "$work/pattern.mp4" \
+     >"$work/reqhw.err" 2>&1
+st=$?
+cat "$work/reqhw.err"
+if [ "$hwdec" = vaapi ]; then
+    check "--require-hwdec with vaapi exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+else
+    check "--require-hwdec without vaapi exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
+    grep -q "^xrdome: hardware decoding is '$hwdec', not vaapi (--require-hwdec)" "$work/reqhw.err"
+    check "--require-hwdec message" $?
+fi
+
+# 1c. --frames N not reached: SIGTERM (SDL turns it into SDL_QUIT) after 3 s,
+# long before 100000 frames, must exit 1.
+xvfb sh -c '"$1" --windowed --pose null --frames 100000 "$2" & pid=$!
+            sleep 3; kill -TERM "$pid"; wait "$pid"' sh "$xrdome" "$work/pattern.mp4" \
+     >"$work/early.err" 2>&1
+st=$?
+cat "$work/early.err"
+check "--frames not reached exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
+grep -q "^xrdome: --frames 100000: exited after [0-9]* presented frames" "$work/early.err"
+check "--frames not reached message" $?
+
+# 1d. Plain playback to the end of the file exits 0 (no --frames).
+xvfb "$xrdome" --windowed --pose null "$work/pattern.mp4" >"$work/eof.err" 2>&1
+st=$?
+cat "$work/eof.err"
+check "plays to end of file and exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
 
 # 2. Missing file: exit 1 with mpv's error string.
 xvfb "$xrdome" --windowed --pose null /nonexistent/clip.mp4 >"$work/missing.err" 2>&1

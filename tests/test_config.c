@@ -408,6 +408,45 @@ static void load_bad_ini_reports_key(void **state)
     assert_non_null(strstr(err, "zoom"));
 }
 
+/* The default-path tests change HOME and XDG_CONFIG_HOME; these put them back. */
+typedef struct {
+    bool set;
+    char value[4096];
+} saved_var;
+
+static saved_var saved_home, saved_xdg;
+
+static void save_var(saved_var *v, const char *name)
+{
+    const char *s = getenv(name);
+    v->set = s != NULL;
+    snprintf(v->value, sizeof v->value, "%s", s ? s : "");
+}
+
+static void restore_var(const saved_var *v, const char *name)
+{
+    if (v->set)
+        setenv(name, v->value, 1);
+    else
+        unsetenv(name);
+}
+
+static int save_env(void **state)
+{
+    (void)state;
+    save_var(&saved_home, "HOME");
+    save_var(&saved_xdg, "XDG_CONFIG_HOME");
+    return 0;
+}
+
+static int restore_env(void **state)
+{
+    (void)state;
+    restore_var(&saved_home, "HOME");
+    restore_var(&saved_xdg, "XDG_CONFIG_HOME");
+    return 0;
+}
+
 static void default_path_prefers_xdg(void **state)
 {
     (void)state;
@@ -532,12 +571,21 @@ int main(void)
         cmocka_unit_test(load_builtin_keeps_fov_when_ini_omits_it),
         cmocka_unit_test(load_null_ini_and_builtin_fov),
         cmocka_unit_test(load_bad_ini_reports_key),
-        cmocka_unit_test(default_path_prefers_xdg),
-        cmocka_unit_test(default_path_falls_back_to_home),
-        cmocka_unit_test(default_path_fails_without_env_or_space),
+        cmocka_unit_test_setup_teardown(default_path_prefers_xdg, save_env, restore_env),
+        cmocka_unit_test_setup_teardown(default_path_falls_back_to_home, save_env, restore_env),
+        cmocka_unit_test_setup_teardown(default_path_fails_without_env_or_space, save_env, restore_env),
         cmocka_unit_test(args_dev_frames_and_dump),
         cmocka_unit_test(args_dev_frames_bad_values),
         cmocka_unit_test(args_dev_dump_requires_frames),
     };
-    return cmocka_run_group_tests(tests, NULL, NULL);
+    save_env(NULL);
+    int failed = cmocka_run_group_tests(tests, NULL, NULL);
+    /* Guard against a test that changes the environment without restoring it. */
+    const char *home = getenv("HOME"), *xdg = getenv("XDG_CONFIG_HOME");
+    if ((home != NULL) != saved_home.set || (home && strcmp(home, saved_home.value) != 0) ||
+        (xdg != NULL) != saved_xdg.set || (xdg && strcmp(xdg, saved_xdg.value) != 0)) {
+        fprintf(stderr, "test_config: HOME or XDG_CONFIG_HOME not restored\n");
+        return 1;
+    }
+    return failed;
 }
