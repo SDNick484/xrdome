@@ -203,6 +203,16 @@ int main(int argc, char **argv)
         goto out;
     }
 
+    /* The refresh rate of the display the window is on (the glasses, or
+     * wherever --windowed landed); on failure keep the enumerated value or
+     * the 60 Hz fallback. */
+    {
+        int di = SDL_GetWindowDisplayIndex(win);
+        SDL_DisplayMode dm;
+        if (di >= 0 && SDL_GetCurrentDisplayMode(di, &dm) == 0 && dm.refresh_rate > 0)
+            refresh_hz = dm.refresh_rate;
+    }
+
     int out_w, out_h;
     SDL_GL_GetDrawableSize(win, &out_w, &out_h);
 
@@ -224,7 +234,8 @@ int main(int argc, char **argv)
     xrd_controls ctl;
     xrd_controls_init(&ctl, cfg.zoom, cfg.layout);
     const bool mouse_look = strcmp(pose->name, "null") == 0;
-    const float eye_aspect = (out_w / 2.0f) / (float)out_h;
+    float eye_aspect = 1.f;
+    bool size_dirty = true; /* recompute the per-eye aspect and tans on the next frame */
     /* If the swap does not wait for vsync (no swap interval, or the driver
      * ignores it), the loop is paced to this period after the swap. */
     const uint64_t period_ns = xrd_refresh_period_ns(refresh_hz);
@@ -241,6 +252,8 @@ int main(int argc, char **argv)
             case SDL_WINDOWEVENT:
                 if (ev.window.event == SDL_WINDOWEVENT_CLOSE)
                     quit = true;
+                else if (ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
+                    size_dirty = true;
                 break;
             case SDL_KEYDOWN:
                 if (handle_key(&ev.key, &ctl, trk, p))
@@ -291,6 +304,15 @@ int main(int argc, char **argv)
             }
         }
 
+        if (size_dirty) {
+            SDL_GL_GetDrawableSize(win, &out_w, &out_h);
+            if (out_w < 2)
+                out_w = 2;
+            if (out_h < 1)
+                out_h = 1;
+            eye_aspect = (out_w / 2.0f) / (float)out_h;
+            size_dirty = false;
+        }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, out_w, out_h);
 
@@ -322,9 +344,13 @@ int main(int argc, char **argv)
         /* Nothing between the timestamp and the swap; the log write follows. */
         uint64_t pre_swap_ns = xrd_now_ns();
         SDL_GL_SwapWindow(win);
+        if (cfg.sync_after_swap)
+            glFinish(); /* diagnostic: wait here for a driver that blocks on vsync later */
+        uint64_t post_swap_ns = xrd_now_ns();
         xrd_player_report_swap(p);
         if (tex) /* timing starts with the first video frame, like --frames */
-            xrd_timing_frame(timing, pose_sample_ns, pre_swap_ns, xrd_tracker_last_pose_ns(trk));
+            xrd_timing_frame(timing, pose_sample_ns, pre_swap_ns, xrd_tracker_last_pose_ns(trk),
+                             post_swap_ns - pre_swap_ns);
         if (last)
             quit = done = true;
 

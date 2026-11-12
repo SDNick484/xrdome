@@ -120,7 +120,7 @@ for _ in range(int(sys.argv[2])):
     stop_sender
     echo "--- $name stderr:"; cat "$work/$name.err"; echo "---"
     check "$name: exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
-    head -n 1 "$csv" | grep -qx 'frame,interval_us,pose_to_swap_us,pose_age_us'
+    head -n 1 "$csv" | grep -qx 'frame,interval_us,pose_to_swap_us,pose_age_us,swap_us'
     check "$name: timing log header" $?
     rows=$(($(wc -l <"$csv") - 1))
     frames=$(sed -n 's/^timing: \([0-9]*\) frames.*/\1/p' "$work/$name.err")

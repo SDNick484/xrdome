@@ -118,7 +118,7 @@ void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
     glUniformMatrix3fv(r->u_rot, 1, GL_FALSE, rot);
     glUniform2f(r->u_tan_half, tan_h, tan_v);
     const double deg = 3.14159265358979323846 / 180.0;
-    glUniform2f(r->u_reject, r->hfov_deg < 179.999f ? 1.f : 0.f, r->vfov_deg < 179.999f ? 1.f : 0.f);
+    glUniform2f(r->u_reject, r->hfov_deg < XRD_FULL_FOV_DEG ? 1.f : 0.f, r->vfov_deg < XRD_FULL_FOV_DEG ? 1.f : 0.f);
     glUniform2f(r->u_inv_fov, (float)(1.0 / (r->hfov_deg * deg)), (float)(1.0 / (r->vfov_deg * deg)));
 
     int half = out_w / 2;

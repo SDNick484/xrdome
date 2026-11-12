@@ -3,7 +3,6 @@
 #include <math.h>
 
 #define XRD_PI 3.14159265358979323846
-#define XRD_FULL_FOV_DEG 179.999f
 
 void xrd_fov_tan_half(float diag_deg, float aspect, float zoom, float *tan_h, float *tan_v)
 {

@@ -55,6 +55,7 @@ static void defaults_match_spec(void **state)
     assert_float_equal(c.content_vfov, 180.0f, TOL);
     assert_false(c.require_hwdec);
     assert_false(c.windowed);
+    assert_false(c.sync_after_swap);
     assert_string_equal(c.timing_log, "");
     assert_int_equal(c.frames, 0);
     assert_string_equal(c.dump_frame, "");
@@ -241,6 +242,25 @@ static void args_bad_proj(void **state)
 
     char *ok[] = {"xrdome", "--proj", "hequirect", "a.mp4", NULL};
     assert_int_equal(xrd_config_parse_args(&c, 4, ok, err, sizeof err), 0);
+}
+
+static void args_sync_after_swap_flag(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    xrd_config c;
+    xrd_config_defaults(&c);
+    char *a1[] = {"xrdome", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 2, a1, err, sizeof err), 0);
+    assert_false(c.sync_after_swap);
+    char *a2[] = {"xrdome", "--sync-after-swap", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 3, a2, err, sizeof err), 0);
+    assert_true(c.sync_after_swap);
+    /* the flag survives a full load and takes no argument */
+    xrd_config c2;
+    assert_int_equal(xrd_config_load(&c2, NULL, 3, a2, err, sizeof err), 0);
+    assert_true(c2.sync_after_swap);
+    assert_string_equal(c2.file, "a.mp4");
 }
 
 static void args_missing_file(void **state)
@@ -631,6 +651,7 @@ int main(void)
         cmocka_unit_test(args_dev_frames_and_dump),
         cmocka_unit_test(args_dev_frames_bad_values),
         cmocka_unit_test(args_dev_dump_requires_frames),
+        cmocka_unit_test(args_sync_after_swap_flag),
     };
     save_env(NULL);
     int failed = cmocka_run_group_tests(tests, NULL, NULL);

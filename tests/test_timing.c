@@ -23,7 +23,7 @@ static void missed_vsyncs_counts_intervals_over_20ms(void **state)
     /* Offset by 1 s so pose times stay positive. */
     for (size_t i = 0; i < sizeof pre_swap_ms / sizeof pre_swap_ms[0]; i++) {
         uint64_t s = MS(1000.0 + pre_swap_ms[i]);
-        xrd_timing_frame(t, s - MS(1), s, s - MS(2));
+        xrd_timing_frame(t, s - MS(1), s, s - MS(2), 0);
     }
     assert_int_equal(xrd_timing_missed_vsyncs(t), 1);
     xrd_timing_close(t);
@@ -33,10 +33,10 @@ static void exactly_20ms_is_not_missed(void **state)
 {
     (void)state;
     xrd_timing *t = xrd_timing_open(NULL);
-    xrd_timing_frame(t, MS(1000), MS(1000), 0);
-    xrd_timing_frame(t, MS(1020), MS(1020), 0);
+    xrd_timing_frame(t, MS(1000), MS(1000), 0, 0);
+    xrd_timing_frame(t, MS(1020), MS(1020), 0, 0);
     assert_int_equal(xrd_timing_missed_vsyncs(t), 0);
-    xrd_timing_frame(t, MS(1040) + 1, MS(1040) + 1, 0);
+    xrd_timing_frame(t, MS(1040) + 1, MS(1040) + 1, 0, 0);
     assert_int_equal(xrd_timing_missed_vsyncs(t), 1);
     xrd_timing_close(t);
 }
@@ -46,9 +46,9 @@ static void max_pose_to_swap(void **state)
     (void)state;
     xrd_timing *t = xrd_timing_open(NULL);
     assert_int_equal(xrd_timing_max_pose_to_swap_ns(t), 0);
-    xrd_timing_frame(t, MS(1000), MS(1001), MS(999));      /* 1 ms */
-    xrd_timing_frame(t, MS(1013.7), MS(1016.7), MS(1010)); /* 3 ms */
-    xrd_timing_frame(t, MS(1033), MS(1033.4), MS(1030));   /* 0.4 ms */
+    xrd_timing_frame(t, MS(1000), MS(1001), MS(999), 0);      /* 1 ms */
+    xrd_timing_frame(t, MS(1013.7), MS(1016.7), MS(1010), 0); /* 3 ms */
+    xrd_timing_frame(t, MS(1033), MS(1033.4), MS(1030), 0);   /* 0.4 ms */
     assert_true(xrd_timing_max_pose_to_swap_ns(t) == 3000000u);
     xrd_timing_close(t);
 }
@@ -79,17 +79,17 @@ static void csv_has_header_and_one_line_per_frame(void **state)
 
     xrd_timing *t = xrd_timing_open(path);
     assert_non_null(t);
-    xrd_timing_frame(t, MS(1000), MS(1001), 0);           /* no pose yet */
-    xrd_timing_frame(t, MS(1015.7), MS(1017.7), MS(1012)); /* 16.7 ms later */
-    xrd_timing_frame(t, MS(1032), MS(1034.4), MS(1030));
+    xrd_timing_frame(t, MS(1000), MS(1001), 0, 0);           /* no pose yet */
+    xrd_timing_frame(t, MS(1015.7), MS(1017.7), MS(1012), 0); /* 16.7 ms later */
+    xrd_timing_frame(t, MS(1032), MS(1034.4), MS(1030), MS(8.25));
     xrd_timing_close(t);
 
     char first[256], last[256];
     int n = count_lines(path, first, sizeof first, last, sizeof last);
     unlink(path);
     assert_int_equal(n, 4);
-    assert_string_equal(first, "frame,interval_us,pose_to_swap_us,pose_age_us\n");
-    assert_string_equal(last, "2,16700,2400,4400\n");
+    assert_string_equal(first, "frame,interval_us,pose_to_swap_us,pose_age_us,swap_us\n");
+    assert_string_equal(last, "2,16700,2400,4400,8250\n");
 }
 
 static void csv_first_frame_and_missing_pose_are_zero(void **state)
@@ -102,14 +102,42 @@ static void csv_first_frame_and_missing_pose_are_zero(void **state)
 
     xrd_timing *t = xrd_timing_open(path);
     assert_non_null(t);
-    xrd_timing_frame(t, MS(1000), MS(1001.5), 0);
+    xrd_timing_frame(t, MS(1000), MS(1001.5), 0, 0);
     xrd_timing_close(t);
 
     char first[256], last[256];
     int n = count_lines(path, first, sizeof first, last, sizeof last);
     unlink(path);
     assert_int_equal(n, 2);
-    assert_string_equal(last, "0,0,1500,0\n");
+    assert_string_equal(last, "0,0,1500,0,0\n");
+}
+
+static void median_pose_to_swap(void **state)
+{
+    (void)state;
+    xrd_timing *t = xrd_timing_open(NULL);
+    assert_int_equal(xrd_timing_median_pose_to_swap_ns(t), 0);
+    xrd_timing_frame(t, MS(1000), MS(1001), 0, 0);  /* 1 ms */
+    xrd_timing_frame(t, MS(1010), MS(1019), 0, 0);  /* 9 ms */
+    xrd_timing_frame(t, MS(1030), MS(1033), 0, 0);  /* 3 ms */
+    assert_true(xrd_timing_median_pose_to_swap_ns(t) == MS(3));
+    xrd_timing_frame(t, MS(1040), MS(1047), 0, 0);  /* 7 ms: even count, upper median */
+    assert_true(xrd_timing_median_pose_to_swap_ns(t) == MS(7));
+    xrd_timing_close(t);
+}
+
+static void median_is_bounded_to_recent_samples(void **state)
+{
+    (void)state;
+    xrd_timing *t = xrd_timing_open(NULL);
+    /* 10 ms for far more frames than the buffer holds, then 2 ms ones fill it */
+    for (unsigned i = 0; i < XRD_TIMING_MEDIAN_SAMPLES + 100; i++)
+        xrd_timing_frame(t, MS(1000), MS(1010), 0, 0);
+    for (unsigned i = 0; i < XRD_TIMING_MEDIAN_SAMPLES; i++)
+        xrd_timing_frame(t, MS(1000), MS(1002), 0, 0);
+    assert_true(xrd_timing_median_pose_to_swap_ns(t) == MS(2));
+    assert_true(xrd_timing_max_pose_to_swap_ns(t) == MS(10)); /* max is over all frames */
+    xrd_timing_close(t);
 }
 
 static void open_unwritable_path_fails(void **state)
@@ -164,6 +192,18 @@ static void pace_zero_period_never_sleeps(void **state)
     assert_true(xrd_pace_sleep_ns(MS(1000), MS(1001), 0) == 0);
 }
 
+static void pace_120hz_with_8_4ms_interval_does_not_sleep(void **state)
+{
+    (void)state;
+    const uint64_t p120 = xrd_refresh_period_ns(120);
+    /* 8.4 ms >= half of 8.33 ms: the swap already waited for vsync */
+    assert_true(xrd_pace_sleep_ns(MS(1000), MS(1008.4), p120) == 0);
+    /* 1 ms: sleep to prev + 8.333 ms, about 7.3 ms */
+    uint64_t s = xrd_pace_sleep_ns(MS(1000), MS(1001), p120);
+    assert_true(s == MS(1000) + p120 - MS(1001));
+    assert_true(s > MS(7.3) - 100000u && s < MS(7.4));
+}
+
 static void refresh_period_from_hz(void **state)
 {
     (void)state;
@@ -182,6 +222,8 @@ int main(void)
         cmocka_unit_test(max_pose_to_swap),
         cmocka_unit_test(csv_has_header_and_one_line_per_frame),
         cmocka_unit_test(csv_first_frame_and_missing_pose_are_zero),
+        cmocka_unit_test(median_pose_to_swap),
+        cmocka_unit_test(median_is_bounded_to_recent_samples),
         cmocka_unit_test(open_unwritable_path_fails),
         cmocka_unit_test(close_null_is_ok),
         cmocka_unit_test(pace_first_frame_never_sleeps),
@@ -189,6 +231,7 @@ int main(void)
         cmocka_unit_test(pace_unpaced_frame_sleeps_to_next_period),
         cmocka_unit_test(pace_clock_going_backwards_sleeps_at_most_a_period),
         cmocka_unit_test(pace_zero_period_never_sleeps),
+        cmocka_unit_test(pace_120hz_with_8_4ms_interval_does_not_sleep),
         cmocka_unit_test(refresh_period_from_hz),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);

@@ -30,13 +30,19 @@ xrd_timing *xrd_timing_open(const char *csv_path);
 /* One call per frame, just before the swap call. All times are
  * CLOCK_MONOTONIC ns: pose_sample_ns when the view was taken from the
  * tracker, pre_swap_ns just before the swap, pose_t_mono_ns the receipt time
- * of the pose used (0 = no pose yet). CSV row:
- * frame,interval_us,pose_to_swap_us,pose_age_us, where interval_us is 0 for
- * the first frame and pose_age_us is 0 without a pose. */
+ * of the pose used (0 = no pose yet), swap_ns the time spent inside the swap
+ * call (plus glFinish with --sync-after-swap). CSV row:
+ * frame,interval_us,pose_to_swap_us,pose_age_us,swap_us, where interval_us is
+ * 0 for the first frame and pose_age_us is 0 without a pose. */
 void xrd_timing_frame(xrd_timing *t, uint64_t pose_sample_ns, uint64_t pre_swap_ns,
-                      uint64_t pose_t_mono_ns);
+                      uint64_t pose_t_mono_ns, uint64_t swap_ns);
 unsigned xrd_timing_missed_vsyncs(const xrd_timing *t);   /* swap-to-swap intervals > 20 ms */
 uint64_t xrd_timing_max_pose_to_swap_ns(const xrd_timing *t);
+/* Median pose-to-swap over the most recent XRD_TIMING_MEDIAN_SAMPLES frames
+ * (the upper median for an even count); 0 before the first frame. The max
+ * above covers every frame. */
+#define XRD_TIMING_MEDIAN_SAMPLES 4096u
+uint64_t xrd_timing_median_pose_to_swap_ns(const xrd_timing *t);
 /* Prints a one-line summary to stderr, closes the CSV and frees. NULL is
  * accepted. */
 void xrd_timing_close(xrd_timing *t);

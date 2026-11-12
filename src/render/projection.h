@@ -3,6 +3,9 @@
 
 #include <stdbool.h>
 
+/* A content FOV at or above this counts as the full 180 degrees. */
+#define XRD_FULL_FOV_DEG 179.999f
+
 typedef enum { XRD_LAYOUT_SBS_LR, XRD_LAYOUT_SBS_RL, XRD_LAYOUT_MONO } xrd_layout;
 
 /* tan of half the horizontal and vertical FOV; zoom > 1 narrows the view.
@@ -18,7 +21,7 @@ bool xrd_dir_to_uv(const float d[3], float uv[2]);
  * centred straight ahead: u = lon / hfov + 0.5, v = lat / vfov + 0.5.
  * Returns false when behind the viewer, degenerate, or when u or v falls
  * outside [0,1] (a 1e-6 tolerance counts the exact edge as inside). An axis
- * whose FOV is 180 (>= 179.999) is never rejected on, only clamped. On
+ * whose FOV is 180 (>= XRD_FULL_FOV_DEG) is never rejected on, only clamped. On
  * success uv is clamped to [0,1]; for 180 x 180 it equals xrd_dir_to_uv.
  * hfov_deg and vfov_deg must be > 0. */
 bool xrd_dir_to_uv_fov(const float d[3], float hfov_deg, float vfov_deg, float uv[2]);

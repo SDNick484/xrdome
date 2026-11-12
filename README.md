@@ -78,7 +78,8 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 `--pose SPEC` (`null`, or `udp-opentrack` with `port`, `yaw`, `pitch`, `roll`), `--output NAME`,
 `--device viture-pro|xreal-air2pro`, `--zoom F`, `--layout sbs-lr|sbs-rl|mono`, `--windowed`,
 `--require-hwdec` (exit 1 unless mpv decodes with VA-API), `--timing-log PATH`,
-`--content-fov HxV`.
+`--content-fov HxV`, `--proj hequirect` (the only projection so far, so optional),
+`--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)).
 
 `--content-fov HxV` says how many degrees of longitude (H) and latitude (V) each eye of the file
 covers, centred straight ahead. The default is `180x180`; each value is 10 to 180. For a
@@ -95,15 +96,54 @@ footage (lens projections other than equirectangular will look distorted). It is
 flag only, not an ini key, because it describes the file and not the glasses.
 
 `--timing-log PATH` writes one CSV row per presented frame:
-`frame,interval_us,pose_to_swap_us,pose_age_us` (swap-to-swap interval, pose sample to swap call,
-age of the pose at the swap; `0` for the first frame or before any pose). The log is line buffered,
+`frame,interval_us,pose_to_swap_us,pose_age_us,swap_us` (swap-to-swap interval, pose sample to swap
+call, age of the pose at the swap, time spent inside the swap call; `0` for the first frame or
+before any pose). The log is line buffered,
 so `tail -f` works. At exit stderr always shows a summary such as
-`timing: 18000 frames, 0 missed vsyncs (swap interval > 20 ms), max pose-to-swap 1.234 ms` and,
+`timing: 18000 frames, 0 missed vsyncs (swap interval > 20 ms), pose-to-swap max 1.234 ms, median 0.812 ms (last 4096 frames)`
+(the max covers every frame; the median is computed from the most recent 4096 frames) and,
 with the UDP backend, `pose: 0 malformed UDP packets dropped`. Targets: 0 missed vsyncs over
 5 minutes and max pose-to-swap under 4 ms.
 
 stderr shows `hwdec: vaapi` when VA-API decoding is active; anything else prints one warning.
 If the glasses' display disconnects during playback, the player pauses and exits with status 0.
+
+### Config file
+
+xrdome reads `$XDG_CONFIG_HOME/xrdome/config.ini`, or `~/.config/xrdome/config.ini` when
+`XDG_CONFIG_HOME` is unset, empty or not an absolute path. A missing file is fine. Precedence, lowest
+to highest: built-in defaults, built-in device values, the ini file, the command line.
+
+`[general]` keys: `pose` (same spec as `--pose`, default `udp-opentrack:port=4242`) and `output`
+(same as `--output`, default `auto`).
+
+`[device.<name>]` keys, read for the device selected with `--device` (default `viture-pro`):
+`fov_diag` (diagonal FOV in degrees, 10 to 120) and `zoom` (0.25 to 4). Built-in devices are
+`viture-pro` (43) and `xreal-air2pro` (45); a section for any other name defines a new device and
+must set `fov_diag`. Sections for other devices are ignored. Lines starting with `#` are comments;
+unknown keys and bad values are errors that name the file and line.
+
+```ini
+[general]
+pose = udp-opentrack:port=4242,yaw=-1
+output = auto
+
+[device.viture-pro]
+fov_diag = 43
+zoom = 1.0
+
+[device.mydevice]
+fov_diag = 50
+```
+
+## Diagnostics
+
+`--sync-after-swap` calls `glFinish()` right after `SDL_GL_SwapWindow`, before the frame is reported
+to the player. On Mesa/X11 the swap can return at once and the driver may block on vsync only at the
+next frame's first draw, which is after the pose sample, so each pose would be about one refresh
+old. It exists to compare `pose_to_swap_us` in the timing log with and without the flag; it is
+not meant for normal playback. `swap_us` in the log is the time spent in the swap call (plus the
+`glFinish` when the flag is on).
 
 ## System setup
 
@@ -177,3 +217,10 @@ Measured 2026-11-11, Viture Pro XR (`35ca:101d`), XRLinuxDriver 2.11.9, Gentoo/O
 - Rotation relative to a reference pose, `conj(q_ref) * q`, has standard NWU body axes:
   head left is positive about up, looking up is negative about left, right ear down is positive about forward.
 - Yaw drift over time: not measured yet.
+
+Hardware-check notes for tracking:
+
+- Look at `pose_to_swap_us` per frame, not only the max. If it often sits near 8-16 ms while
+  `interval_us` is about 16.7 ms, re-run with `--sync-after-swap` and compare.
+- Time how long the player takes to exit after the glasses are unplugged.
+- Use a file the machine can decode at full rate.

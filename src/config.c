@@ -265,7 +265,7 @@ int xrd_config_load_ini(xrd_config *c, const char *path, char *err, size_t errle
 int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_t errlen)
 {
     enum { OPT_PROJ = 256, OPT_LAYOUT, OPT_POSE, OPT_OUTPUT, OPT_DEVICE, OPT_ZOOM,
-           OPT_CONTENT_FOV, OPT_HWDEC, OPT_WINDOWED, OPT_TIMING, OPT_FRAMES, OPT_DUMP };
+           OPT_CONTENT_FOV, OPT_HWDEC, OPT_WINDOWED, OPT_TIMING, OPT_SYNC, OPT_FRAMES, OPT_DUMP };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
         {"layout", required_argument, NULL, OPT_LAYOUT},
@@ -277,6 +277,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"require-hwdec", no_argument, NULL, OPT_HWDEC},
         {"windowed", no_argument, NULL, OPT_WINDOWED},
         {"timing-log", required_argument, NULL, OPT_TIMING},
+        {"sync-after-swap", no_argument, NULL, OPT_SYNC},
         {"frames", required_argument, NULL, OPT_FRAMES},
         {"dump-frame", required_argument, NULL, OPT_DUMP},
         {NULL, 0, NULL, 0},
@@ -322,6 +323,9 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
             break;
         case OPT_TIMING:
             rc = set_string("--timing-log", c->timing_log, sizeof c->timing_log, optarg, err, errlen);
+            break;
+        case OPT_SYNC:
+            c->sync_after_swap = true;
             break;
         case OPT_FRAMES: {
             char *end;
