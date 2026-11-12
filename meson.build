@@ -9,11 +9,13 @@ cmocka_dep = dependency('cmocka')
 # Core sources: append one line per task.
 core_sources = files(
   'src/math/quat.c',
+  'src/render/projection.c',
 )
 
 # Test names: each entry NAME builds tests/test_NAME.c into test_NAME.
 test_names = [
   'quat',
+  'projection',
 ]
 
 inc = include_directories('src')
