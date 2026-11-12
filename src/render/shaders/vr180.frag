@@ -3,6 +3,7 @@ uniform sampler2D u_video;
 uniform mat3  u_rot;        // from q_view
 uniform vec2  u_tan_half;   // tan(hfov/2), tan(vfov/2)
 uniform vec2  u_inv_fov;    // 1/hfov, 1/vfov of the video content, in 1/radians
+uniform vec2  u_reject;     // 1.0 on an axis whose content FOV is < 180: reject outside; 0.0: only clamp
 uniform float u_u_scale;    // eye sub-image u transform: u_tex = u * scale + offset
 uniform float u_u_offset;
 in  vec2 v_ndc;             // -1..1 within this eye's viewport
@@ -16,9 +17,11 @@ void main()
     float lon = (d.x == 0.0 && d.z == 0.0) ? 0.0 : atan(d.x, -d.z);
     float lat = asin(clamp(d.y, -1.0, 1.0));
     vec2 uv = vec2(lon, lat) * u_inv_fov + 0.5;
-    // Outside the content: black. The tolerance keeps the exact edge inside
-    // (and every direction inside for 180 x 180, as before); mirrors xrd_dir_to_uv_fov.
-    if (any(lessThan(uv, vec2(-1e-6))) || any(greaterThan(uv, vec2(1.0 + 1e-6)))) {
+    // Outside the content: black, on axes that cover less than 180 degrees. The
+    // tolerance keeps the exact edge inside; a 180 axis only clamps, so driver
+    // atan/asin error cannot blacken pixels. Mirrors xrd_dir_to_uv_fov.
+    if (any(bvec2(u_reject.x > 0.5 && (uv.x < -1e-6 || uv.x > 1.0 + 1e-6),
+                  u_reject.y > 0.5 && (uv.y < -1e-6 || uv.y > 1.0 + 1e-6)))) {
         o_color = vec4(0.0, 0.0, 0.0, 1.0);
         return;
     }

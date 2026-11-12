@@ -346,6 +346,17 @@ static void fov90_edge_splits_the_view(void **state)
     }
 }
 
+static void fov180x90_rejects_only_vertically(void **state)
+{
+    (void)state;
+    draw_fov(g_tex, 180.f, 90.f, xrd_quat_from_ypr_deg(-80, 0, 0));
+    expect_px(96, 54, 255, 0, 0);
+    expect_px(288, 54, 0, 0, 255);
+    draw_fov(g_tex, 180.f, 90.f, xrd_quat_from_ypr_deg(0, 50, 0));
+    expect_px(96, 54, 0, 0, 0);
+    expect_px(288, 54, 0, 0, 0);
+}
+
 static void no_gl_error(void **state)
 {
     (void)state;
@@ -377,6 +388,7 @@ int main(void)
         cmocka_unit_test(fov90_inside_yaw_is_not_black),
         cmocka_unit_test(fov90_pitch_outside_is_black),
         cmocka_unit_test(fov90_edge_splits_the_view),
+        cmocka_unit_test(fov180x90_rejects_only_vertically),
         cmocka_unit_test(no_gl_error),
     };
     return cmocka_run_group_tests(tests, setup, teardown);

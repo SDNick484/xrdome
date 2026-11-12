@@ -3,6 +3,7 @@
 #include <math.h>
 
 #define XRD_PI 3.14159265358979323846
+#define XRD_FULL_FOV_DEG 179.999f
 
 void xrd_fov_tan_half(float diag_deg, float aspect, float zoom, float *tan_h, float *tan_v)
 {
@@ -33,8 +34,11 @@ bool xrd_dir_to_uv_fov(const float d[3], float hfov_deg, float vfov_deg, float u
 
     double u = lon / ((double)hfov_deg * XRD_PI / 180.0) + 0.5;
     double v = lat / ((double)vfov_deg * XRD_PI / 180.0) + 0.5;
+    /* An axis covering 180 degrees never rejects (only clamps): every front
+     * direction is inside it, and GPU atan/asin error must not blacken pixels. */
     const double eps = 1e-6;
-    if (u < -eps || u > 1.0 + eps || v < -eps || v > 1.0 + eps)
+    const bool rej_u = hfov_deg < XRD_FULL_FOV_DEG, rej_v = vfov_deg < XRD_FULL_FOV_DEG;
+    if ((rej_u && (u < -eps || u > 1.0 + eps)) || (rej_v && (v < -eps || v > 1.0 + eps)))
         return false;
     uv[0] = (float)(u < 0.0 ? 0.0 : (u > 1.0 ? 1.0 : u));
     uv[1] = (float)(v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v));

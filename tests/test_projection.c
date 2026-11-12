@@ -261,6 +261,34 @@ static void fov_partial_never_returns_out_of_range(void **state)
         }
 }
 
+/* On an axis covering 180 degrees nothing is rejected, only clamped. A front
+ * direction (z <= 0) has |lon| <= 90 degrees by construction, so "nudged past
+ * 90 by 1e-4 rad" cannot be built from a valid input; the closest we can do is
+ * z just below zero, which must stay inside. */
+static void fov_180_axis_never_rejects(void **state)
+{
+    (void)state;
+    float uv[2];
+    const float edge[3] = {1.f, 0.f, 0.f};
+    const float near_edge[3] = {1.f, 0.f, -1e-9f};
+    assert_true(xrd_dir_to_uv_fov(edge, 180.f, 90.f, uv));
+    assert_float_equal(uv[0], 1.0f, 0.f);
+    assert_true(xrd_dir_to_uv_fov(near_edge, 180.f, 90.f, uv));
+    assert_float_equal(uv[0], 1.0f, 1e-6);
+    assert_true(xrd_dir_to_uv_fov(near_edge, 180.f, 180.f, uv));
+    float d[3];
+    dir_at(0.f, 46.f, d);
+    assert_false(xrd_dir_to_uv_fov(d, 180.f, 90.f, uv));
+    dir_at(0.f, 45.f, d);
+    assert_true(xrd_dir_to_uv_fov(d, 180.f, 90.f, uv));
+    /* and the mirror: 90 x 180 rejects in longitude only */
+    dir_at(46.f, 0.f, d);
+    assert_false(xrd_dir_to_uv_fov(d, 90.f, 180.f, uv));
+    const float up[3] = {0.f, 1.f, 0.f};
+    assert_true(xrd_dir_to_uv_fov(up, 90.f, 180.f, uv));
+    assert_float_equal(uv[1], 1.0f, 0.f);
+}
+
 static void check_eye(xrd_layout l, int eye, bool swap, float es, float eo)
 {
     float s = -1.f, o = -1.f;
@@ -324,6 +352,7 @@ int main(void)
         cmocka_unit_test(fov_180_agrees_with_plain),
         cmocka_unit_test(fov_180_still_clamps_not_rejects),
         cmocka_unit_test(fov_partial_never_returns_out_of_range),
+        cmocka_unit_test(fov_180_axis_never_rejects),
         cmocka_unit_test(eye_sbs_lr),
         cmocka_unit_test(eye_sbs_rl),
         cmocka_unit_test(eye_swap),
