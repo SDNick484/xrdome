@@ -12,6 +12,11 @@ typedef struct xrd_renderer xrd_renderer;
 xrd_renderer *xrd_renderer_new(char *err, size_t errlen);
 void xrd_renderer_free(xrd_renderer *r);
 
+/* The video covers hfov_deg x vfov_deg degrees, centred straight ahead (see
+ * xrd_dir_to_uv_fov); directions outside draw black. Default 180 x 180. Both
+ * must be in (0, 180]. Takes effect on the next xrd_renderer_draw. */
+void xrd_renderer_set_content_fov(xrd_renderer *r, float hfov_deg, float vfov_deg);
+
 /* Draws both eyes into the currently bound framebuffer: left eye in the left half.
  * rot is column-major (xrd_quat_to_mat3).
  *

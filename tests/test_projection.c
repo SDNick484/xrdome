@@ -3,6 +3,7 @@
 #include <setjmp.h>
 #include <stdbool.h>
 #include <math.h>
+#include <stdlib.h>
 #include <cmocka.h>
 
 #include "render/projection.h"
@@ -136,6 +137,130 @@ static void uv_clamped_in_range(void **state)
     }
 }
 
+static const float DEG = 3.14159265358979f / 180.f;
+
+/* Direction at longitude lon, latitude lat (degrees), GL axes. */
+static void dir_at(float lon_deg, float lat_deg, float d[3])
+{
+    float lon = lon_deg * DEG, lat = lat_deg * DEG;
+    d[0] = cosf(lat) * sinf(lon);
+    d[1] = sinf(lat);
+    d[2] = -cosf(lat) * cosf(lon);
+}
+
+static void fov_forward_is_centre(void **state)
+{
+    (void)state;
+    const float d[3] = {0.f, 0.f, -1.f};
+    float uv[2];
+    assert_true(xrd_dir_to_uv_fov(d, 120.f, 90.f, uv));
+    assert_float_equal(uv[0], 0.5f, TOL);
+    assert_float_equal(uv[1], 0.5f, TOL);
+}
+
+static void fov_horizontal_edge(void **state)
+{
+    (void)state;
+    float d[3], uv[2];
+    dir_at(60.f, 0.f, d);
+    assert_true(xrd_dir_to_uv_fov(d, 120.f, 90.f, uv));
+    assert_float_equal(uv[0], 1.0f, TOL);
+    assert_float_equal(uv[1], 0.5f, TOL);
+    dir_at(-60.f, 0.f, d);
+    assert_true(xrd_dir_to_uv_fov(d, 120.f, 90.f, uv));
+    assert_float_equal(uv[0], 0.0f, TOL);
+    dir_at(61.f, 0.f, d);
+    assert_false(xrd_dir_to_uv_fov(d, 120.f, 90.f, uv));
+    dir_at(-61.f, 0.f, d);
+    assert_false(xrd_dir_to_uv_fov(d, 120.f, 90.f, uv));
+}
+
+static void fov_vertical_edge(void **state)
+{
+    (void)state;
+    float d[3], uv[2];
+    dir_at(0.f, 45.f, d);
+    assert_true(xrd_dir_to_uv_fov(d, 120.f, 90.f, uv));
+    assert_float_equal(uv[0], 0.5f, TOL);
+    assert_float_equal(uv[1], 1.0f, TOL);
+    dir_at(0.f, -45.f, d);
+    assert_true(xrd_dir_to_uv_fov(d, 120.f, 90.f, uv));
+    assert_float_equal(uv[1], 0.0f, TOL);
+    dir_at(0.f, 46.f, d);
+    assert_false(xrd_dir_to_uv_fov(d, 120.f, 90.f, uv));
+    dir_at(0.f, -46.f, d);
+    assert_false(xrd_dir_to_uv_fov(d, 120.f, 90.f, uv));
+}
+
+static void fov_partial_scales_uv(void **state)
+{
+    (void)state;
+    float d[3], uv[2];
+    dir_at(30.f, 15.f, d);
+    assert_true(xrd_dir_to_uv_fov(d, 120.f, 90.f, uv));
+    assert_float_equal(uv[0], 30.f / 120.f + 0.5f, TOL);
+    assert_float_equal(uv[1], 15.f / 90.f + 0.5f, TOL);
+}
+
+static void fov_behind_and_degenerate(void **state)
+{
+    (void)state;
+    const float behind[3] = {0.f, 0.f, 1.f};
+    const float zero[3] = {0.f, 0.f, 0.f};
+    float uv[2];
+    assert_false(xrd_dir_to_uv_fov(behind, 120.f, 90.f, uv));
+    assert_false(xrd_dir_to_uv_fov(behind, 180.f, 180.f, uv));
+    assert_false(xrd_dir_to_uv_fov(zero, 120.f, 90.f, uv));
+}
+
+static void fov_180_agrees_with_plain(void **state)
+{
+    (void)state;
+    const float dirs[][3] = {{0.f, 0.f, -1.f}, {1.f, 0.f, 0.f}, {-1.f, 0.f, 0.f},
+                             {0.f, 1.f, 0.f}, {0.f, -1.f, 0.f}, {0.3f, 0.2f, -1.f},
+                             {-2.f, 1.f, -0.5f}, {1.f, 1.f, -1e-9f}, {0.f, 0.f, 1.f},
+                             {1.f, 0.f, 0.001f}};
+    for (size_t i = 0; i < sizeof dirs / sizeof dirs[0]; i++) {
+        float a[2] = {-1.f, -1.f}, b[2] = {-1.f, -1.f};
+        bool ra = xrd_dir_to_uv(dirs[i], a);
+        bool rb = xrd_dir_to_uv_fov(dirs[i], 180.f, 180.f, b);
+        assert_true(ra == rb);
+        if (ra) {
+            assert_float_equal(a[0], b[0], 1e-6);
+            assert_float_equal(a[1], b[1], 1e-6);
+        }
+    }
+}
+
+static void fov_180_still_clamps_not_rejects(void **state)
+{
+    (void)state;
+    const float d[3] = {1.f, 0.f, 0.f};
+    float uv[2];
+    assert_true(xrd_dir_to_uv_fov(d, 180.f, 180.f, uv));
+    assert_float_equal(uv[0], 1.0f, 0.f);
+    const float up[3] = {0.f, 1.f, 0.f};
+    assert_true(xrd_dir_to_uv_fov(up, 180.f, 180.f, uv));
+    assert_float_equal(uv[1], 1.0f, 0.f);
+}
+
+static void fov_partial_never_returns_out_of_range(void **state)
+{
+    (void)state;
+    for (int lon = -90; lon <= 90; lon += 5)
+        for (int lat = -90; lat <= 90; lat += 5) {
+            float d[3], uv[2];
+            dir_at((float)lon, (float)lat, d);
+            if (xrd_dir_to_uv_fov(d, 100.f, 60.f, uv)) {
+                assert_true(uv[0] >= 0.f && uv[0] <= 1.f);
+                assert_true(uv[1] >= 0.f && uv[1] <= 1.f);
+                assert_true(abs(lon) <= 50 && abs(lat) <= 30);
+            } else {
+                assert_true(abs(lon) > 50 || abs(lat) > 30);
+            }
+        }
+}
+
 static void check_eye(xrd_layout l, int eye, bool swap, float es, float eo)
 {
     float s = -1.f, o = -1.f;
@@ -191,6 +316,14 @@ int main(void)
         cmocka_unit_test(uv_unnormalised_input),
         cmocka_unit_test(uv_degenerate_rejected),
         cmocka_unit_test(uv_clamped_in_range),
+        cmocka_unit_test(fov_forward_is_centre),
+        cmocka_unit_test(fov_horizontal_edge),
+        cmocka_unit_test(fov_vertical_edge),
+        cmocka_unit_test(fov_partial_scales_uv),
+        cmocka_unit_test(fov_behind_and_degenerate),
+        cmocka_unit_test(fov_180_agrees_with_plain),
+        cmocka_unit_test(fov_180_still_clamps_not_rejects),
+        cmocka_unit_test(fov_partial_never_returns_out_of_range),
         cmocka_unit_test(eye_sbs_lr),
         cmocka_unit_test(eye_sbs_rl),
         cmocka_unit_test(eye_swap),

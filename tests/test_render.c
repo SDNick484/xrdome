@@ -131,7 +131,8 @@ static int teardown(void **state)
 
 static uint8_t g_img[W * H * 4];
 
-static void draw_tex(GLuint tex, xrd_quat q, xrd_layout layout, bool swap, bool hostile)
+/* Draws with whatever content FOV the renderer currently has. */
+static void draw_tex_fov(GLuint tex, xrd_quat q, xrd_layout layout, bool swap, bool hostile)
 {
     float rot[9];
     xrd_quat_to_mat3(q, rot);
@@ -158,6 +159,13 @@ static void draw_tex(GLuint tex, xrd_quat q, xrd_layout layout, bool swap, bool 
     }
     glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, g_img);
     assert_int_equal(glGetError(), GL_NO_ERROR);
+}
+
+/* Existing tests: the default (180 x 180) content FOV. */
+static void draw_tex(GLuint tex, xrd_quat q, xrd_layout layout, bool swap, bool hostile)
+{
+    xrd_renderer_set_content_fov(g_r, 180.f, 180.f);
+    draw_tex_fov(tex, q, layout, swap, hostile);
 }
 
 static void draw(xrd_quat q, xrd_layout layout, bool swap)
@@ -277,6 +285,67 @@ static void pitch_down_samples_bottom(void **state)
     expect_quadrant(W / 2 - 5, H / 2, 1, 0);
 }
 
+static void draw_fov(GLuint tex, float hfov, float vfov, xrd_quat q)
+{
+    xrd_renderer_set_content_fov(g_r, hfov, vfov);
+    draw_tex_fov(tex, q, XRD_LAYOUT_SBS_LR, false, false);
+    xrd_renderer_set_content_fov(g_r, 180.f, 180.f);
+}
+
+static void fov90_identity_still_red_blue(void **state)
+{
+    (void)state;
+    draw_fov(g_tex, 90.f, 90.f, XRD_QUAT_IDENTITY);
+    expect_px(96, 54, 255, 0, 0);
+    expect_px(288, 54, 0, 0, 255);
+}
+
+static void fov90_outside_yaw_is_black(void **state)
+{
+    (void)state;
+    /* looking 50 degrees right: the centre is past the content edge at 45 */
+    draw_fov(g_tex, 90.f, 90.f, xrd_quat_from_ypr_deg(-50, 0, 0));
+    expect_px(96, 54, 0, 0, 0);
+    expect_px(288, 54, 0, 0, 0);
+    draw_fov(g_tex, 90.f, 90.f, xrd_quat_from_ypr_deg(50, 0, 0));
+    expect_px(96, 54, 0, 0, 0);
+    expect_px(288, 54, 0, 0, 0);
+}
+
+static void fov90_inside_yaw_is_not_black(void **state)
+{
+    (void)state;
+    draw_fov(g_quad_tex, 90.f, 90.f, xrd_quat_from_ypr_deg(-40, 0, 0));
+    /* looking right of centre: right half of each eye image, still lit */
+    expect_quadrant(W / 4, H - 1, 1, 1);
+    expect_quadrant(W / 4, 0, 1, 0);
+}
+
+static void fov90_pitch_outside_is_black(void **state)
+{
+    (void)state;
+    draw_fov(g_quad_tex, 90.f, 90.f, xrd_quat_from_ypr_deg(0, 50, 0));
+    expect_px(96, 54, 0, 0, 0);
+    expect_px(288, 54, 0, 0, 0);
+    draw_fov(g_quad_tex, 90.f, 90.f, xrd_quat_from_ypr_deg(0, -50, 0));
+    expect_px(96, 54, 0, 0, 0);
+    expect_px(288, 54, 0, 0, 0);
+}
+
+static void fov90_edge_splits_the_view(void **state)
+{
+    (void)state;
+    /* Looking 40 degrees right: the view spans about 21 to 59 degrees, the
+     * content ends at 45, so the left of each eye is lit and the right is black. */
+    draw_fov(g_tex, 90.f, 90.f, xrd_quat_from_ypr_deg(-40, 0, 0));
+    for (int eye = 0; eye < 2; eye++) {
+        const uint8_t *lit = &g_img[(54 * W + eye * (W / 2) + 4) * 4];
+        const uint8_t *dark = &g_img[(54 * W + eye * (W / 2) + W / 2 - 5) * 4];
+        assert_true(lit[0] + lit[2] > 200);
+        assert_int_equal(dark[0] + dark[1] + dark[2], 0);
+    }
+}
+
 static void no_gl_error(void **state)
 {
     (void)state;
@@ -303,6 +372,11 @@ int main(void)
         cmocka_unit_test(yaw_right_samples_right),
         cmocka_unit_test(pitch_up_samples_top),
         cmocka_unit_test(pitch_down_samples_bottom),
+        cmocka_unit_test(fov90_identity_still_red_blue),
+        cmocka_unit_test(fov90_outside_yaw_is_black),
+        cmocka_unit_test(fov90_inside_yaw_is_not_black),
+        cmocka_unit_test(fov90_pitch_outside_is_black),
+        cmocka_unit_test(fov90_edge_splits_the_view),
         cmocka_unit_test(no_gl_error),
     };
     return cmocka_run_group_tests(tests, setup, teardown);

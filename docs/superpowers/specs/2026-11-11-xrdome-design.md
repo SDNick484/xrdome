@@ -308,3 +308,7 @@ The detailed plan is `docs/superpowers/plans/2026-11-11-xrdome.md`. Order, cheap
 - https://xrlinuxdriver.readthedocs.io/en/latest/opentrack-app/
 - https://gitlab.freedesktop.org/monado/webpage/-/blob/master/index.md
 - https://monado.pages.freedesktop.org/monado/group__drv__xreal__air.html
+
+## Addendum 2026-11-11: content FOV
+
+`--content-fov HxV` (degrees, each 10 to 180, default `180x180`, command line only) states that the video covers H degrees of longitude and V degrees of latitude per eye, centred straight ahead. A view direction with longitude `lon` and latitude `lat` samples `u = lon / H + 0.5`, `v = lat / V + 0.5` (angles in radians); directions with u or v outside [0,1], and directions behind the viewer, render black, and the half-texel seam clamp still applies inside the content. At `180x180` every non-behind direction is inside, so output is unchanged. The aspect warning compares the per-eye aspect (`(w/2)/h` for side-by-side, `w/h` for mono) with `H/V` and allows 5 percent.

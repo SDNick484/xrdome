@@ -16,6 +16,8 @@
 #define FOV_MAX 120.f
 #define ZOOM_MIN 0.25f
 #define ZOOM_MAX 4.f
+#define CONTENT_FOV_MIN 10.f
+#define CONTENT_FOV_MAX 180.f
 
 static const struct { const char *name; float fov_diag; } builtin_devices[] = {
     {"viture-pro", 43.0f},
@@ -98,6 +100,37 @@ static int parse_layout(const char *s, xrd_layout *out, char *err, size_t errlen
     return 0;
 }
 
+/* "HxV" in degrees, each within CONTENT_FOV_MIN..CONTENT_FOV_MAX. Leaves *h
+ * and *v untouched on error. */
+static int parse_content_fov(const char *s, float *h, float *v, char *err, size_t errlen)
+{
+    const char *x = strchr(s, 'x');
+    char hs[32];
+    float hv, vv;
+    bool ok = x && x > s && (size_t)(x - s) < sizeof hs;
+    if (ok) {
+        memcpy(hs, s, (size_t)(x - s));
+        hs[x - s] = '\0';
+        /* strtof would also take leading blanks, signs and hex floats. */
+        ok = (isdigit((unsigned char)hs[0]) || hs[0] == '.') &&
+             (isdigit((unsigned char)x[1]) || x[1] == '.') &&
+             parse_float(hs, &hv) && parse_float(x + 1, &vv);
+    }
+    if (!ok) {
+        set_err(err, errlen, "--content-fov: '%s' is not HxV in degrees (e.g. 120x90)", s);
+        return -1;
+    }
+    if (hv < CONTENT_FOV_MIN || hv > CONTENT_FOV_MAX || vv < CONTENT_FOV_MIN ||
+        vv > CONTENT_FOV_MAX) {
+        set_err(err, errlen, "--content-fov: %s is out of range (each value %g to %g degrees)",
+                s, (double)CONTENT_FOV_MIN, (double)CONTENT_FOV_MAX);
+        return -1;
+    }
+    *h = hv;
+    *v = vv;
+    return 0;
+}
+
 void xrd_config_defaults(xrd_config *c)
 {
     memset(c, 0, sizeof *c);
@@ -107,6 +140,8 @@ void xrd_config_defaults(xrd_config *c)
     c->fov_diag = 43.0f;
     c->zoom = 1.0f;
     c->layout = XRD_LAYOUT_SBS_LR;
+    c->content_hfov = 180.0f;
+    c->content_vfov = 180.0f;
 }
 
 int xrd_config_default_path(char *buf, size_t len)
@@ -230,7 +265,7 @@ int xrd_config_load_ini(xrd_config *c, const char *path, char *err, size_t errle
 int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_t errlen)
 {
     enum { OPT_PROJ = 256, OPT_LAYOUT, OPT_POSE, OPT_OUTPUT, OPT_DEVICE, OPT_ZOOM,
-           OPT_HWDEC, OPT_WINDOWED, OPT_TIMING, OPT_FRAMES, OPT_DUMP };
+           OPT_CONTENT_FOV, OPT_HWDEC, OPT_WINDOWED, OPT_TIMING, OPT_FRAMES, OPT_DUMP };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
         {"layout", required_argument, NULL, OPT_LAYOUT},
@@ -238,6 +273,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"output", required_argument, NULL, OPT_OUTPUT},
         {"device", required_argument, NULL, OPT_DEVICE},
         {"zoom", required_argument, NULL, OPT_ZOOM},
+        {"content-fov", required_argument, NULL, OPT_CONTENT_FOV},
         {"require-hwdec", no_argument, NULL, OPT_HWDEC},
         {"windowed", no_argument, NULL, OPT_WINDOWED},
         {"timing-log", required_argument, NULL, OPT_TIMING},
@@ -274,6 +310,9 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
             break;
         case OPT_ZOOM:
             rc = parse_ranged("--zoom", optarg, ZOOM_MIN, ZOOM_MAX, &c->zoom, err, errlen);
+            break;
+        case OPT_CONTENT_FOV:
+            rc = parse_content_fov(optarg, &c->content_hfov, &c->content_vfov, err, errlen);
             break;
         case OPT_HWDEC:
             c->require_hwdec = true;

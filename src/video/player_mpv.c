@@ -17,6 +17,8 @@ struct xrd_player {
     bool have_frame;   /* a frame has been rendered into the FBO */
     bool finished;
     bool warned_aspect;
+    xrd_layout layout; /* what the aspect warning expects; see xrd_player_set_content */
+    float hfov_deg, vfov_deg;
     char hwdec[64];
     char err[512];
 };
@@ -48,6 +50,16 @@ bool xrd_video_size_fits(int w, int h, int gl_max, char *err, size_t errlen)
     return true;
 }
 
+bool xrd_video_aspect_matches(int w, int h, xrd_layout layout, float hfov_deg, float vfov_deg)
+{
+    if (w <= 0 || h <= 0 || !(hfov_deg > 0.f) || !(vfov_deg > 0.f))
+        return false;
+    double have = (layout == XRD_LAYOUT_MONO ? (double)w : w / 2.0) / h;
+    double want = (double)hfov_deg / vfov_deg;
+    double rel = have / want - 1.0;
+    return rel >= -0.05 && rel <= 0.05;
+}
+
 bool xrd_video_is_sbs_2to1(int w, int h)
 {
     return w > 0 && h > 0 && w == 2 * h;
@@ -72,6 +84,9 @@ xrd_player *xrd_player_open(const char *file, xrd_gl_get_proc get_proc, void *x1
         return NULL;
     }
     snprintf(p->file, sizeof p->file, "%s", file);
+    p->layout = XRD_LAYOUT_SBS_LR;
+    p->hfov_deg = 180.f;
+    p->vfov_deg = 180.f;
 
     p->mpv = mpv_create();
     if (!p->mpv) {
@@ -126,6 +141,13 @@ fail:
     return NULL;
 }
 
+void xrd_player_set_content(xrd_player *p, xrd_layout layout, float hfov_deg, float vfov_deg)
+{
+    p->layout = layout;
+    p->hfov_deg = hfov_deg;
+    p->vfov_deg = vfov_deg;
+}
+
 void xrd_player_free(xrd_player *p)
 {
     if (!p)
@@ -152,9 +174,12 @@ static int ensure_fbo(xrd_player *p, int w, int h)
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max);
     if (!xrd_video_size_fits(w, h, max, p->err, sizeof p->err))
         return -1;
-    if (!xrd_video_is_sbs_2to1(w, h) && !p->warned_aspect) {
-        fprintf(stderr, "xrdome: warning: video is %dx%d, not 2:1 side-by-side; "
-                        "playing it as side-by-side anyway\n", w, h);
+    if (!xrd_video_aspect_matches(w, h, p->layout, p->hfov_deg, p->vfov_deg) &&
+        !p->warned_aspect) {
+        fprintf(stderr, "xrdome: warning: video is %dx%d, which is not the aspect of a %s video "
+                        "covering %gx%g degrees (--content-fov); playing it that way anyway\n",
+                w, h, p->layout == XRD_LAYOUT_MONO ? "mono" : "side-by-side",
+                (double)p->hfov_deg, (double)p->vfov_deg);
         p->warned_aspect = true;
     }
 

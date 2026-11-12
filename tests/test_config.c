@@ -51,6 +51,8 @@ static void defaults_match_spec(void **state)
     assert_float_equal(c.fov_diag, 43.0f, TOL);
     assert_float_equal(c.zoom, 1.0f, TOL);
     assert_int_equal(c.layout, XRD_LAYOUT_SBS_LR);
+    assert_float_equal(c.content_hfov, 180.0f, TOL);
+    assert_float_equal(c.content_vfov, 180.0f, TOL);
     assert_false(c.require_hwdec);
     assert_false(c.windowed);
     assert_string_equal(c.timing_log, "");
@@ -323,6 +325,55 @@ static void args_bad_values_and_unknown_option(void **state)
     assert_non_null(strstr(err, "pose"));
 }
 
+static void args_content_fov(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    xrd_config c;
+    xrd_config_defaults(&c);
+
+    char *ok[] = {"xrdome", "--content-fov", "120x90", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, ok, err, sizeof err), 0);
+    assert_float_equal(c.content_hfov, 120.0f, TOL);
+    assert_float_equal(c.content_vfov, 90.0f, TOL);
+
+    char *edge[] = {"xrdome", "--content-fov", "10x180", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, edge, err, sizeof err), 0);
+    assert_float_equal(c.content_hfov, 10.0f, TOL);
+    assert_float_equal(c.content_vfov, 180.0f, TOL);
+}
+
+static void args_content_fov_bad_values(void **state)
+{
+    (void)state;
+    const char *bad[] = {"120", "0x90", "200x90", "axb", "120x", "x90", "120x90x1", "9.9x90",
+                         "120x180.1", "120 x90", ""};
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        char err[256] = "";
+        xrd_config c;
+        xrd_config_defaults(&c);
+        char *a[] = {"xrdome", "--content-fov", (char *)bad[i], "a.mp4", NULL};
+        assert_int_equal(xrd_config_parse_args(&c, 4, a, err, sizeof err), -1);
+        assert_non_null(strstr(err, "content-fov"));
+        assert_non_null(strstr(err, bad[i]));
+        /* a failed parse leaves the previous value alone */
+        assert_float_equal(c.content_hfov, 180.0f, TOL);
+        assert_float_equal(c.content_vfov, 180.0f, TOL);
+    }
+}
+
+static void ini_content_fov_is_not_a_key(void **state)
+{
+    (void)state;
+    char path[64], err[256] = "";
+    write_tmp(path, "[device.viture-pro]\ncontent_fov = 120x90\n");
+    xrd_config c;
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), -1);
+    assert_non_null(strstr(err, "content_fov"));
+    unlink(path);
+}
+
 static void load_unknown_device_names_it(void **state)
 {
     (void)state;
@@ -565,6 +616,9 @@ int main(void)
         cmocka_unit_test(args_path_with_spaces),
         cmocka_unit_test(args_flags_and_repeat_calls),
         cmocka_unit_test(args_bad_values_and_unknown_option),
+        cmocka_unit_test(args_content_fov),
+        cmocka_unit_test(args_content_fov_bad_values),
+        cmocka_unit_test(ini_content_fov_is_not_a_key),
         cmocka_unit_test(load_unknown_device_names_it),
         cmocka_unit_test(load_ini_defined_device_ok),
         cmocka_unit_test(load_ini_device_without_fov_is_error),

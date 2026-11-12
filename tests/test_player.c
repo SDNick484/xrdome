@@ -5,6 +5,7 @@
 #include <string.h>
 #include <cmocka.h>
 
+#include "render/projection.h"
 #include "video/player_mpv.h"
 
 static void size_fits_within_limit(void **state)
@@ -40,6 +41,45 @@ static void size_fits_rejects_non_positive(void **state)
     assert_false(xrd_video_size_fits(20000, 10000, 16384, NULL, 0));
 }
 
+static void aspect_sbs_fov(void **state)
+{
+    (void)state;
+    /* per-eye aspect must be H/V */
+    assert_true(xrd_video_aspect_matches(7680, 2880, XRD_LAYOUT_SBS_LR, 120.f, 90.f));
+    assert_false(xrd_video_aspect_matches(7680, 2880, XRD_LAYOUT_SBS_LR, 180.f, 180.f));
+    assert_true(xrd_video_aspect_matches(4096, 2048, XRD_LAYOUT_SBS_LR, 180.f, 180.f));
+    assert_true(xrd_video_aspect_matches(4096, 2048, XRD_LAYOUT_SBS_RL, 180.f, 180.f));
+    assert_false(xrd_video_aspect_matches(4096, 2048, XRD_LAYOUT_SBS_LR, 120.f, 90.f));
+    assert_true(xrd_video_aspect_matches(4096, 2048, XRD_LAYOUT_SBS_LR, 90.f, 90.f));
+    assert_false(xrd_video_aspect_matches(1920, 1080, XRD_LAYOUT_SBS_LR, 180.f, 180.f));
+}
+
+static void aspect_tolerance_is_five_percent(void **state)
+{
+    (void)state;
+    /* per-eye 1.00 expected; 1.04 passes, 1.06 does not */
+    assert_true(xrd_video_aspect_matches(2 * 1040, 1000, XRD_LAYOUT_SBS_LR, 180.f, 180.f));
+    assert_false(xrd_video_aspect_matches(2 * 1060, 1000, XRD_LAYOUT_SBS_LR, 180.f, 180.f));
+    assert_true(xrd_video_aspect_matches(2 * 960, 1000, XRD_LAYOUT_SBS_LR, 180.f, 180.f));
+    assert_false(xrd_video_aspect_matches(2 * 940, 1000, XRD_LAYOUT_SBS_LR, 180.f, 180.f));
+}
+
+static void aspect_mono_compares_whole_frame(void **state)
+{
+    (void)state;
+    assert_true(xrd_video_aspect_matches(3840, 1920, XRD_LAYOUT_MONO, 180.f, 90.f));
+    assert_false(xrd_video_aspect_matches(3840, 1920, XRD_LAYOUT_MONO, 180.f, 180.f));
+    assert_true(xrd_video_aspect_matches(2048, 2048, XRD_LAYOUT_MONO, 180.f, 180.f));
+    assert_true(xrd_video_aspect_matches(1920, 1080, XRD_LAYOUT_MONO, 160.f, 90.f));
+}
+
+static void aspect_rejects_bad_sizes(void **state)
+{
+    (void)state;
+    assert_false(xrd_video_aspect_matches(0, 0, XRD_LAYOUT_SBS_LR, 180.f, 180.f));
+    assert_false(xrd_video_aspect_matches(4096, 0, XRD_LAYOUT_MONO, 180.f, 180.f));
+}
+
 static void sbs_2to1(void **state)
 {
     (void)state;
@@ -56,6 +96,10 @@ int main(void)
         cmocka_unit_test(size_fits_within_limit),
         cmocka_unit_test(size_fits_too_large_names_both),
         cmocka_unit_test(size_fits_rejects_non_positive),
+        cmocka_unit_test(aspect_sbs_fov),
+        cmocka_unit_test(aspect_tolerance_is_five_percent),
+        cmocka_unit_test(aspect_mono_compares_whole_frame),
+        cmocka_unit_test(aspect_rejects_bad_sizes),
         cmocka_unit_test(sbs_2to1),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);

@@ -100,6 +100,60 @@ sys.exit(0 if ok else 1)
 PY
 check "dumped frame: colours and orientation" $?
 
+# 1a. --content-fov 90x90 on the same 180-degree pattern: the content fills twice
+# the angle, so the yellow box (1.8 to 4.4 degrees up) now sits lower in the
+# view, and the horizon centre is still red / blue. No aspect warning (4096x2048
+# is two square eyes, which is what 90x90 expects too).
+xvfb "$xrdome" --windowed --pose null --content-fov 90x90 --frames 30 \
+     --dump-frame "$work/out90.ppm" "$work/pattern.mp4" >"$work/fov90.err" 2>&1
+st=$?
+cat "$work/fov90.err"
+check "--content-fov 90x90 playback exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+! grep -q 'aspect' "$work/fov90.err"; check "--content-fov 90x90: no aspect warning" $?
+python3 -I - "$work/out.ppm" "$work/out90.ppm" <<'PY'
+import sys
+
+def load(path):
+    with open(path, "rb") as f:
+        magic, size, maxval, px = f.read().split(b"\n", 3)
+    w, h = map(int, size.split())
+    assert magic == b"P6" and len(px) == w * h * 3, "bad PPM"
+    return w, h, px
+
+def frac(img, e, fx0, fx1, fy0, fy1, pred):
+    w, h, px = img
+    eye = w // 2
+    n = hit = 0
+    for y in range(int(fy0 * h), int(fy1 * h)):
+        for x in range(e * eye + int(fx0 * eye), e * eye + int(fx1 * eye)):
+            r, g, b = px[(y * w + x) * 3:(y * w + x) * 3 + 3]
+            n += 1
+            hit += pred(r, g, b)
+    return hit / n
+
+red = lambda r, g, b: r > 200 and g < 100 and b < 100
+blue = lambda r, g, b: b > 200 and r < 100 and g < 100
+yellow = lambda r, g, b: r > 200 and g > 200 and b < 100
+
+full, narrow = load(sys.argv[1]), load(sys.argv[2])
+assert full[:2] == narrow[:2], "frame sizes differ"
+ok = True
+def expect(name, value, cond):
+    global ok
+    good = cond(value)
+    ok &= good
+    print(f"  {'ok  ' if good else 'FAIL'} {name}: {value:.3f}")
+
+expect("90x90 left centre red", frac(narrow, 0, .25, .75, .42, .58, red), lambda v: v > .8)
+expect("90x90 right centre blue", frac(narrow, 1, .25, .75, .42, .58, blue), lambda v: v > .8)
+for e, name in ((0, "left"), (1, "right")):
+    # rows 36-40 percent down: 2.2 to 3.1 degrees up, inside the box only at 90x90
+    expect(f"{name} box at 90x90", frac(narrow, e, .35, .65, .36, .40, yellow), lambda v: v > .8)
+    expect(f"{name} no box there at 180x180", frac(full, e, .35, .65, .36, .40, yellow), lambda v: v < .05)
+sys.exit(0 if ok else 1)
+PY
+check "--content-fov 90x90 dump: centre colours, content larger than at 180x180" $?
+
 # 1b. --require-hwdec: exit 1 without VA-API, play normally with it.
 xvfb "$xrdome" --windowed --pose null --require-hwdec --frames 5 "$work/pattern.mp4" \
      >"$work/reqhw.err" 2>&1

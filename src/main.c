@@ -216,6 +216,8 @@ int main(int argc, char **argv)
         fail("%s", err);
         goto out;
     }
+    xrd_player_set_content(p, cfg.layout, cfg.content_hfov, cfg.content_vfov);
+    xrd_renderer_set_content_fov(r, cfg.content_hfov, cfg.content_vfov);
     if (cfg.frames > 0)
         xrd_player_hold_at_end(p);
 

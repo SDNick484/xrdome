@@ -77,7 +77,22 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 
 `--pose SPEC` (`null`, or `udp-opentrack` with `port`, `yaw`, `pitch`, `roll`), `--output NAME`,
 `--device viture-pro|xreal-air2pro`, `--zoom F`, `--layout sbs-lr|sbs-rl|mono`, `--windowed`,
-`--require-hwdec` (exit 1 unless mpv decodes with VA-API), `--timing-log PATH`.
+`--require-hwdec` (exit 1 unless mpv decodes with VA-API), `--timing-log PATH`,
+`--content-fov HxV`.
+
+`--content-fov HxV` says how many degrees of longitude (H) and latitude (V) each eye of the file
+covers, centred straight ahead. The default is `180x180`; each value is 10 to 180. For a
+side-by-side file whose author gives 120 degrees horizontal by 90 vertical per eye:
+
+```sh
+xrdome --content-fov 120x90 clip.mp4
+```
+
+Directions outside the covered area, and behind you, are black. The player warns once if the
+frame's aspect does not fit (per eye `H:V` for side-by-side, whole frame for mono). It assumes
+an equirectangular mapping within the stated field of view, which may not hold for action-camera
+footage (lens projections other than equirectangular will look distorted). It is a command-line
+flag only, not an ini key, because it describes the file and not the glasses.
 
 `--timing-log PATH` writes one CSV row per presented frame:
 `frame,interval_us,pose_to_swap_us,pose_age_us` (swap-to-swap interval, pose sample to swap call,

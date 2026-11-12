@@ -14,6 +14,8 @@ typedef struct {
     float fov_diag;        /* from [device.<name>], default 43.0 */
     float zoom;            /* default 1.0 */
     xrd_layout layout;     /* default XRD_LAYOUT_SBS_LR */
+    float content_hfov;    /* --content-fov HxV (degrees the video covers), default 180 */
+    float content_vfov;    /* default 180 */
     bool require_hwdec;
     bool windowed;         /* development: skip the 3840x1080 check, 1280x360 window */
     char timing_log[4096]; /* empty = off */

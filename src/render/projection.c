@@ -13,7 +13,8 @@ void xrd_fov_tan_half(float diag_deg, float aspect, float zoom, float *tan_h, fl
     *tan_v = (float)(t / norm / zoom);
 }
 
-bool xrd_dir_to_uv(const float d[3], float uv[2])
+/* Mirrors vr180.frag: keep the two in step. */
+bool xrd_dir_to_uv_fov(const float d[3], float hfov_deg, float vfov_deg, float uv[2])
 {
     double x = d[0], y = d[1], z = d[2];
     double len = sqrt(x * x + y * y + z * z);
@@ -30,11 +31,19 @@ bool xrd_dir_to_uv(const float d[3], float uv[2])
     double sy = y < -1.0 ? -1.0 : (y > 1.0 ? 1.0 : y);
     double lat = asin(sy);
 
-    double u = lon / XRD_PI + 0.5;
-    double v = lat / XRD_PI + 0.5;
+    double u = lon / ((double)hfov_deg * XRD_PI / 180.0) + 0.5;
+    double v = lat / ((double)vfov_deg * XRD_PI / 180.0) + 0.5;
+    const double eps = 1e-6;
+    if (u < -eps || u > 1.0 + eps || v < -eps || v > 1.0 + eps)
+        return false;
     uv[0] = (float)(u < 0.0 ? 0.0 : (u > 1.0 ? 1.0 : u));
     uv[1] = (float)(v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v));
     return true;
+}
+
+bool xrd_dir_to_uv(const float d[3], float uv[2])
+{
+    return xrd_dir_to_uv_fov(d, 180.f, 180.f, uv);
 }
 
 void xrd_eye_u_transform(xrd_layout layout, int eye, bool swap, float *scale, float *offset)

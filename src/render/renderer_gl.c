@@ -9,7 +9,8 @@
 struct xrd_renderer {
     GLuint prog;
     GLuint vao;
-    GLint u_video, u_rot, u_tan_half, u_u_scale, u_u_offset;
+    GLint u_video, u_rot, u_tan_half, u_inv_fov, u_u_scale, u_u_offset;
+    float hfov_deg, vfov_deg;
 };
 
 static void set_err(char *err, size_t errlen, const char *what, const char *log)
@@ -72,6 +73,9 @@ xrd_renderer *xrd_renderer_new(char *err, size_t errlen)
     r->u_video = glGetUniformLocation(prog, "u_video");
     r->u_rot = glGetUniformLocation(prog, "u_rot");
     r->u_tan_half = glGetUniformLocation(prog, "u_tan_half");
+    r->u_inv_fov = glGetUniformLocation(prog, "u_inv_fov");
+    r->hfov_deg = 180.f;
+    r->vfov_deg = 180.f;
     r->u_u_scale = glGetUniformLocation(prog, "u_u_scale");
     r->u_u_offset = glGetUniformLocation(prog, "u_u_offset");
     return r;
@@ -84,6 +88,12 @@ void xrd_renderer_free(xrd_renderer *r)
     glDeleteVertexArrays(1, &r->vao);
     glDeleteProgram(r->prog);
     free(r);
+}
+
+void xrd_renderer_set_content_fov(xrd_renderer *r, float hfov_deg, float vfov_deg)
+{
+    r->hfov_deg = hfov_deg;
+    r->vfov_deg = vfov_deg;
 }
 
 void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
@@ -106,6 +116,8 @@ void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
     glUniform1i(r->u_video, 0);
     glUniformMatrix3fv(r->u_rot, 1, GL_FALSE, rot);
     glUniform2f(r->u_tan_half, tan_h, tan_v);
+    const double deg = 3.14159265358979323846 / 180.0;
+    glUniform2f(r->u_inv_fov, (float)(1.0 / (r->hfov_deg * deg)), (float)(1.0 / (r->vfov_deg * deg)));
 
     int half = out_w / 2;
     for (int eye = 0; eye < 2; eye++) {

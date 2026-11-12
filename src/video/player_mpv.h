@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "render/projection.h"
+
 typedef struct xrd_player xrd_player;
 typedef void *(*xrd_gl_get_proc)(void *ctx, const char *name);
 
@@ -14,6 +16,10 @@ typedef void *(*xrd_gl_get_proc)(void *ctx, const char *name);
 xrd_player *xrd_player_open(const char *file, xrd_gl_get_proc get_proc, void *x11_display,
                             char *err, size_t errlen);
 void        xrd_player_free(xrd_player *p);
+/* What the one-time aspect warning expects of the video: the starting layout
+ * and the content FOV (--content-fov). Call before the first xrd_player_update;
+ * defaults are sbs-lr and 180 x 180. */
+void        xrd_player_set_content(xrd_player *p, xrd_layout layout, float hfov_deg, float vfov_deg);
 /* Call once per loop. Creates or resizes the FBO when video size is known, renders a new
    frame if one is due. Returns <0 on fatal error (err text via xrd_player_error).
    After rendering into its FBO it binds framebuffer 0 again. */
@@ -36,6 +42,10 @@ void        xrd_player_hold_at_end(xrd_player *p);
 /* True when 0 < w,h <= gl_max; otherwise false with a message naming the
  * dimensions and the limit in err (err may be NULL). */
 bool xrd_video_size_fits(int w, int h, int gl_max, char *err, size_t errlen);
+/* True when the frame's aspect fits a video covering hfov_deg x vfov_deg: for
+ * side-by-side layouts the per-eye aspect (w/2)/h, for mono w/h, must be
+ * within 5 percent of hfov/vfov. False for non-positive sizes. */
+bool xrd_video_aspect_matches(int w, int h, xrd_layout layout, float hfov_deg, float vfov_deg);
 /* True for an exactly 2:1 frame (two square eyes side by side). */
 bool xrd_video_is_sbs_2to1(int w, int h);
 
