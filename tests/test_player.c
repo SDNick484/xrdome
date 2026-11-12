@@ -180,6 +180,17 @@ static void fbo_format_gl(void **state)
     assert_int_equal(depth, 8);
 }
 
+/* A zero-initialised options struct means the same as NULL options: 8-bit. */
+static void fbo_format_zero_is_rgba8(void **state)
+{
+    (void)state;
+    xrd_player_options opt = {0};
+    assert_int_equal(opt.fbo_format, XRD_FBO_RGBA8);
+    int depth = -1;
+    assert_int_equal(xrd_fbo_format_gl(opt.fbo_format, &depth), GL_RGBA8);
+    assert_int_equal(depth, 8);
+}
+
 static void texture_bits_name(void **state)
 {
     (void)state;
@@ -206,6 +217,7 @@ int main(void)
         cmocka_unit_test(log_print_skips_empty),
         cmocka_unit_test(log_print_splits_lines),
         cmocka_unit_test(fbo_format_gl),
+        cmocka_unit_test(fbo_format_zero_is_rgba8),
         cmocka_unit_test(texture_bits_name),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);

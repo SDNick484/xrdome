@@ -72,12 +72,12 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 | , / . | Convergence -0.1 / +0.1 degrees (-5 to 5); prints `convergence: 0.3 deg` |
 | / | Convergence back to the `--convergence` value |
 | F | Toggle bicubic / bilinear sampling; prints `filter: bicubic` or `filter: bilinear` |
-
-The `zoom:`, `convergence:` and `filter:` lines are printed only when the value changes (not for
-a press at a limit, or a reset to the value already set).
 | S | Swap eyes |
 | M | Cycle layout: sbs-lr, sbs-rl, mono |
 | Q | Quit |
+
+The `zoom:`, `convergence:` and `filter:` lines are printed only when the value changes (not for
+a press at a limit, or a reset to the value already set).
 
 ### Flags
 

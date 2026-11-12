@@ -17,10 +17,12 @@ typedef void *(*xrd_gl_get_proc)(void *ctx, const char *name);
 xrd_player *xrd_player_open(const char *file, xrd_gl_get_proc get_proc, void *x11_display,
                             char *err, size_t errlen);
 
-/* Format of the video texture mpv renders into. XRD_FBO_RGB10 is GL_RGB10_A2
- * (10 bits per colour channel, same 4 bytes per texel as RGBA8); when the GPU
- * cannot render to it the player falls back to GL_RGBA8 with a note. */
-typedef enum { XRD_FBO_RGB10, XRD_FBO_RGBA8 } xrd_fbo_format;
+/* Format of the video texture mpv renders into. XRD_FBO_RGBA8 (GL_RGBA8) is
+ * the zero value, so a zero-initialised xrd_player_options, a NULL one and
+ * xrd_player_open all get 8 bits. XRD_FBO_RGB10 is GL_RGB10_A2 (10 bits per
+ * colour channel, same 4 bytes per texel as RGBA8); when the GPU cannot render
+ * to it the player falls back to GL_RGBA8 with a note. */
+typedef enum { XRD_FBO_RGBA8, XRD_FBO_RGB10 } xrd_fbo_format;
 
 /* mpv tuning, applied before mpv_initialize. profile: an mpv profile name,
  * "default" for none, NULL for "fast". opts: opt_count "KEY=VALUE" strings,
@@ -33,7 +35,7 @@ typedef struct {
     const char *const *opts;
     int opt_count;
     const char *log_level;
-    xrd_fbo_format fbo_format; /* video texture format */
+    xrd_fbo_format fbo_format; /* video texture format; 0 = XRD_FBO_RGBA8 */
 } xrd_player_options;
 
 /* As xrd_player_open; opt may be NULL (profile "fast", no extra options,
