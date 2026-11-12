@@ -15,6 +15,20 @@ typedef void *(*xrd_gl_get_proc)(void *ctx, const char *name);
  * and fills err on failure. */
 xrd_player *xrd_player_open(const char *file, xrd_gl_get_proc get_proc, void *x11_display,
                             char *err, size_t errlen);
+
+/* mpv tuning, applied before mpv_initialize. profile: an mpv profile name,
+ * "default" for none, NULL for "fast". opts: opt_count "KEY=VALUE" strings,
+ * applied after the profile and xrdome's own fixed options, so they win. */
+typedef struct {
+    const char *profile;
+    const char *const *opts;
+    int opt_count;
+} xrd_player_options;
+
+/* As xrd_player_open; opt may be NULL (profile "fast", no extra options).
+ * An mpv option or profile that mpv rejects fails the open, err naming it. */
+xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void *x11_display,
+                               const xrd_player_options *opt, char *err, size_t errlen);
 void        xrd_player_free(xrd_player *p);
 /* What the one-time aspect warning expects of the video: the starting layout
  * and the content FOV (--content-fov). Call before the first xrd_player_update;
@@ -46,6 +60,9 @@ bool xrd_video_size_fits(int w, int h, int gl_max, char *err, size_t errlen);
  * side-by-side layouts the per-eye aspect (w/2)/h, for mono w/h, must be
  * within 5 percent of hfov/vfov. False for non-positive sizes. */
 bool xrd_video_aspect_matches(int w, int h, xrd_layout layout, float hfov_deg, float vfov_deg);
+/* Splits "KEY=VALUE" at the first '='. The value may contain '=' and be empty.
+ * False for no '=', an empty key, or a key or value that does not fit. */
+bool xrd_mpv_opt_split(const char *s, char *key, size_t keylen, char *val, size_t vallen);
 /* True for an exactly 2:1 frame (two square eyes side by side). */
 bool xrd_video_is_sbs_2to1(int w, int h);
 

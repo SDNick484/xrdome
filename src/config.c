@@ -1,6 +1,7 @@
 #define _GNU_SOURCE /* getopt_long, strtof */
 
 #include "config.h"
+#include "video/player_mpv.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -142,6 +143,7 @@ void xrd_config_defaults(xrd_config *c)
     c->layout = XRD_LAYOUT_SBS_LR;
     c->content_hfov = 180.0f;
     c->content_vfov = 180.0f;
+    copy_str(c->mpv_profile, sizeof c->mpv_profile, "fast");
 }
 
 int xrd_config_default_path(char *buf, size_t len)
@@ -265,7 +267,8 @@ int xrd_config_load_ini(xrd_config *c, const char *path, char *err, size_t errle
 int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_t errlen)
 {
     enum { OPT_PROJ = 256, OPT_LAYOUT, OPT_POSE, OPT_OUTPUT, OPT_DEVICE, OPT_ZOOM,
-           OPT_CONTENT_FOV, OPT_HWDEC, OPT_WINDOWED, OPT_TIMING, OPT_SYNC, OPT_FRAMES, OPT_DUMP };
+           OPT_CONTENT_FOV, OPT_HWDEC, OPT_WINDOWED, OPT_TIMING, OPT_SYNC, OPT_FRAMES, OPT_DUMP,
+           OPT_MPV_PROFILE, OPT_MPV_OPT };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
         {"layout", required_argument, NULL, OPT_LAYOUT},
@@ -280,6 +283,8 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"sync-after-swap", no_argument, NULL, OPT_SYNC},
         {"frames", required_argument, NULL, OPT_FRAMES},
         {"dump-frame", required_argument, NULL, OPT_DUMP},
+        {"mpv-profile", required_argument, NULL, OPT_MPV_PROFILE},
+        {"mpv-opt", required_argument, NULL, OPT_MPV_OPT},
         {NULL, 0, NULL, 0},
     };
 
@@ -341,6 +346,31 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         case OPT_DUMP:
             rc = set_string("--dump-frame", c->dump_frame, sizeof c->dump_frame, optarg, err, errlen);
             break;
+        case OPT_MPV_PROFILE:
+            if (optarg[0] == '\0') {
+                set_err(err, errlen, "--mpv-profile: empty profile name");
+                rc = -1;
+            } else
+                rc = set_string("--mpv-profile", c->mpv_profile, sizeof c->mpv_profile, optarg,
+                                err, errlen);
+            break;
+        case OPT_MPV_OPT: {
+            char k[256], v[256];
+            if (c->mpv_opt_count >= (int)(sizeof c->mpv_opts / sizeof c->mpv_opts[0])) {
+                set_err(err, errlen, "--mpv-opt '%s': at most %zu --mpv-opt options are allowed",
+                        optarg, sizeof c->mpv_opts / sizeof c->mpv_opts[0]);
+                rc = -1;
+            } else if (strlen(optarg) >= sizeof c->mpv_opts[0]) {
+                set_err(err, errlen, "--mpv-opt: option too long (max %zu characters)",
+                        sizeof c->mpv_opts[0] - 1);
+                rc = -1;
+            } else if (!xrd_mpv_opt_split(optarg, k, sizeof k, v, sizeof v)) {
+                set_err(err, errlen, "--mpv-opt: '%s' is not KEY=VALUE with a non-empty KEY", optarg);
+                rc = -1;
+            } else
+                copy_str(c->mpv_opts[c->mpv_opt_count++], sizeof c->mpv_opts[0], optarg);
+            break;
+        }
         case ':':
             set_err(err, errlen, "option '%s' requires an argument", argv[optind - 1]);
             rc = -1;

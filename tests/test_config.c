@@ -382,6 +382,99 @@ static void args_content_fov_bad_values(void **state)
     }
 }
 
+static void args_mpv_profile_default_and_value(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    xrd_config c;
+    xrd_config_defaults(&c);
+    assert_string_equal(c.mpv_profile, "fast");
+    assert_int_equal(c.mpv_opt_count, 0);
+    char *a[] = {"xrdome", "--mpv-profile", "default", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, a, err, sizeof err), 0);
+    assert_string_equal(c.mpv_profile, "default");
+    char long_name[64];
+    memset(long_name, 'p', sizeof long_name - 1);
+    long_name[sizeof long_name - 1] = '\0';
+    char *b[] = {"xrdome", "--mpv-profile", long_name, "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, b, err, sizeof err), -1);
+    assert_non_null(strstr(err, "mpv-profile"));
+}
+
+static void args_mpv_opt_stored_in_order(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    xrd_config c;
+    xrd_config_defaults(&c);
+    char *a[] = {"xrdome", "--mpv-opt", "a=b", "--mpv-opt", "c=d=e", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 6, a, err, sizeof err), 0);
+    assert_int_equal(c.mpv_opt_count, 2);
+    assert_string_equal(c.mpv_opts[0], "a=b");
+    assert_string_equal(c.mpv_opts[1], "c=d=e");
+}
+
+static void args_mpv_opt_bad_forms(void **state)
+{
+    (void)state;
+    const char *bad[] = {"novalue", "=x", ""};
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        char err[256] = "";
+        xrd_config c;
+        xrd_config_defaults(&c);
+        char *a[] = {"xrdome", "--mpv-opt", (char *)bad[i], "a.mp4", NULL};
+        assert_int_equal(xrd_config_parse_args(&c, 4, a, err, sizeof err), -1);
+        assert_non_null(strstr(err, "mpv-opt"));
+        assert_non_null(strstr(err, bad[i]));
+        assert_int_equal(c.mpv_opt_count, 0);
+    }
+}
+
+static void args_mpv_opt_limits(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    xrd_config c;
+    xrd_config_defaults(&c);
+    char *argv[2 + 17 * 2 + 1];
+    int n = 0;
+    argv[n++] = "xrdome";
+    for (int i = 0; i < 17; i++) {
+        argv[n++] = "--mpv-opt";
+        argv[n++] = "k=v";
+    }
+    argv[n++] = "a.mp4";
+    argv[n] = NULL;
+    /* 16 are fine, the 17th is an error */
+    char *sixteen[2 + 16 * 2 + 1];
+    memcpy(sixteen, argv, (size_t)(1 + 16 * 2) * sizeof *argv);
+    sixteen[1 + 16 * 2] = "a.mp4";
+    sixteen[2 + 16 * 2] = NULL;
+    assert_int_equal(xrd_config_parse_args(&c, 2 + 16 * 2, sixteen, err, sizeof err), 0);
+    assert_int_equal(c.mpv_opt_count, 16);
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_parse_args(&c, n, argv, err, sizeof err), -1);
+    assert_non_null(strstr(err, "mpv-opt"));
+    assert_non_null(strstr(err, "16"));
+
+    /* 255 characters fit, 256 do not */
+    char ok[256], toolong[257];
+    memset(ok, 'v', sizeof ok - 1);
+    memcpy(ok, "k=", 2);
+    ok[255] = '\0';
+    memset(toolong, 'v', sizeof toolong - 1);
+    memcpy(toolong, "k=", 2);
+    toolong[256] = '\0';
+    xrd_config_defaults(&c);
+    char *g[] = {"xrdome", "--mpv-opt", ok, "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, g, err, sizeof err), 0);
+    assert_string_equal(c.mpv_opts[0], ok);
+    xrd_config_defaults(&c);
+    char *b[] = {"xrdome", "--mpv-opt", toolong, "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, b, err, sizeof err), -1);
+    assert_non_null(strstr(err, "mpv-opt"));
+}
+
 static void ini_content_fov_is_not_a_key(void **state)
 {
     (void)state;
@@ -638,6 +731,10 @@ int main(void)
         cmocka_unit_test(args_bad_values_and_unknown_option),
         cmocka_unit_test(args_content_fov),
         cmocka_unit_test(args_content_fov_bad_values),
+        cmocka_unit_test(args_mpv_profile_default_and_value),
+        cmocka_unit_test(args_mpv_opt_stored_in_order),
+        cmocka_unit_test(args_mpv_opt_bad_forms),
+        cmocka_unit_test(args_mpv_opt_limits),
         cmocka_unit_test(ini_content_fov_is_not_a_key),
         cmocka_unit_test(load_unknown_device_names_it),
         cmocka_unit_test(load_ini_defined_device_ok),

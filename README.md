@@ -79,7 +79,8 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 `--device viture-pro|xreal-air2pro`, `--zoom F`, `--layout sbs-lr|sbs-rl|mono`, `--windowed`,
 `--require-hwdec` (exit 1 unless mpv decodes with VA-API), `--timing-log PATH`,
 `--content-fov HxV`, `--proj hequirect` (the only projection so far, so optional),
-`--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)).
+`--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)), `--mpv-profile NAME`,
+`--mpv-opt KEY=VALUE` (repeatable, up to 16).
 
 `--content-fov HxV` says how many degrees of longitude (H) and latitude (V) each eye of the file
 covers, centred straight ahead. The default is `180x180`; each value is 10 to 180. For a
@@ -94,6 +95,17 @@ frame's aspect does not fit (per eye `H:V` for side-by-side, whole frame for mon
 an equirectangular mapping within the stated field of view, which may not hold for action-camera
 footage (lens projections other than equirectangular will look distorted). It is a command-line
 flag only, not an ini key, because it describes the file and not the glasses.
+
+`--mpv-profile NAME` selects the mpv profile applied before mpv starts. The default is `fast`.
+xrdome has mpv render the video at its native size into an offscreen buffer, with no scaling, so
+mpv's default quality settings (high-quality chroma scaling, float intermediate buffers,
+dithering) cost GPU time without a visible benefit; on a 7680x2880 file they saturated an
+integrated GPU. `--mpv-profile default` applies no profile. `--mpv-opt KEY=VALUE` sets any mpv
+option after the profile and xrdome's own fixed options (`vo`, `hwdec`, `osd-level`), so it can
+override them; mpv rejecting an option or profile exits 1. After the first frame xrdome prints
+`mpv: profile=NAME` and the `--mpv-opt` pairs to stderr, to match a timing log to its settings.
+To diagnose a slow GPU, compare `--mpv-profile default` against the default run, and try
+`--mpv-opt gpu-dumb-mode=yes` as the cheapest render path.
 
 `--timing-log PATH` writes one CSV row per presented frame:
 `frame,interval_us,pose_to_swap_us,pose_age_us,swap_us` (swap-to-swap interval, pose sample to swap

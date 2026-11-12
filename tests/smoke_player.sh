@@ -33,27 +33,9 @@ check() { # check DESCRIPTION CONDITION-EXIT-STATUS
     if [ "$2" -eq 0 ]; then echo "ok:   $1"; else echo "FAIL: $1"; fail=1; fi
 }
 
-# 1. Play a 2 s pattern, dump the 30th presented frame.
-"$make_pattern" 2 "$work/pattern.mp4" libx264 || { echo "FAIL: make_pattern.sh"; exit 1; }
-xvfb "$xrdome" --windowed --pose null --frames 30 --dump-frame "$work/out.ppm" \
-     "$work/pattern.mp4" >"$work/play.err" 2>&1
-st=$?
-echo "--- stderr:"; cat "$work/play.err"; echo "---"
-check "playback exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
-grep -q '^hwdec: ' "$work/play.err"; check "stderr reports hwdec" $?
-hwdec=$(sed -n 's/^hwdec: //p' "$work/play.err")
-# Xvfb with software GL normally has no VA-API interop, so hwdec is "no" and
-# the player must warn once; that warning is the only xrdome line allowed.
-if [ "$hwdec" = vaapi ]; then
-    ! grep -q '^xrdome:' "$work/play.err"; check "no xrdome warnings or errors" $?
-else
-    [ "$(grep -c "^xrdome: warning: hardware decoding is '$hwdec', not vaapi" "$work/play.err")" -eq 1 ]
-    check "one hwdec warning (hwdec: $hwdec)" $?
-    ! grep '^xrdome:' "$work/play.err" | grep -qv 'not vaapi'; check "no other xrdome warnings or errors" $?
-fi
-grep -q '^timing: [0-9]* frames, [0-9]* missed vsyncs' "$work/play.err"; check "exit summary reports missed vsyncs" $?
-
-python3 -I - "$work/out.ppm" <<'PY'
+# check_frame PPM: the red/blue/orientation assertions on a dumped frame.
+check_frame() {
+python3 -I - "$1" <<'PY'
 import sys
 
 with open(sys.argv[1], "rb") as f:
@@ -98,6 +80,29 @@ for e, name in ((0, "left"), (1, "right")):
     expect(f"{name} lower band not yellow", frac(*region(e, .1, .9, .70, .85), yellow), lambda v: v < .05)
 sys.exit(0 if ok else 1)
 PY
+}
+
+# 1. Play a 2 s pattern, dump the 30th presented frame.
+"$make_pattern" 2 "$work/pattern.mp4" libx264 || { echo "FAIL: make_pattern.sh"; exit 1; }
+xvfb "$xrdome" --windowed --pose null --frames 30 --dump-frame "$work/out.ppm" \
+     "$work/pattern.mp4" >"$work/play.err" 2>&1
+st=$?
+echo "--- stderr:"; cat "$work/play.err"; echo "---"
+check "playback exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+grep -q '^hwdec: ' "$work/play.err"; check "stderr reports hwdec" $?
+hwdec=$(sed -n 's/^hwdec: //p' "$work/play.err")
+# Xvfb with software GL normally has no VA-API interop, so hwdec is "no" and
+# the player must warn once; that warning is the only xrdome line allowed.
+if [ "$hwdec" = vaapi ]; then
+    ! grep -q '^xrdome:' "$work/play.err"; check "no xrdome warnings or errors" $?
+else
+    [ "$(grep -c "^xrdome: warning: hardware decoding is '$hwdec', not vaapi" "$work/play.err")" -eq 1 ]
+    check "one hwdec warning (hwdec: $hwdec)" $?
+    ! grep '^xrdome:' "$work/play.err" | grep -qv 'not vaapi'; check "no other xrdome warnings or errors" $?
+fi
+grep -q '^timing: [0-9]* frames, [0-9]* missed vsyncs' "$work/play.err"; check "exit summary reports missed vsyncs" $?
+
+check_frame "$work/out.ppm"
 check "dumped frame: colours and orientation" $?
 
 # 1a. --content-fov 90x90 on the same 180-degree pattern: the content fills twice
@@ -153,6 +158,26 @@ for e, name in ((0, "left"), (1, "right")):
 sys.exit(0 if ok else 1)
 PY
 check "--content-fov 90x90 dump: centre colours, content larger than at 180x180" $?
+
+# 1a2. mpv options: --mpv-opt that mpv rejects exits 1 naming the key; the
+# default (fast) profile is reported; a bogus profile fails naming it.
+grep -q '^mpv: profile=fast$' "$work/play.err"; check "stderr reports mpv profile fast" $?
+xvfb "$xrdome" --windowed --pose null --frames 5 --mpv-opt bogus-option-xyz=1 \
+     "$work/pattern.mp4" >"$work/badopt.err" 2>&1
+st=$?
+cat "$work/badopt.err"
+check "bad --mpv-opt exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
+grep -q 'bogus-option-xyz' "$work/badopt.err"; check "bad --mpv-opt names the key" $?
+
+# 1a3. --mpv-profile default: no profile, same picture.
+xvfb "$xrdome" --windowed --pose null --frames 30 --mpv-profile default \
+     --dump-frame "$work/outdef.ppm" "$work/pattern.mp4" >"$work/defprof.err" 2>&1
+st=$?
+cat "$work/defprof.err"
+check "--mpv-profile default exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+grep -q '^mpv: profile=default$' "$work/defprof.err"; check "--mpv-profile default reported" $?
+check_frame "$work/outdef.ppm"
+check "--mpv-profile default: colours and orientation" $?
 
 # 1b. --require-hwdec: exit 1 without VA-API, play normally with it.
 xvfb "$xrdome" --windowed --pose null --require-hwdec --frames 5 "$work/pattern.mp4" \

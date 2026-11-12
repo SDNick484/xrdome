@@ -75,8 +75,28 @@ static int set_opt(xrd_player *p, const char *name, const char *value, char *err
     return 0;
 }
 
+bool xrd_mpv_opt_split(const char *s, char *key, size_t keylen, char *val, size_t vallen)
+{
+    const char *eq = strchr(s, '=');
+    if (!eq || eq == s)
+        return false;
+    size_t kn = (size_t)(eq - s), vn = strlen(eq + 1);
+    if (kn >= keylen || vn >= vallen)
+        return false;
+    memcpy(key, s, kn);
+    key[kn] = '\0';
+    memcpy(val, eq + 1, vn + 1);
+    return true;
+}
+
 xrd_player *xrd_player_open(const char *file, xrd_gl_get_proc get_proc, void *x11_display,
                             char *err, size_t errlen)
+{
+    return xrd_player_open_ex(file, get_proc, x11_display, NULL, err, errlen);
+}
+
+xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void *x11_display,
+                               const xrd_player_options *opt, char *err, size_t errlen)
 {
     xrd_player *p = calloc(1, sizeof *p);
     if (!p) {
@@ -94,6 +114,19 @@ xrd_player *xrd_player_open(const char *file, xrd_gl_get_proc get_proc, void *x1
         free(p);
         return NULL;
     }
+    /* The profile goes first so every explicit option below wins over it. */
+    const char *profile = opt && opt->profile ? opt->profile : "fast";
+    if (strcmp(profile, "default") != 0) {
+        int prc = mpv_set_option_string(p->mpv, "profile", profile);
+        if (prc < 0) {
+            if (!strcmp(profile, "fast"))
+                fprintf(stderr, "xrdome: note: mpv profile 'fast' unavailable, using mpv defaults\n");
+            else {
+                set_err(err, errlen, "mpv profile '%s': %s", profile, mpv_error_string(prc));
+                goto fail;
+            }
+        }
+    }
     if (set_opt(p, "vo", "libmpv", err, errlen) || set_opt(p, "hwdec", "vaapi", err, errlen) ||
         set_opt(p, "osd-level", "0", err, errlen))
         goto fail;
@@ -107,6 +140,20 @@ xrd_player *xrd_player_open(const char *file, xrd_gl_get_proc get_proc, void *x1
         if (set_opt(p, "gpu-dumb-mode", "yes", err, errlen))
             goto fail;
         fprintf(stderr, "note: software GL (%s), using mpv gpu-dumb-mode\n", gl_renderer);
+    }
+
+    /* User overrides last: they win over the profile and the options above. */
+    for (int i = 0; opt && i < opt->opt_count; i++) {
+        char key[256], val[256];
+        if (!xrd_mpv_opt_split(opt->opts[i], key, sizeof key, val, sizeof val)) {
+            set_err(err, errlen, "mpv option '%s' is not KEY=VALUE", opt->opts[i]);
+            goto fail;
+        }
+        int orc = mpv_set_option_string(p->mpv, key, val);
+        if (orc < 0) {
+            set_err(err, errlen, "mpv option '%s': %s", key, mpv_error_string(orc));
+            goto fail;
+        }
     }
 
     int rc = mpv_initialize(p->mpv);

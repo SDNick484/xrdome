@@ -221,7 +221,12 @@ int main(int argc, char **argv)
         fail("renderer: %s", err);
         goto out;
     }
-    p = xrd_player_open(cfg.file, gl_get_proc, wm.info.x11.display, err, sizeof err);
+    const char *mpv_opts[sizeof cfg.mpv_opts / sizeof cfg.mpv_opts[0]];
+    for (int i = 0; i < cfg.mpv_opt_count; i++)
+        mpv_opts[i] = cfg.mpv_opts[i];
+    xrd_player_options popt = {.profile = cfg.mpv_profile, .opts = mpv_opts,
+                               .opt_count = cfg.mpv_opt_count};
+    p = xrd_player_open_ex(cfg.file, gl_get_proc, wm.info.x11.display, &popt, err, sizeof err);
     if (!p) {
         fail("%s", err);
         goto out;
@@ -293,6 +298,10 @@ int main(int argc, char **argv)
             const char *hw = xrd_player_hwdec(p);
             fprintf(stderr, "hwdec: %s\n", hw[0] ? hw : "unknown");
             hwdec_checked = true;
+            fprintf(stderr, "mpv: profile=%s", cfg.mpv_profile);
+            for (int i = 0; i < cfg.mpv_opt_count; i++)
+                fprintf(stderr, " %s", cfg.mpv_opts[i]);
+            fputc('\n', stderr);
             if (strcmp(hw, "vaapi") != 0) {
                 snprintf(err, sizeof err, "hardware decoding is '%s', not vaapi",
                          hw[0] ? hw : "unknown");

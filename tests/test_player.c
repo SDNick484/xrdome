@@ -90,6 +90,31 @@ static void sbs_2to1(void **state)
     assert_false(xrd_video_is_sbs_2to1(0, 0));
 }
 
+static void opt_split_basic(void **state)
+{
+    (void)state;
+    char k[32], v[32];
+    assert_true(xrd_mpv_opt_split("a=b", k, sizeof k, v, sizeof v));
+    assert_string_equal(k, "a");
+    assert_string_equal(v, "b");
+    assert_true(xrd_mpv_opt_split("c=d=e", k, sizeof k, v, sizeof v));
+    assert_string_equal(k, "c");
+    assert_string_equal(v, "d=e");
+    assert_true(xrd_mpv_opt_split("k=", k, sizeof k, v, sizeof v));
+    assert_string_equal(k, "k");
+    assert_string_equal(v, "");
+}
+
+static void opt_split_rejects(void **state)
+{
+    (void)state;
+    char k[32], v[32];
+    assert_false(xrd_mpv_opt_split("novalue", k, sizeof k, v, sizeof v));
+    assert_false(xrd_mpv_opt_split("=x", k, sizeof k, v, sizeof v));
+    assert_false(xrd_mpv_opt_split("", k, sizeof k, v, sizeof v));
+    assert_false(xrd_mpv_opt_split("longkey=1", k, 4, v, sizeof v)); /* does not fit */
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -101,6 +126,8 @@ int main(void)
         cmocka_unit_test(aspect_mono_compares_whole_frame),
         cmocka_unit_test(aspect_rejects_bad_sizes),
         cmocka_unit_test(sbs_2to1),
+        cmocka_unit_test(opt_split_basic),
+        cmocka_unit_test(opt_split_rejects),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

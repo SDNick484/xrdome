@@ -20,6 +20,9 @@ typedef struct {
     bool windowed;         /* development: skip the 3840x1080 check, 1280x360 window */
     char timing_log[4096]; /* empty = off */
     bool sync_after_swap;  /* diagnostic: glFinish() right after the swap */
+    char mpv_profile[32];  /* --mpv-profile; default "fast"; "default" = apply no profile */
+    char mpv_opts[16][256]; /* --mpv-opt KEY=VALUE, in order */
+    int mpv_opt_count;
     /* development only (smoke test), not documented: */
     int frames;            /* --frames N: exit 0 after N presented frames
                               once a video frame has been rendered; 0 = off */
