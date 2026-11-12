@@ -136,7 +136,7 @@ static int ini_read(xrd_config *c, const char *path, bool *device_found, char *e
     enum { SEC_NONE, SEC_GENERAL, SEC_DEVICE, SEC_OTHER } sec = SEC_NONE;
     char line[8192];
     int lineno = 0, rc = 0;
-    char msg[256];
+    char msg[256] = "";
 
     while (rc == 0 && fgets(line, sizeof line, f)) {
         lineno++;
@@ -179,7 +179,7 @@ static int ini_read(xrd_config *c, const char *path, bool *device_found, char *e
         const char *val = trim(eq + 1);
 
         if (sec == SEC_NONE) {
-            set_err(err, errlen, "%s:%d: key '%s' outside any section", path, lineno, key);
+            snprintf(msg, sizeof msg, "key '%s' outside any section", key);
             rc = -1;
         } else if (sec == SEC_OTHER) {
             continue; /* another device's section */
@@ -197,6 +197,10 @@ static int ini_read(xrd_config *c, const char *path, bool *device_found, char *e
         }
         if (rc != 0)
             set_err(err, errlen, "%s:%d: %s", path, lineno, msg);
+    }
+    if (rc == 0 && ferror(f)) {
+        set_err(err, errlen, "%s: read error: %s", path, strerror(errno));
+        rc = -1;
     }
     fclose(f);
     return rc;

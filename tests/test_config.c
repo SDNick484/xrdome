@@ -156,6 +156,32 @@ static void ini_non_numeric_and_unknown_key(void **state)
     assert_non_null(strstr(err, "bogus"));
 }
 
+static void ini_key_outside_section(void **state)
+{
+    (void)state;
+    char path[64], err[256];
+    memset(err, 'Z', sizeof err - 1);
+    err[sizeof err - 1] = '\0';
+    write_tmp(path, "zoom = 2\n");
+    xrd_config c;
+    xrd_config_defaults(&c);
+    int rc = xrd_config_load_ini(&c, path, err, sizeof err);
+    unlink(path);
+    assert_int_equal(rc, -1);
+    assert_non_null(strstr(err, "outside"));
+    assert_non_null(strstr(err, "zoom"));
+}
+
+static void ini_path_is_directory(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    xrd_config c;
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_load_ini(&c, "/tmp", err, sizeof err), -1);
+    assert_true(strlen(err) > 0);
+}
+
 static void args_layout_mono(void **state)
 {
     (void)state;
@@ -363,6 +389,8 @@ int main(void)
         cmocka_unit_test(ini_zoom_out_of_range),
         cmocka_unit_test(ini_fov_out_of_range),
         cmocka_unit_test(ini_non_numeric_and_unknown_key),
+        cmocka_unit_test(ini_key_outside_section),
+        cmocka_unit_test(ini_path_is_directory),
         cmocka_unit_test(args_layout_mono),
         cmocka_unit_test(args_cli_overrides_ini),
         cmocka_unit_test(args_bad_layout),
