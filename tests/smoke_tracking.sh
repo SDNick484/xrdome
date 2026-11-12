@@ -83,14 +83,16 @@ run() { # run NAME YAW [BAD_PACKETS]
     bad=${3:-0}
     csv="$work/$name.csv"
     send 0
-    xvfb "$xrdome" --windowed --pose "udp-opentrack:port=$port" --frames 60 \
+    xvfb "$xrdome" --windowed --pose "udp-opentrack:port=$port" --frames 120 \
          --timing-log "$csv" --dump-frame "$work/$name.ppm" "$work/pattern.mp4" \
          >"$work/$name.err" 2>&1 &
     player=$!
 
-    # Wait (up to 60 s) until a presented frame used a pose: pose_age_us,
-    # column 4 of the timing log, is non-zero. The tracker has then recentered
-    # on a yaw-0 pose.
+    # Wait (up to 60 s) until a presented video frame used a pose: the timing
+    # log starts at the first video frame, and pose_age_us (column 4) is
+    # non-zero once a pose was used. So the video is playing and the tracker
+    # has recentered on a yaw-0 pose. The player is paced to at most 60 Hz, so
+    # 120 frames leave at least 2 s after the switch for the new yaw to arrive.
     i=0
     until [ -f "$csv" ] && awk -F, 'NR > 1 && $4 != 0 { found = 1 } END { exit !found }' "$csv"; do
         if ! kill -0 "$player" 2>/dev/null || [ "$i" -ge 600 ]; then
@@ -104,9 +106,6 @@ run() { # run NAME YAW [BAD_PACKETS]
         sleep_ds 1
         i=$((i + 1))
     done
-    if grep -q '^hwdec: ' "$work/$name.err"; then
-        echo "note: $name: video started before the yaw switch (60-frame margin)"
-    fi
 
     stop_sender
     send "$yaw"

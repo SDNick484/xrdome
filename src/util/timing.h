@@ -6,6 +6,18 @@
 /* CLOCK_MONOTONIC in nanoseconds. */
 uint64_t xrd_now_ns(void);
 
+/* Frame pacing for when the swap does not wait for vsync (swap interval
+ * unavailable or ignored by the driver). Call right after the swap.
+ * prev_swap_ns: time after the previous swap (and any pacing sleep), 0 for
+ * the first frame. Returns how long to sleep: 0 when the swap already paced
+ * the frame (interval >= period / 2), otherwise until prev_swap_ns + period,
+ * never more than one period. */
+uint64_t xrd_pace_sleep_ns(uint64_t prev_swap_ns, uint64_t now_ns, uint64_t period_ns);
+/* 1e9 / hz rounded; hz <= 0 (unknown) means 60. */
+uint64_t xrd_refresh_period_ns(int hz);
+/* Sleeps ns nanoseconds on CLOCK_MONOTONIC (0 returns at once). */
+void xrd_sleep_ns(uint64_t ns);
+
 /* Swap intervals above this count as a missed vsync. */
 #define XRD_MISSED_VSYNC_NS 20000000ull
 

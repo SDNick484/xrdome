@@ -130,6 +130,17 @@ st=$?
 cat "$work/eof.err"
 check "plays to end of file and exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
 
+# 1e. A file without a video track: exit 1 at load, before audio output
+# matters (the sandbox has no audio device).
+ffmpeg -nostdin -hide_banner -loglevel error -y -f lavfi -i anullsrc -t 2 -vn \
+       "$work/audio.m4a" || { echo "FAIL: make audio.m4a"; exit 1; }
+xvfb "$xrdome" --windowed --pose null "$work/audio.m4a" >"$work/novideo.err" 2>&1
+st=$?
+cat "$work/novideo.err"
+check "audio-only file exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
+grep -q "^xrdome: '$work/audio.m4a' has no video track" "$work/novideo.err"
+check "audio-only file: no video track message" $?
+
 # 2. Missing file: exit 1 with mpv's error string.
 xvfb "$xrdome" --windowed --pose null /nonexistent/clip.mp4 >"$work/missing.err" 2>&1
 st=$?

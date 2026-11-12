@@ -197,11 +197,13 @@ static int handle_events(xrd_player *p)
             if (rc >= 0)
                 rc = mpv_get_property(p->mpv, "dheight", MPV_FORMAT_INT64, &h);
             if (rc < 0) {
-                /* mpv also sends a reconfig when the video output goes away
-                 * (end of file): no size then, and nothing to resize. */
-                int configured = 0;
+                /* mpv also sends a reconfig when the file has ended and the
+                 * video output went away: the player is idle then, and there
+                 * is nothing to resize. Any other failure is fatal. */
+                int configured = 1, idle = 0;
                 if (mpv_get_property(p->mpv, "vo-configured", MPV_FORMAT_FLAG, &configured) >= 0 &&
-                    !configured)
+                    !configured &&
+                    mpv_get_property(p->mpv, "idle-active", MPV_FORMAT_FLAG, &idle) >= 0 && idle)
                     break;
                 set_err(p->err, sizeof p->err, "cannot read the video size of '%s': %s",
                         p->file, mpv_error_string(rc));
@@ -209,6 +211,17 @@ static int handle_events(xrd_player *p)
                 return -1;
             }
             if (ensure_fbo(p, (int)w, (int)h) < 0) {
+                p->finished = true;
+                return -1;
+            }
+            break;
+        }
+        case MPV_EVENT_FILE_LOADED: {
+            /* Checked here, before audio or video output start, so a file
+             * without video fails the same way everywhere. */
+            int64_t vid = 0;
+            if (mpv_get_property(p->mpv, "current-tracks/video/id", MPV_FORMAT_INT64, &vid) < 0) {
+                set_err(p->err, sizeof p->err, "'%s' has no video track", p->file);
                 p->finished = true;
                 return -1;
             }

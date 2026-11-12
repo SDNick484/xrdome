@@ -124,6 +124,56 @@ static void close_null_is_ok(void **state)
     xrd_timing_close(NULL);
 }
 
+#define PERIOD MS(1000.0 / 60.0)
+
+static void pace_first_frame_never_sleeps(void **state)
+{
+    (void)state;
+    assert_true(xrd_pace_sleep_ns(0, MS(1000), PERIOD) == 0);
+}
+
+static void pace_vsync_paced_frame_does_not_sleep(void **state)
+{
+    (void)state;
+    assert_true(xrd_pace_sleep_ns(MS(1000), MS(1016.7), PERIOD) == 0);
+    /* a late frame does not sleep either */
+    assert_true(xrd_pace_sleep_ns(MS(1000), MS(1040), PERIOD) == 0);
+    /* exactly half a period counts as paced */
+    assert_true(xrd_pace_sleep_ns(MS(1000), MS(1000) + PERIOD / 2, PERIOD) == 0);
+}
+
+static void pace_unpaced_frame_sleeps_to_next_period(void **state)
+{
+    (void)state;
+    /* swap returned 1 ms after the previous one: sleep until prev + period */
+    assert_true(xrd_pace_sleep_ns(MS(1000), MS(1001), PERIOD) == MS(1000) + PERIOD - MS(1001));
+    assert_true(xrd_pace_sleep_ns(MS(1000), MS(1000), PERIOD) == PERIOD);
+    assert_true(xrd_pace_sleep_ns(MS(1000), MS(1000) + PERIOD / 2 - 1, PERIOD) ==
+                PERIOD - PERIOD / 2 + 1);
+}
+
+static void pace_clock_going_backwards_sleeps_at_most_a_period(void **state)
+{
+    (void)state;
+    assert_true(xrd_pace_sleep_ns(MS(1000), MS(990), PERIOD) == PERIOD);
+}
+
+static void pace_zero_period_never_sleeps(void **state)
+{
+    (void)state;
+    assert_true(xrd_pace_sleep_ns(MS(1000), MS(1001), 0) == 0);
+}
+
+static void refresh_period_from_hz(void **state)
+{
+    (void)state;
+    assert_true(xrd_refresh_period_ns(60) == 16666667u);
+    assert_true(xrd_refresh_period_ns(120) == 8333333u);
+    /* unknown rate (SDL reports 0): assume 60 Hz */
+    assert_true(xrd_refresh_period_ns(0) == 16666667u);
+    assert_true(xrd_refresh_period_ns(-5) == 16666667u);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -134,6 +184,12 @@ int main(void)
         cmocka_unit_test(csv_first_frame_and_missing_pose_are_zero),
         cmocka_unit_test(open_unwritable_path_fails),
         cmocka_unit_test(close_null_is_ok),
+        cmocka_unit_test(pace_first_frame_never_sleeps),
+        cmocka_unit_test(pace_vsync_paced_frame_does_not_sleep),
+        cmocka_unit_test(pace_unpaced_frame_sleeps_to_next_period),
+        cmocka_unit_test(pace_clock_going_backwards_sleeps_at_most_a_period),
+        cmocka_unit_test(pace_zero_period_never_sleeps),
+        cmocka_unit_test(refresh_period_from_hz),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

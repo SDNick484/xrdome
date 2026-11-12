@@ -149,6 +149,7 @@ int main(int argc, char **argv)
     int x = SDL_WINDOWPOS_CENTERED, y = SDL_WINDOWPOS_CENTERED;
     int w = WINDOWED_W, h = WINDOWED_H;
     int display = -1; /* SDL display index of the glasses; -1 when windowed */
+    int refresh_hz = 0; /* 0 = unknown: pace at 60 Hz */
     Uint32 wflags = SDL_WINDOW_OPENGL;
     if (!cfg.windowed) {
         xrd_output_info outs[MAX_OUTPUTS];
@@ -169,6 +170,7 @@ int main(int argc, char **argv)
             goto out;
         }
         display = idx; /* xrd_output_enumerate fills outs[] by SDL display index */
+        refresh_hz = outs[idx].refresh_hz;
         x = outs[idx].x;
         y = outs[idx].y;
         w = outs[idx].w;
@@ -221,6 +223,10 @@ int main(int argc, char **argv)
     xrd_controls_init(&ctl, cfg.zoom, cfg.layout);
     const bool mouse_look = strcmp(pose->name, "null") == 0;
     const float eye_aspect = (out_w / 2.0f) / (float)out_h;
+    /* If the swap does not wait for vsync (no swap interval, or the driver
+     * ignores it), the loop is paced to this period after the swap. */
+    const uint64_t period_ns = xrd_refresh_period_ns(refresh_hz);
+    uint64_t prev_swap_ns = 0; /* after the previous swap and any pacing sleep */
 
     bool quit = false, hwdec_checked = false;
     while (!quit) {
@@ -311,11 +317,19 @@ int main(int argc, char **argv)
             }
         }
 
-        xrd_timing_frame(timing, pose_sample_ns, xrd_now_ns(), xrd_tracker_last_pose_ns(trk));
+        /* Nothing between the timestamp and the swap; the log write follows. */
+        uint64_t pre_swap_ns = xrd_now_ns();
         SDL_GL_SwapWindow(win);
         xrd_player_report_swap(p);
+        if (tex) /* timing starts with the first video frame, like --frames */
+            xrd_timing_frame(timing, pose_sample_ns, pre_swap_ns, xrd_tracker_last_pose_ns(trk));
         if (last)
             quit = done = true;
+
+        uint64_t now = xrd_now_ns();
+        uint64_t pace = xrd_pace_sleep_ns(prev_swap_ns, now, period_ns);
+        xrd_sleep_ns(pace);
+        prev_swap_ns = now + pace;
     }
 
     if (cfg.frames > 0 && presented < cfg.frames && !done) {
