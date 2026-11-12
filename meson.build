@@ -9,6 +9,7 @@ threads_dep = dependency('threads')
 epoxy_dep = dependency('epoxy')
 egl_dep = dependency('egl')
 sdl2_dep = dependency('sdl2')
+mpv_dep = dependency('mpv')
 py = find_program('python3')
 
 shaders_gen = custom_target('shaders_gen',
@@ -30,6 +31,7 @@ core_sources = files(
   'src/track/tracker.c',
   'src/render/renderer_gl.c',
   'src/display/output.c',
+  'src/video/player_mpv.c',
 )
 
 # Test names: each entry NAME builds tests/test_NAME.c into test_NAME.
@@ -42,18 +44,31 @@ test_names = [
   'tracker',
   'render',
   'output',
+  'player',
 ]
 
 inc = include_directories('src')
 
 xrdcore = static_library('xrdcore', core_sources, shaders_gen,
   include_directories : inc,
-  dependencies : [m_dep, threads_dep, epoxy_dep, sdl2_dep])
+  dependencies : [m_dep, threads_dep, epoxy_dep, sdl2_dep, mpv_dep])
 
 foreach t : test_names
   exe = executable('test_' + t, 'tests/test_' + t + '.c',
     include_directories : inc,
     link_with : xrdcore,
-    dependencies : [cmocka_dep, m_dep, threads_dep, epoxy_dep, egl_dep, sdl2_dep])
+    dependencies : [cmocka_dep, m_dep, threads_dep, epoxy_dep, egl_dep, sdl2_dep, mpv_dep])
   test(t, exe, env : ['LIBGL_ALWAYS_SOFTWARE=1', 'EGL_PLATFORM=surfaceless'])
 endforeach
+
+xrdome_exe = executable('xrdome', 'src/main.c',
+  include_directories : inc,
+  link_with : xrdcore,
+  dependencies : [m_dep, threads_dep, epoxy_dep, sdl2_dep, mpv_dep],
+  install : true)
+
+# Desktop smoke test under Xvfb; skipped (77) without xvfb-run or ffmpeg.
+test('smoke', find_program('tests/smoke_player.sh'),
+  args : [xrdome_exe, files('tools/make_pattern.sh')],
+  is_parallel : false,
+  timeout : 300)

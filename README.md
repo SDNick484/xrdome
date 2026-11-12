@@ -2,11 +2,38 @@
 
 A Linux player for VR180 video on XR glasses (Viture Pro XR, XREAL Air 2 Pro) with head tracking.
 
-Status: the hardware-free core modules (math, projection, config, pose backends,
-tracker, renderer, output selection) are implemented with tests; the player and
-main loop are not yet. See
-`docs/superpowers/specs/2026-11-11-xrdome-design.md` and
+Status: plays a side-by-side VR180 file on the glasses at a fixed orientation
+(looking straight ahead). Head tracking and playback controls are not wired in
+yet. See `docs/superpowers/specs/2026-11-11-xrdome-design.md` and
 `docs/superpowers/plans/2026-11-11-xrdome.md`.
+
+## Build and run
+
+Dependencies: `media-video/mpv` (with `libmpv` and `vaapi` USE flags), `media-libs/libsdl2`
+(with `X` and `opengl`), `media-libs/libepoxy`, `media-libs/mesa` (EGL), `dev-util/cmocka` and
+`dev-build/meson`. The test pattern and the smoke test also need `media-video/ffmpeg`
+(`x264`/`x265`) and `x11-misc/xvfb-run`.
+
+```sh
+meson setup build
+meson compile -C build
+meson test -C build
+```
+
+Make a test pattern (left eye red grid, right eye blue grid, yellow marks at the top):
+
+```sh
+tools/make_pattern.sh            # pattern_sbs.mp4, 60 s, libx265
+```
+
+Play it in a 1280x360 desktop window, without glasses or head tracking:
+
+```sh
+./build/xrdome --windowed --pose null pattern_sbs.mp4
+```
+
+On the glasses (switched to SBS, 3840x1080): `./build/xrdome --pose null file.mp4`.
+`Q` or closing the window quits. stderr shows `hwdec: vaapi` when VA-API decoding is active.
 
 ## System setup
 

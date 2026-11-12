@@ -54,6 +54,8 @@ static void defaults_match_spec(void **state)
     assert_false(c.require_hwdec);
     assert_false(c.windowed);
     assert_string_equal(c.timing_log, "");
+    assert_int_equal(c.frames, 0);
+    assert_string_equal(c.dump_frame, "");
 }
 
 static void ini_absent_is_ok(void **state)
@@ -406,6 +408,102 @@ static void load_bad_ini_reports_key(void **state)
     assert_non_null(strstr(err, "zoom"));
 }
 
+static void default_path_prefers_xdg(void **state)
+{
+    (void)state;
+    char buf[256];
+    setenv("XDG_CONFIG_HOME", "/xdg/conf", 1);
+    setenv("HOME", "/home/nick", 1);
+    assert_int_equal(xrd_config_default_path(buf, sizeof buf), 0);
+    assert_string_equal(buf, "/xdg/conf/xrdome/config.ini");
+}
+
+static void default_path_falls_back_to_home(void **state)
+{
+    (void)state;
+    char buf[256];
+    setenv("HOME", "/home/nick", 1);
+    unsetenv("XDG_CONFIG_HOME");
+    assert_int_equal(xrd_config_default_path(buf, sizeof buf), 0);
+    assert_string_equal(buf, "/home/nick/.config/xrdome/config.ini");
+
+    /* empty or relative XDG_CONFIG_HOME is ignored (XDG base dir spec) */
+    setenv("XDG_CONFIG_HOME", "", 1);
+    assert_int_equal(xrd_config_default_path(buf, sizeof buf), 0);
+    assert_string_equal(buf, "/home/nick/.config/xrdome/config.ini");
+    setenv("XDG_CONFIG_HOME", "rel/conf", 1);
+    assert_int_equal(xrd_config_default_path(buf, sizeof buf), 0);
+    assert_string_equal(buf, "/home/nick/.config/xrdome/config.ini");
+}
+
+static void default_path_fails_without_env_or_space(void **state)
+{
+    (void)state;
+    char buf[256];
+    unsetenv("XDG_CONFIG_HOME");
+    unsetenv("HOME");
+    assert_int_equal(xrd_config_default_path(buf, sizeof buf), -1);
+    setenv("HOME", "", 1);
+    assert_int_equal(xrd_config_default_path(buf, sizeof buf), -1);
+
+    setenv("HOME", "/home/nick", 1);
+    char small[16];
+    assert_int_equal(xrd_config_default_path(small, sizeof small), -1);
+    /* exactly fits: strlen("/home/nick/.config/xrdome/config.ini") == 36 */
+    char exact[37];
+    assert_int_equal(xrd_config_default_path(exact, sizeof exact), 0);
+    assert_string_equal(exact, "/home/nick/.config/xrdome/config.ini");
+    char one_short[36];
+    assert_int_equal(xrd_config_default_path(one_short, sizeof one_short), -1);
+}
+
+static void args_dev_frames_and_dump(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    xrd_config c;
+    xrd_config_defaults(&c);
+    assert_int_equal(c.frames, 0);
+    assert_string_equal(c.dump_frame, "");
+
+    char *a[] = {"xrdome", "--frames", "30", "--dump-frame", "/tmp/out dir/f.ppm", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 6, a, err, sizeof err), 0);
+    assert_int_equal(c.frames, 30);
+    assert_string_equal(c.dump_frame, "/tmp/out dir/f.ppm");
+
+    xrd_config_defaults(&c);
+    char *f[] = {"xrdome", "--frames", "1", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, f, err, sizeof err), 0);
+    assert_int_equal(c.frames, 1);
+}
+
+static void args_dev_frames_bad_values(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    xrd_config c;
+    const char *bad[] = {"0", "-3", "abc", "12x", "", "99999999999"};
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        xrd_config_defaults(&c);
+        err[0] = '\0';
+        char *a[] = {"xrdome", "--frames", (char *)bad[i], "a.mp4", NULL};
+        assert_int_equal(xrd_config_parse_args(&c, 4, a, err, sizeof err), -1);
+        assert_non_null(strstr(err, "--frames"));
+    }
+}
+
+static void args_dev_dump_requires_frames(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    xrd_config c;
+    xrd_config_defaults(&c);
+    char *a[] = {"xrdome", "--dump-frame", "out.ppm", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, a, err, sizeof err), -1);
+    assert_non_null(strstr(err, "--dump-frame"));
+    assert_non_null(strstr(err, "--frames"));
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -434,6 +532,12 @@ int main(void)
         cmocka_unit_test(load_builtin_keeps_fov_when_ini_omits_it),
         cmocka_unit_test(load_null_ini_and_builtin_fov),
         cmocka_unit_test(load_bad_ini_reports_key),
+        cmocka_unit_test(default_path_prefers_xdg),
+        cmocka_unit_test(default_path_falls_back_to_home),
+        cmocka_unit_test(default_path_fails_without_env_or_space),
+        cmocka_unit_test(args_dev_frames_and_dump),
+        cmocka_unit_test(args_dev_frames_bad_values),
+        cmocka_unit_test(args_dev_dump_requires_frames),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

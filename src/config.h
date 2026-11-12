@@ -17,9 +17,19 @@ typedef struct {
     bool require_hwdec;
     bool windowed;         /* development: skip the 3840x1080 check, 1280x360 window */
     char timing_log[4096]; /* empty = off */
+    /* development only (smoke test), not documented: */
+    int frames;            /* --frames N: exit 0 after N presented frames
+                              once a video frame has been rendered; 0 = off */
+    char dump_frame[4096]; /* --dump-frame PATH: PPM of the last frame; needs --frames */
 } xrd_config;
 
 void xrd_config_defaults(xrd_config *c);
+
+/* Writes $XDG_CONFIG_HOME/xrdome/config.ini into buf, or
+ * $HOME/.config/xrdome/config.ini when XDG_CONFIG_HOME is unset, empty or not
+ * absolute. Returns 0, or -1 when HOME is also unset or empty, or the path
+ * does not fit in len bytes. */
+int xrd_config_default_path(char *buf, size_t len);
 
 /* Reads [general] and [device.<c->device>] from the ini at path.
  * Returns 0 on success or when the file does not exist, -1 on a bad value

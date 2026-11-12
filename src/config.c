@@ -5,6 +5,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <getopt.h>
+#include <limits.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -106,6 +107,20 @@ void xrd_config_defaults(xrd_config *c)
     c->fov_diag = 43.0f;
     c->zoom = 1.0f;
     c->layout = XRD_LAYOUT_SBS_LR;
+}
+
+int xrd_config_default_path(char *buf, size_t len)
+{
+    const char *xdg = getenv("XDG_CONFIG_HOME");
+    const char *home = getenv("HOME");
+    int n;
+    if (xdg && xdg[0] == '/')
+        n = snprintf(buf, len, "%s/xrdome/config.ini", xdg);
+    else if (home && home[0] != '\0')
+        n = snprintf(buf, len, "%s/.config/xrdome/config.ini", home);
+    else
+        return -1;
+    return (n < 0 || (size_t)n >= len) ? -1 : 0;
 }
 
 static char *trim(char *s)
@@ -215,7 +230,7 @@ int xrd_config_load_ini(xrd_config *c, const char *path, char *err, size_t errle
 int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_t errlen)
 {
     enum { OPT_PROJ = 256, OPT_LAYOUT, OPT_POSE, OPT_OUTPUT, OPT_DEVICE, OPT_ZOOM,
-           OPT_HWDEC, OPT_WINDOWED, OPT_TIMING };
+           OPT_HWDEC, OPT_WINDOWED, OPT_TIMING, OPT_FRAMES, OPT_DUMP };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
         {"layout", required_argument, NULL, OPT_LAYOUT},
@@ -226,6 +241,8 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"require-hwdec", no_argument, NULL, OPT_HWDEC},
         {"windowed", no_argument, NULL, OPT_WINDOWED},
         {"timing-log", required_argument, NULL, OPT_TIMING},
+        {"frames", required_argument, NULL, OPT_FRAMES},
+        {"dump-frame", required_argument, NULL, OPT_DUMP},
         {NULL, 0, NULL, 0},
     };
 
@@ -267,6 +284,20 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         case OPT_TIMING:
             rc = set_string("--timing-log", c->timing_log, sizeof c->timing_log, optarg, err, errlen);
             break;
+        case OPT_FRAMES: {
+            char *end;
+            errno = 0;
+            long v = strtol(optarg, &end, 10);
+            if (end == optarg || *end != '\0' || errno == ERANGE || v < 1 || v > INT_MAX) {
+                set_err(err, errlen, "--frames: '%s' is not a positive integer", optarg);
+                rc = -1;
+            } else
+                c->frames = (int)v;
+            break;
+        }
+        case OPT_DUMP:
+            rc = set_string("--dump-frame", c->dump_frame, sizeof c->dump_frame, optarg, err, errlen);
+            break;
         case ':':
             set_err(err, errlen, "option '%s' requires an argument", argv[optind - 1]);
             rc = -1;
@@ -280,6 +311,10 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
             return -1;
     }
 
+    if (c->dump_frame[0] && c->frames == 0) {
+        set_err(err, errlen, "--dump-frame needs --frames");
+        return -1;
+    }
     if (optind >= argc) {
         set_err(err, errlen, "missing input file");
         return -1;
