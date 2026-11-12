@@ -17,6 +17,7 @@ core_sources = files(
   'src/pose/pose.c',
   'src/pose/pose_null.c',
   'src/pose/pose_udp_opentrack.c',
+  'src/track/tracker.c',
 )
 
 # Test names: each entry NAME builds tests/test_NAME.c into test_NAME.
@@ -26,6 +27,7 @@ test_names = [
   'config',
   'opentrack',
   'pose_udp',
+  'tracker',
 ]
 
 inc = include_directories('src')
