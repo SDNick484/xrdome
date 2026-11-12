@@ -208,8 +208,8 @@ help:
   blurriest way to enlarge. Catmull-Rom keeps edges steeper, at the cost of a faint halo next to
   high-contrast edges. Press `F` on a still frame to compare.
 
-Bicubic reads 9 texture samples per output pixel instead of 1. Its cost on the owner's GPU has
-not been measured. To measure it, make two separate runs of the same file, one with
+Bicubic reads 9 texture samples per output pixel instead of 1. On the owner's Radeon it made
+no measurable difference (see "Performance notes"). To measure it yourself, make two separate runs of the same file, one with
 `--filter bilinear` and one with `--filter bicubic`, each with its own `--timing-log`, and
 compare the logs; toggling `F` live mixes both filters in one log. `--mpv-log v` and
 `--mpv-log debug` are for diagnosis only: they print a lot and affect timing, so leave them off
@@ -284,6 +284,26 @@ LD_LIBRARY_PATH=/path/to/xr_driver_lib /path/to/xr_driver/bin/xrDriver
 The log is `~/.local/state/xr_driver/driver.log`.
 
 Verify: `tcpdump -n -i lo udp port 4242 -c 20` shows `UDP, length 52`, and `tools/ot_dump.py` prints angles.
+
+## Performance notes
+
+Measured 2026-11-12 on a ThinkPad P14s Gen 6 AMD (integrated Radeon, Mesa, Xorg/MATE) driving
+Viture Pro XR glasses at 3840x1080 60 Hz, with a 4320x2160 10-bit AV1 60 fps file, VA-API decode,
+10-bit video texture and dithering on:
+
+| Settings | Frames | Swap intervals over 20 ms |
+|---|---|---|
+| mpv default render path (before `--mpv-profile fast` became the default), 8-bit texture | 456 | 251 (55%) |
+| Defaults: profile `fast`, bicubic (filter toggled during the run) | 15345 | 96 (0.6%) |
+| `--filter bilinear` | 4547 | 29 (0.6%) |
+| `--mpv-opt gpu-dumb-mode=yes` | 2482 | 13 (0.5%) |
+
+- mpv's `fast` profile is what fixed the frame rate. Bicubic sampling and mpv's dumb mode make no
+  measurable difference on top of it, so the defaults stay `fast` and `bicubic`.
+- Median time from pose sample to swap call: 0.003 ms. The swap, not the draw, is where the loop
+  waits for vsync on this driver, so `--sync-after-swap` is not needed here.
+- What the remaining 0.5 to 0.6% of late frames are has not been analysed.
+- Decode ceilings on this GPU: 7680x2880 AV1 at 47 fps, the same frame size in HEVC at 132 fps.
 
 ## Tracking notes
 

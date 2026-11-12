@@ -338,3 +338,7 @@ The owner's test file is 10-bit AV1 (`yuv420p10le`). libmpv rendered into a `GL_
 After the first frame, next to `hwdec:` and `mpv: profile=`, stderr shows `video texture: rgb10_a2|rgba8 dither=on|off`. `--fbo-format rgba8 --dither off` reproduces the previous output.
 
 Also from the Task 13 review: the `zoom:`, `convergence:` and `filter:` lines print only when the value changes.
+
+## Addendum 2026-11-12: measured results
+
+On the owner's hardware (integrated Radeon, Viture Pro XR at 3840x1080 60 Hz, 4320x2160 10-bit AV1 60 fps): with mpv's default render path 55% of swap intervals exceeded 20 ms; with profile `fast` 0.6% did, and neither bicubic sampling nor `gpu-dumb-mode` changed that measurably. The defaults therefore stay `fast` and `bicubic`. The median time from pose sample to swap call is 0.003 ms, which retires risk 5 ("pose path latency is unmeasured") for the player's own loop; the driver's internal latency and the display's are still not measured. Head tracking, seeking and audio were confirmed working by the owner. README "Performance notes" has the table.
