@@ -15,7 +15,6 @@ void xrd_controls_init(xrd_controls *c, float zoom, xrd_layout layout)
 void xrd_controls_init_display(xrd_controls *c, float convergence_deg, xrd_filter filter)
 {
     c->convergence_deg = convergence_deg;
-    c->convergence_start = convergence_deg;
     c->filter = filter;
 }
 
@@ -52,37 +51,6 @@ void xrd_controls_cycle_layout(xrd_controls *c)
 void xrd_controls_toggle_swap(xrd_controls *c)
 {
     c->swap_eyes = !c->swap_eyes;
-}
-
-/* Adds delta to the convergence and clamps it. A result within float error
- * of a tenth snaps to it, so repeated 0.1 steps print cleanly and return to
- * exactly 0 (never -0). */
-static void convergence_add(xrd_controls *c, float delta)
-{
-    float v = c->convergence_deg + delta;
-    float tenth = roundf(v * 10.0f) / 10.0f;
-    if (fabsf(v - tenth) < 1e-4f)
-        v = tenth;
-    if (v > XRD_CONVERGENCE_MAX)
-        v = XRD_CONVERGENCE_MAX;
-    if (v < -XRD_CONVERGENCE_MAX)
-        v = -XRD_CONVERGENCE_MAX;
-    c->convergence_deg = v == 0.0f ? 0.0f : v;
-}
-
-void xrd_controls_convergence_inc(xrd_controls *c)
-{
-    convergence_add(c, XRD_CONVERGENCE_STEP);
-}
-
-void xrd_controls_convergence_dec(xrd_controls *c)
-{
-    convergence_add(c, -XRD_CONVERGENCE_STEP);
-}
-
-void xrd_controls_convergence_reset(xrd_controls *c)
-{
-    c->convergence_deg = c->convergence_start;
 }
 
 void xrd_controls_toggle_filter(xrd_controls *c)

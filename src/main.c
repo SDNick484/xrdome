@@ -63,15 +63,13 @@ static int dump_ppm(const char *path, int w, int h)
     return fclose(f) == 0 ? 0 : -1;
 }
 
-/* Prints the zoom, convergence and filter lines for the values that differ
+/* Prints the zoom and filter lines for the values that differ
  * between before and after (a key press at a limit, or a reset to the value
  * already set, prints nothing). */
 static void report_display_changes(const xrd_controls *before, const xrd_controls *after)
 {
     if (after->zoom != before->zoom)
         fprintf(stderr, "zoom: %.2f\n", (double)after->zoom);
-    if (after->convergence_deg != before->convergence_deg)
-        fprintf(stderr, "convergence: %.1f deg\n", (double)after->convergence_deg);
     if (after->filter != before->filter)
         fprintf(stderr, "filter: %s\n",
                 after->filter == XRD_FILTER_BICUBIC ? "bicubic" : "bilinear");
@@ -104,16 +102,6 @@ static bool handle_key_action(const SDL_KeyboardEvent *k, xrd_controls *ctl, xrd
         break;
     case SDLK_RIGHTBRACKET:
         xrd_controls_zoom_in(ctl);
-        break;
-    case SDLK_COMMA:
-        xrd_controls_convergence_dec(ctl);
-        break;
-    case SDLK_PERIOD:
-        xrd_controls_convergence_inc(ctl);
-        break;
-    case SDLK_SLASH:
-        if (!k->repeat)
-            xrd_controls_convergence_reset(ctl);
         break;
     case SDLK_f:
         if (!k->repeat)
