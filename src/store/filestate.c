@@ -443,3 +443,113 @@ int xrd_filestate_delete(const char *dir, const char *key)
         return 1;
     return (errno == ENOENT || errno == ENOTDIR) ? 0 : -1;
 }
+
+/* ---- apply, collect, equal, describe ------------------------------------ */
+
+static void copy_field(unsigned bit, const xrd_file_settings *from, xrd_file_settings *to)
+{
+    switch (bit) {
+    case XRD_SET_ZOOM: to->zoom = from->zoom; break;
+    case XRD_SET_LAYOUT: to->layout = from->layout; break;
+    case XRD_SET_SWAP: to->swap = from->swap; break;
+    case XRD_SET_CONTENT_FOV:
+        to->content_hfov = from->content_hfov;
+        to->content_vfov = from->content_vfov;
+        break;
+    case XRD_SET_CONVERGENCE: to->convergence = from->convergence; break;
+    }
+}
+
+/* True when field `bit` differs between a and b beyond its tolerance. */
+static bool field_differs(unsigned bit, const xrd_file_settings *a, const xrd_file_settings *b)
+{
+    switch (bit) {
+    case XRD_SET_ZOOM: return fabsf(a->zoom - b->zoom) > XRD_FS_TOL_ZOOM;
+    case XRD_SET_LAYOUT: return a->layout != b->layout;
+    case XRD_SET_SWAP: return a->swap != b->swap;
+    case XRD_SET_CONTENT_FOV:
+        return fabsf(a->content_hfov - b->content_hfov) > XRD_FS_TOL_FOV
+            || fabsf(a->content_vfov - b->content_vfov) > XRD_FS_TOL_FOV;
+    case XRD_SET_CONVERGENCE:
+        return fabsf(a->convergence - b->convergence) > XRD_FS_TOL_CONVERGENCE;
+    }
+    return false;
+}
+
+unsigned xrd_filestate_apply(const xrd_filestate *rec, unsigned explicit_flags,
+                             xrd_file_settings *s)
+{
+    unsigned applied = 0;
+    for (size_t k = 0; k < N_SETTINGS; k++) {
+        unsigned bit = k_settings[k].bit;
+        if ((rec->set & bit) && !(explicit_flags & bit)) {
+            copy_field(bit, &rec->v, s);
+            applied |= bit;
+        }
+    }
+    return applied;
+}
+
+void xrd_filestate_collect(const xrd_filestate *loaded, unsigned explicit_flags,
+                           const xrd_file_settings *start, const xrd_file_settings *end,
+                           xrd_filestate *out)
+{
+    memset(out, 0, sizeof *out);
+    for (size_t k = 0; k < N_SETTINGS; k++) {
+        unsigned bit = k_settings[k].bit;
+        if ((loaded && (loaded->set & bit)) || (explicit_flags & bit)
+            || field_differs(bit, start, end)) {
+            out->set |= bit;
+            copy_field(bit, end, &out->v);
+        }
+    }
+}
+
+bool xrd_filestate_equal(const xrd_filestate *a, const xrd_filestate *b)
+{
+    if (a->set != b->set)
+        return false;
+    for (size_t k = 0; k < N_SETTINGS; k++) {
+        unsigned bit = k_settings[k].bit;
+        if ((a->set & bit) && field_differs(bit, &a->v, &b->v))
+            return false;
+    }
+    return true;
+}
+
+int xrd_filestate_describe(const xrd_filestate *st, unsigned mask, char *buf, size_t len)
+{
+    sink s = { buf, len, 0 };
+    unsigned want = st->set & mask;
+    const char *sep = "";
+
+    if (len > 0)
+        buf[0] = '\0';
+    if (want & XRD_SET_ZOOM) {
+        put(&s, "%szoom=%.2f", sep, (double)st->v.zoom);
+        sep = " ";
+    }
+    if (want & XRD_SET_LAYOUT) {
+        const char *name = xrd_value_layout_name(st->v.layout);
+        put(&s, "%slayout=%s", sep, name ? name : "?");
+        sep = " ";
+    }
+    if (want & XRD_SET_SWAP) {
+        put(&s, "%sswap=%s", sep, st->v.swap ? "yes" : "no");
+        sep = " ";
+    }
+    if (want & XRD_SET_CONTENT_FOV) {
+        put(&s, "%scontent-fov=%gx%g", sep, (double)st->v.content_hfov,
+            (double)st->v.content_vfov);
+        sep = " ";
+    }
+    if (want & XRD_SET_CONVERGENCE)
+        put(&s, "%sconvergence=%.1f", sep, (double)st->v.convergence);
+
+    if (s.pos >= len || s.pos > (size_t)INT_MAX) {
+        if (len > 0)
+            buf[0] = '\0';
+        return -1;
+    }
+    return (int)s.pos;
+}

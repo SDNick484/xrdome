@@ -506,6 +506,241 @@ static void load_directory_is_bad(void **state)
     assert_true(err[0] != '\0');
 }
 
+/* ---- apply, collect, equal, describe ------------------------------------ */
+
+static xrd_file_settings defaults(void)
+{
+    xrd_file_settings s = { 1.0f, XRD_LAYOUT_SBS_LR, false, 180.0f, 180.0f, 0.0f };
+    return s;
+}
+
+static xrd_filestate zoom_fov_rec(void)
+{
+    xrd_filestate r;
+    memset(&r, 0, sizeof r);
+    r.set = XRD_SET_ZOOM | XRD_SET_CONTENT_FOV;
+    r.v.zoom = 0.75f;
+    r.v.content_hfov = 120.0f;
+    r.v.content_vfov = 90.0f;
+    return r;
+}
+
+static void apply_record_over_defaults(void **state)
+{
+    (void)state;
+    xrd_filestate rec = zoom_fov_rec();
+    xrd_file_settings s = defaults();
+    assert_int_equal(xrd_filestate_apply(&rec, 0, &s), XRD_SET_ZOOM | XRD_SET_CONTENT_FOV);
+    assert_float_equal(s.zoom, 0.75f, 0.0f);
+    assert_float_equal(s.content_hfov, 120.0f, 0.0f);
+    assert_float_equal(s.content_vfov, 90.0f, 0.0f);
+    assert_int_equal(s.layout, XRD_LAYOUT_SBS_LR);
+    assert_false(s.swap);
+    assert_float_equal(s.convergence, 0.0f, 0.0f);
+}
+
+static void apply_flag_wins(void **state)
+{
+    (void)state;
+    xrd_filestate rec = zoom_fov_rec();
+    xrd_file_settings s = defaults();
+    s.zoom = 2.0f;
+    assert_int_equal(xrd_filestate_apply(&rec, XRD_SET_ZOOM, &s), XRD_SET_CONTENT_FOV);
+    assert_float_equal(s.zoom, 2.0f, 0.0f);
+    assert_float_equal(s.content_hfov, 120.0f, 0.0f);
+}
+
+static void apply_each_field(void **state)
+{
+    (void)state;
+    xrd_filestate rec;
+    xrd_file_settings s;
+
+    memset(&rec, 0, sizeof rec);
+    rec.v.zoom = 0.5f; rec.v.layout = XRD_LAYOUT_MONO; rec.v.swap = true;
+    rec.v.content_hfov = 100.0f; rec.v.content_vfov = 60.0f; rec.v.convergence = 1.5f;
+
+    rec.set = XRD_SET_ZOOM; s = defaults();
+    assert_int_equal(xrd_filestate_apply(&rec, 0, &s), XRD_SET_ZOOM);
+    assert_float_equal(s.zoom, 0.5f, 0.0f);
+    assert_int_equal(s.layout, XRD_LAYOUT_SBS_LR);
+    assert_false(s.swap);
+    assert_float_equal(s.content_hfov, 180.0f, 0.0f);
+    assert_float_equal(s.convergence, 0.0f, 0.0f);
+
+    rec.set = XRD_SET_LAYOUT; s = defaults();
+    assert_int_equal(xrd_filestate_apply(&rec, 0, &s), XRD_SET_LAYOUT);
+    assert_int_equal(s.layout, XRD_LAYOUT_MONO);
+    assert_float_equal(s.zoom, 1.0f, 0.0f);
+    assert_false(s.swap);
+
+    rec.set = XRD_SET_SWAP; s = defaults();
+    assert_int_equal(xrd_filestate_apply(&rec, 0, &s), XRD_SET_SWAP);
+    assert_true(s.swap);
+    assert_int_equal(s.layout, XRD_LAYOUT_SBS_LR);
+
+    rec.set = XRD_SET_CONTENT_FOV; s = defaults();
+    assert_int_equal(xrd_filestate_apply(&rec, 0, &s), XRD_SET_CONTENT_FOV);
+    assert_float_equal(s.content_hfov, 100.0f, 0.0f);
+    assert_float_equal(s.content_vfov, 60.0f, 0.0f);
+    assert_float_equal(s.zoom, 1.0f, 0.0f);
+
+    rec.set = XRD_SET_CONVERGENCE; s = defaults();
+    assert_int_equal(xrd_filestate_apply(&rec, 0, &s), XRD_SET_CONVERGENCE);
+    assert_float_equal(s.convergence, 1.5f, 0.0f);
+    assert_float_equal(s.content_hfov, 180.0f, 0.0f);
+}
+
+static void collect_rule1_loaded(void **state)
+{
+    (void)state;
+    xrd_filestate loaded;
+    memset(&loaded, 0, sizeof loaded);
+    loaded.set = XRD_SET_ZOOM;
+    loaded.v.zoom = 0.75f;
+    xrd_file_settings start = defaults(), end;
+    start.zoom = 0.75f;
+    end = start;
+    xrd_filestate out;
+    xrd_filestate_collect(&loaded, 0, &start, &end, &out);
+    assert_int_equal(out.set, XRD_SET_ZOOM);
+    assert_float_equal(out.v.zoom, 0.75f, 0.0f);
+}
+
+static void collect_rule2_flag(void **state)
+{
+    (void)state;
+    xrd_file_settings start = defaults(), end = defaults();
+    start.content_hfov = start.content_vfov = 90.0f;
+    end = start;
+    xrd_filestate out;
+    xrd_filestate_collect(NULL, XRD_SET_CONTENT_FOV, &start, &end, &out);
+    assert_int_equal(out.set, XRD_SET_CONTENT_FOV);
+    assert_float_equal(out.v.content_hfov, 90.0f, 0.0f);
+    assert_float_equal(out.v.content_vfov, 90.0f, 0.0f);
+}
+
+static void collect_rule3_changed(void **state)
+{
+    (void)state;
+    xrd_file_settings start = defaults(), end = start;
+    xrd_filestate out;
+
+    end.zoom = start.zoom / 1.1f;
+    xrd_filestate_collect(NULL, 0, &start, &end, &out);
+    assert_int_equal(out.set, XRD_SET_ZOOM);
+
+    end = start;
+    end.layout = XRD_LAYOUT_SBS_RL;
+    xrd_filestate_collect(NULL, 0, &start, &end, &out);
+    assert_int_equal(out.set, XRD_SET_LAYOUT);
+    assert_int_equal(out.v.layout, XRD_LAYOUT_SBS_RL);
+
+    end = start;
+    end.swap = !start.swap;
+    xrd_filestate_collect(NULL, 0, &start, &end, &out);
+    assert_int_equal(out.set, XRD_SET_SWAP);
+    assert_true(out.v.swap);
+}
+
+static void collect_zoom_out_and_back(void **state)
+{
+    (void)state;
+    xrd_file_settings start = defaults(), end = start;
+    float z = 1.0f;
+    z /= 1.1f;
+    z *= 1.1f;
+    end.zoom = z;
+    xrd_filestate out;
+    xrd_filestate_collect(NULL, 0, &start, &end, &out);
+    assert_int_equal(out.set, 0);
+}
+
+static void collect_nothing(void **state)
+{
+    (void)state;
+    xrd_file_settings start = defaults(), end = start;
+    xrd_filestate out;
+    xrd_filestate_collect(NULL, 0, &start, &end, &out);
+    assert_int_equal(out.set, 0);
+}
+
+static void collect_values_from_end(void **state)
+{
+    (void)state;
+    xrd_filestate loaded;
+    memset(&loaded, 0, sizeof loaded);
+    loaded.set = XRD_SET_ZOOM;
+    loaded.v.zoom = 0.75f;
+    xrd_file_settings start = defaults(), end = defaults();
+    start.zoom = 0.75f;
+    end.zoom = 0.5f;
+    xrd_filestate out;
+    xrd_filestate_collect(&loaded, 0, &start, &end, &out);
+    assert_int_equal(out.set, XRD_SET_ZOOM);
+    assert_float_equal(out.v.zoom, 0.5f, 0.0f);
+}
+
+static void equal_tolerances(void **state)
+{
+    (void)state;
+    xrd_filestate a = zoom_fov_rec(), b = zoom_fov_rec();
+    assert_true(xrd_filestate_equal(&a, &b));
+    b.v.zoom = a.v.zoom + 0.0005f;
+    assert_true(xrd_filestate_equal(&a, &b));
+    b.v.zoom = a.v.zoom + 0.01f;
+    assert_false(xrd_filestate_equal(&a, &b));
+
+    b = a;
+    b.set |= XRD_SET_SWAP;
+    assert_false(xrd_filestate_equal(&a, &b));
+
+    b = a;
+    b.v.layout = XRD_LAYOUT_MONO;   /* not set, so ignored */
+    b.v.swap = true;
+    b.v.convergence = 3.0f;
+    assert_true(xrd_filestate_equal(&a, &b));
+}
+
+static void describe_formats(void **state)
+{
+    (void)state;
+    xrd_filestate st;
+    memset(&st, 0, sizeof st);
+    st.set = XRD_SET_ZOOM | XRD_SET_LAYOUT | XRD_SET_SWAP | XRD_SET_CONTENT_FOV
+           | XRD_SET_CONVERGENCE;
+    st.v.zoom = 0.75f; st.v.layout = XRD_LAYOUT_SBS_RL; st.v.swap = true;
+    st.v.content_hfov = 120.0f; st.v.content_vfov = 90.0f; st.v.convergence = 1.5f;
+
+    char buf[128];
+    int n = xrd_filestate_describe(&st, st.set, buf, sizeof buf);
+    assert_string_equal(buf, "zoom=0.75 layout=sbs-rl swap=yes content-fov=120x90 convergence=1.5");
+    assert_int_equal(n, (int)strlen(buf));
+
+    n = xrd_filestate_describe(&st, XRD_SET_CONTENT_FOV, buf, sizeof buf);
+    assert_string_equal(buf, "content-fov=120x90");
+    assert_int_equal(n, (int)strlen(buf));
+
+    st.v.swap = false;
+    xrd_filestate_describe(&st, XRD_SET_SWAP, buf, sizeof buf);
+    assert_string_equal(buf, "swap=no");
+
+    strcpy(buf, "junk");
+    assert_int_equal(xrd_filestate_describe(&st, 0, buf, sizeof buf), 0);
+    assert_string_equal(buf, "");
+}
+
+static void describe_too_small(void **state)
+{
+    (void)state;
+    xrd_filestate st;
+    memset(&st, 0, sizeof st);
+    st.set = XRD_SET_ZOOM;
+    st.v.zoom = 0.75f;
+    char buf[8];
+    assert_int_equal(xrd_filestate_describe(&st, st.set, buf, sizeof buf), -1);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -536,6 +771,18 @@ int main(void)
         cmocka_unit_test_setup_teardown(load_oversize, setup, teardown),
         cmocka_unit_test_setup_teardown(load_missing, setup, teardown),
         cmocka_unit_test_setup_teardown(load_directory_is_bad, setup, teardown),
+        cmocka_unit_test(apply_record_over_defaults),
+        cmocka_unit_test(apply_flag_wins),
+        cmocka_unit_test(apply_each_field),
+        cmocka_unit_test(collect_rule1_loaded),
+        cmocka_unit_test(collect_rule2_flag),
+        cmocka_unit_test(collect_rule3_changed),
+        cmocka_unit_test(collect_zoom_out_and_back),
+        cmocka_unit_test(collect_nothing),
+        cmocka_unit_test(collect_values_from_end),
+        cmocka_unit_test(equal_tolerances),
+        cmocka_unit_test(describe_formats),
+        cmocka_unit_test(describe_too_small),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

@@ -65,4 +65,27 @@ int xrd_filestate_save(const char *dir, const char *key, const xrd_filestate *st
 /* 1 deleted, 0 no such record, -1 error. */
 int xrd_filestate_delete(const char *dir, const char *key);
 
+/* ---- merging a record with flags and runtime changes ---------------------- */
+
+#define XRD_FS_TOL_ZOOM 0.001f
+#define XRD_FS_TOL_FOV 0.01f
+#define XRD_FS_TOL_CONVERGENCE 0.001f
+
+/* Copies each field that is set in rec and whose bit is NOT in explicit_flags
+ * into *s. Returns the bits copied. */
+unsigned xrd_filestate_apply(const xrd_filestate *rec, unsigned explicit_flags,
+                             xrd_file_settings *s);
+/* Spec 5.5. A field is set in *out when it is set in loaded (may be NULL), or
+ * its bit is in explicit_flags, or end differs from start beyond the
+ * tolerance. Values come from end. */
+void xrd_filestate_collect(const xrd_filestate *loaded, unsigned explicit_flags,
+                           const xrd_file_settings *start, const xrd_file_settings *end,
+                           xrd_filestate *out);
+/* Same set bits, and set fields equal within the tolerances. */
+bool xrd_filestate_equal(const xrd_filestate *a, const xrd_filestate *b);
+/* "zoom=0.75 layout=sbs-rl swap=yes content-fov=120x90 convergence=1.5" for the
+ * fields in (st->set & mask), in that order, space separated. Returns length,
+ * 0 for none, -1 if it does not fit. Formats: zoom %.2f, fov %gx%g, convergence %.1f. */
+int xrd_filestate_describe(const xrd_filestate *st, unsigned mask, char *buf, size_t len);
+
 #endif
