@@ -269,6 +269,15 @@ cat "$work/nosbs.err"
 check "non-SBS output exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
 grep -q "^xrdome: .*switch the glasses to SBS" "$work/nosbs.err"; check "non-SBS message" $?
 
+# 4. An ordinary flat video gets one warning that names it and suggests the mono flags.
+ffmpeg -v error -f lavfi -i testsrc=s=1920x1080:r=30 -t 2 -c:v libx264 -preset ultrafast \
+    -pix_fmt yuv420p "$work/flat.mp4"
+xvfb "$xrdome" --windowed --pose null --no-memory --frames 10 "$work/flat.mp4" >"$work/flat.err" 2>&1
+st=$?
+check "flat video exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+[ "$(grep -c '^xrdome: warning: video is 1920x1080, .*ordinary flat video.*--layout mono --content-fov 60x34' "$work/flat.err")" -eq 1 ]
+check "flat video: one warning naming flat video and the mono flags" $?
+
 # ---- per-file settings memory (M1 to M10) ----
 cp "$work/pattern.mp4" "$work/mem.mp4"
 rec() { ls "$XDG_STATE_HOME"/xrdome/files/*.ini 2>/dev/null; }
@@ -326,6 +335,9 @@ check "M5 dumped frame is the 180x180 picture" $?
 # M6. --no-memory neither reads nor writes.
 xvfb "$xrdome" --windowed --pose null --zoom 1.0 --content-fov 90x90 --frames 30 \
      "$work/moved.mp4" >"$work/m6a.err" 2>&1
+st=$?
+check "M6 setup run exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+grep -q '^settings: saved .*content-fov=90x90' "$work/m6a.err"; check "M6 setup run saved 90x90" $?
 xvfb "$xrdome" --no-memory --windowed --pose null --frames 30 --dump-frame "$work/nm.ppm" \
      "$work/moved.mp4" >"$work/m6.err" 2>&1
 st=$?
@@ -333,6 +345,17 @@ check "M6 exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
 ! grep -q '^settings:' "$work/m6.err"; check "M6 no settings line" $?
 check_frame "$work/nm.ppm"
 check "M6 dumped frame is the 180x180 picture" $?
+
+# M7b. a record from a newer xrdome is noted once, kept, and not overwritten.
+sed -i 's/^version = 1$/version = 2/' "$(rec)"
+xvfb "$xrdome" --windowed --pose null --frames 30 "$work/moved.mp4" >"$work/m7b.err" 2>&1
+st=$?
+check "M7b exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+[ "$(grep -c '^xrdome: note: settings record' "$work/m7b.err")" -eq 1 ]; check "M7b one note" $?
+! grep -q '^settings: restored' "$work/m7b.err"; check "M7b nothing restored" $?
+! grep -q '^settings: saved' "$work/m7b.err"; check "M7b nothing saved" $?
+grep -qx 'version = 2' "$(rec)"; check "M7b record still version 2" $?
+sed -i 's/^version = 2$/version = 1/' "$(rec)"
 
 # M7. a corrupt record is reported, kept, and not overwritten.
 echo "zoom = 99" >>"$(rec)"

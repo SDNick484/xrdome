@@ -319,7 +319,10 @@ static int ensure_fbo(xrd_player *p, int w, int h)
     if (!xrd_video_aspect_matches(w, h, p->layout, p->hfov_deg, p->vfov_deg) &&
         !p->warned_aspect) {
         fprintf(stderr, "xrdome: warning: video is %dx%d, which is not the aspect of a %s video "
-                        "covering %gx%g degrees (--content-fov); playing it that way anyway\n",
+                        "covering %gx%g degrees. If this is an ordinary flat video, xrdome has "
+                        "no flat projection yet; --layout mono --content-fov 60x34 shows it as "
+                        "an approximate curved screen. If it is VR video covering less than "
+                        "180 degrees, set --content-fov. Playing it as given.\n",
                 w, h, p->layout == XRD_LAYOUT_MONO ? "mono" : "side-by-side",
                 (double)p->hfov_deg, (double)p->vfov_deg);
         p->warned_aspect = true;
