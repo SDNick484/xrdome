@@ -282,8 +282,9 @@ one image. Each press prints the new zoom, and the value is remembered for the f
 [Per-file settings](#per-file-settings)).
 
 `--convergence DEG` (default 0, -5 to 5) is an experimental flag, not a recommended fix. It is a
-display-side adjustment, not a property of the file: it turns the left eye's view left and the
-right eye's view right by half the angle each, the same in every layout, and does not change
+display-side adjustment, not a property of the file: it shifts the left eye's picture left and the
+right eye's picture right (by turning each eye's view inwards by half the angle), the same in
+every layout, and does not change
 what the camera recorded. Positive values move everything in the scene further away, so your eyes
 must diverge more for distant content; negative values bring the scene nearer. On the Viture Pro
 XR (tested 2026-11-12), values up to 2 degrees made no significant difference, and 5 degrees put
