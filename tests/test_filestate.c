@@ -8,6 +8,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <errno.h>
 #include <unistd.h>
 #include <cmocka.h>
 
@@ -211,6 +215,297 @@ static void dir_selection(void **state)
     assert_int_equal(xrd_filestate_dir(d, 8), -1);
 }
 
+
+static xrd_filestate make_state(unsigned set)
+{
+    xrd_filestate st;
+    memset(&st, 0, sizeof st);
+    st.set = set;
+    st.v.zoom = 0.7513f;
+    st.v.layout = XRD_LAYOUT_SBS_RL;
+    st.v.swap = true;
+    st.v.content_hfov = 120.0f;
+    st.v.content_vfov = 90.0f;
+    st.v.convergence = 1.5f;
+    return st;
+}
+
+static void format_only_set_fields(void **state)
+{
+    (void)state;
+    xrd_filestate st = make_state(XRD_SET_ZOOM | XRD_SET_CONTENT_FOV);
+    char buf[512];
+    int n = xrd_filestate_format(&st, "/v/a.mp4", "2026-11-12", buf, sizeof buf);
+    const char *want =
+        "# xrdome per-file settings\nversion = 1\npath = /v/a.mp4\nsaved = 2026-11-12\n"
+        "proj = hequirect\nzoom = 0.7513\ncontent_fov = 120x90\n";
+    assert_string_equal(buf, want);
+    assert_int_equal(n, (int)strlen(want));
+}
+
+static void format_all_fields(void **state)
+{
+    (void)state;
+    xrd_filestate st = make_state(XRD_SET_ZOOM | XRD_SET_LAYOUT | XRD_SET_SWAP |
+                                  XRD_SET_CONTENT_FOV | XRD_SET_CONVERGENCE);
+    char buf[512];
+    assert_true(xrd_filestate_format(&st, "/v/a.mp4", "2026-11-12", buf, sizeof buf) > 0);
+    assert_string_equal(buf,
+        "# xrdome per-file settings\nversion = 1\npath = /v/a.mp4\nsaved = 2026-11-12\n"
+        "proj = hequirect\nzoom = 0.7513\nlayout = sbs-rl\nswap = yes\n"
+        "content_fov = 120x90\nconvergence = 1.50\n");
+}
+
+static void format_too_small(void **state)
+{
+    (void)state;
+    xrd_filestate st = make_state(XRD_SET_ZOOM);
+    char buf[16];
+    assert_int_equal(xrd_filestate_format(&st, "/v/a.mp4", "2026-11-12", buf, sizeof buf), -1);
+}
+
+static void round_trip(void **state)
+{
+    (void)state;
+    xrd_filestate st = make_state(XRD_SET_ZOOM | XRD_SET_LAYOUT | XRD_SET_SWAP |
+                                  XRD_SET_CONTENT_FOV | XRD_SET_CONVERGENCE);
+    char buf[512], err[128];
+    assert_true(xrd_filestate_format(&st, "/v/a.mp4", "2026-11-12", buf, sizeof buf) > 0);
+    xrd_filestate out;
+    memset(&out, 0, sizeof out);
+    assert_int_equal(xrd_filestate_parse(buf, &out, err, sizeof err), XRD_FS_OK);
+    assert_int_equal((int)out.set, (int)st.set);
+    assert_true(fabsf(out.v.zoom - st.v.zoom) < 1e-4f);
+    assert_int_equal(out.v.layout, st.v.layout);
+    assert_true(out.v.swap == st.v.swap);
+    assert_true(fabsf(out.v.content_hfov - st.v.content_hfov) < 1e-4f);
+    assert_true(fabsf(out.v.content_vfov - st.v.content_vfov) < 1e-4f);
+    assert_true(fabsf(out.v.convergence - st.v.convergence) < 1e-4f);
+}
+
+static void parse_minimal(void **state)
+{
+    (void)state;
+    xrd_filestate out;
+    char err[128];
+    assert_int_equal(xrd_filestate_parse("version = 1\n", &out, err, sizeof err), XRD_FS_OK);
+    assert_int_equal((int)out.set, 0);
+}
+
+static void parse_tolerates(void **state)
+{
+    (void)state;
+    xrd_filestate out;
+    char err[128];
+    const char *t = "# comment\r\n\r\nversion = 1   \r\nfuture_key = 7\r\n  zoom=0.5  \r\n"
+                    "path = ignored\nsaved = whenever\nproj = hequirect\n";
+    assert_int_equal(xrd_filestate_parse(t, &out, err, sizeof err), XRD_FS_OK);
+    assert_int_equal((int)out.set, (int)XRD_SET_ZOOM);
+    assert_true(fabsf(out.v.zoom - 0.5f) < 1e-6f);
+}
+
+static void parse_duplicate_last_wins(void **state)
+{
+    (void)state;
+    xrd_filestate out;
+    char err[128];
+    assert_int_equal(xrd_filestate_parse("version = 1\nzoom = 0.5\nzoom = 0.8\n", &out, err,
+                                         sizeof err), XRD_FS_OK);
+    assert_true(fabsf(out.v.zoom - 0.8f) < 1e-6f);
+}
+
+static void parse_bad(void **state)
+{
+    (void)state;
+    static const char *const cases[] = {
+        "zoom = 1\n", "version = x\n", "version = 1\nzoom = 9\n", "version = 1\nzoom = abc\n",
+        "version = 1\nlayout = tb\n", "version = 1\nswap = maybe\n",
+        "version = 1\ncontent_fov = 200x90\n", "version = 1\ncontent_fov = 120\n",
+        "version = 1\nconvergence = 6\n", "version = 1\njust some words\n",
+        "version = 0\n", "version = -1\n",
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        xrd_filestate out = make_state(XRD_SET_ZOOM);
+        char err[128] = "";
+        assert_int_equal(xrd_filestate_parse(cases[i], &out, err, sizeof err), XRD_FS_BAD);
+        assert_int_equal((int)out.set, 0);
+        assert_non_null(strstr(err, "line"));
+    }
+}
+
+static void parse_bad_reports_line(void **state)
+{
+    (void)state;
+    xrd_filestate out;
+    char err[128];
+    assert_int_equal(xrd_filestate_parse("version = 1\n\nzoom = 9\nlayout = tb\n", &out, err,
+                                         sizeof err), XRD_FS_BAD);
+    assert_non_null(strstr(err, "line 3"));
+}
+
+static void parse_unsupported(void **state)
+{
+    (void)state;
+    xrd_filestate out = make_state(XRD_SET_ZOOM);
+    char err[128];
+    assert_int_equal(xrd_filestate_parse("version = 2\n", &out, err, sizeof err),
+                     XRD_FS_UNSUPPORTED);
+    assert_int_equal((int)out.set, 0);
+    out = make_state(XRD_SET_ZOOM);
+    assert_int_equal(xrd_filestate_parse("version = 1\nproj = flat\n", &out, err, sizeof err),
+                     XRD_FS_UNSUPPORTED);
+    assert_int_equal((int)out.set, 0);
+    assert_int_equal(xrd_filestate_parse("version = 2\nzoom = abc\n", &out, err, sizeof err),
+                     XRD_FS_UNSUPPORTED);
+    assert_int_equal(xrd_filestate_parse("zoom = abc\nversion = 2\n", &out, err, sizeof err),
+                     XRD_FS_UNSUPPORTED);
+}
+
+static void path_label_cannot_inject(void **state)
+{
+    (void)state;
+    xrd_filestate st;
+    memset(&st, 0, sizeof st);
+    char buf[512], err[128];
+    assert_true(xrd_filestate_format(&st, "/v/a\nzoom = 4.mp4", "2026-11-12", buf, sizeof buf) > 0);
+    int nl = 0;
+    for (const char *p = buf; *p; p++)
+        nl += *p == '\n';
+    assert_int_equal(nl, 5); /* comment, version, path, saved, proj */
+    assert_non_null(strstr(buf, "path = /v/a?zoom = 4.mp4\n"));
+    xrd_filestate out;
+    assert_int_equal(xrd_filestate_parse(buf, &out, err, sizeof err), XRD_FS_OK);
+    assert_int_equal((int)out.set, 0);
+}
+
+static void record_path(void **state)
+{
+    (void)state;
+    char b[64];
+    assert_int_equal(xrd_filestate_record_path("/d", "12-ab", b, sizeof b), 0);
+    assert_string_equal(b, "/d/12-ab.ini");
+    assert_int_equal(xrd_filestate_record_path("/d", "12-ab", b, 8), -1);
+}
+
+static int count_entries(const char *dir, char *first, size_t firstlen)
+{
+    DIR *d = opendir(dir);
+    assert_non_null(d);
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
+            continue;
+        if (n++ == 0)
+            snprintf(first, firstlen, "%s", e->d_name);
+    }
+    closedir(d);
+    return n;
+}
+
+static void save_load_delete(void **state)
+{
+    (void)state;
+    char dir[160], rec[200], err[128] = "", first[128] = "", key[XRD_FILESTATE_KEY_MAX] = "abc-0123";
+    snprintf(dir, sizeof dir, "%s/s/xrdome/files", g_dir);
+    xrd_filestate st = make_state(XRD_SET_ZOOM | XRD_SET_LAYOUT | XRD_SET_CONTENT_FOV);
+    assert_int_equal(xrd_filestate_save(dir, key, &st, "/v/a.mp4", err, sizeof err), 0);
+
+    struct stat sb;
+    assert_int_equal(stat(dir, &sb), 0);
+    assert_true(S_ISDIR(sb.st_mode));
+    assert_int_equal((int)(sb.st_mode & 07777), 0700);
+    assert_int_equal(count_entries(dir, first, sizeof first), 1);
+    assert_string_equal(first, "abc-0123.ini");
+
+    assert_int_equal(xrd_filestate_record_path(dir, key, rec, sizeof rec), 0);
+    xrd_filestate out;
+    assert_int_equal(xrd_filestate_load(rec, &out, err, sizeof err), XRD_FS_OK);
+    assert_int_equal((int)out.set, (int)st.set);
+    assert_true(fabsf(out.v.zoom - 0.7513f) < 1e-4f);
+    assert_int_equal(out.v.layout, XRD_LAYOUT_SBS_RL);
+    assert_true(fabsf(out.v.content_hfov - 120.0f) < 1e-4f);
+
+    assert_int_equal(xrd_filestate_save(dir, key, &st, "/v/a.mp4", err, sizeof err), 0);
+    assert_int_equal(count_entries(dir, first, sizeof first), 1);
+
+    assert_int_equal(xrd_filestate_delete(dir, key), 1);
+    assert_int_equal(xrd_filestate_delete(dir, key), 0);
+    assert_int_equal(xrd_filestate_load(rec, &out, err, sizeof err), XRD_FS_NONE);
+}
+
+static void save_relative_path_label(void **state)
+{
+    (void)state;
+    char dir[160], rec[200], err[128], want[256], cwd[256];
+    assert_non_null(getcwd(cwd, sizeof cwd));
+    assert_int_equal(chdir(g_dir), 0);
+    snprintf(dir, sizeof dir, "%s/files", g_dir);
+    xrd_filestate st = make_state(XRD_SET_ZOOM);
+    int rc = xrd_filestate_save(dir, "k-1", &st, "clip.mp4", err, sizeof err);
+    assert_int_equal(chdir(cwd), 0);
+    assert_int_equal(rc, 0);
+    snprintf(rec, sizeof rec, "%s/k-1.ini", dir);
+    char text[1024] = "";
+    FILE *f = fopen(rec, "r");
+    assert_non_null(f);
+    size_t n = fread(text, 1, sizeof text - 1, f);
+    text[n] = '\0';
+    fclose(f);
+    snprintf(want, sizeof want, "path = %s/clip.mp4\n", g_dir);
+    assert_non_null(strstr(text, want));
+}
+
+static void save_fails_cleanly(void **state)
+{
+    (void)state;
+    char file[128], dir[200], err[128] = "", first[64];
+    write_file(file, sizeof file, "plain", "x", 1);
+    snprintf(dir, sizeof dir, "%s/files", file);
+    xrd_filestate st = make_state(XRD_SET_ZOOM);
+    assert_int_equal(xrd_filestate_save(dir, "k-1", &st, "/v/a.mp4", err, sizeof err), -1);
+    assert_true(err[0] != '\0');
+    assert_int_equal(count_entries(g_dir, first, sizeof first), 1);
+    assert_string_equal(first, "plain");
+}
+
+static void load_oversize(void **state)
+{
+    (void)state;
+    char p[128], err[128] = "";
+    char *big = malloc(70000);
+    assert_non_null(big);
+    memset(big, '#', 70000);
+    big[69999] = '\n';
+    write_file(p, sizeof p, "big.ini", big, 70000);
+    free(big);
+    xrd_filestate out;
+    assert_int_equal(xrd_filestate_load(p, &out, err, sizeof err), XRD_FS_BAD);
+    assert_int_equal((int)out.set, 0);
+    assert_true(err[0] != '\0');
+}
+
+static void load_missing(void **state)
+{
+    (void)state;
+    char p[160], f[128], err[128];
+    xrd_filestate out;
+    snprintf(p, sizeof p, "%s/nope.ini", g_dir);
+    assert_int_equal(xrd_filestate_load(p, &out, err, sizeof err), XRD_FS_NONE);
+    write_file(f, sizeof f, "plain", "x", 1);
+    snprintf(p, sizeof p, "%s/x.ini", f);
+    assert_int_equal(xrd_filestate_load(p, &out, err, sizeof err), XRD_FS_NONE);
+}
+
+static void load_directory_is_bad(void **state)
+{
+    (void)state;
+    char err[128] = "";
+    xrd_filestate out;
+    assert_int_equal(xrd_filestate_load(g_dir, &out, err, sizeof err), XRD_FS_BAD);
+    assert_true(err[0] != '\0');
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -223,6 +518,24 @@ int main(void)
         cmocka_unit_test_setup_teardown(key_follows_symlink, setup, teardown),
         cmocka_unit_test_setup_teardown(key_buffer_too_small, setup, teardown),
         cmocka_unit_test_setup_teardown(dir_selection, setup, teardown),
+        cmocka_unit_test_setup_teardown(format_only_set_fields, setup, teardown),
+        cmocka_unit_test_setup_teardown(format_all_fields, setup, teardown),
+        cmocka_unit_test_setup_teardown(format_too_small, setup, teardown),
+        cmocka_unit_test_setup_teardown(round_trip, setup, teardown),
+        cmocka_unit_test_setup_teardown(parse_minimal, setup, teardown),
+        cmocka_unit_test_setup_teardown(parse_tolerates, setup, teardown),
+        cmocka_unit_test_setup_teardown(parse_duplicate_last_wins, setup, teardown),
+        cmocka_unit_test_setup_teardown(parse_bad, setup, teardown),
+        cmocka_unit_test_setup_teardown(parse_bad_reports_line, setup, teardown),
+        cmocka_unit_test_setup_teardown(parse_unsupported, setup, teardown),
+        cmocka_unit_test_setup_teardown(path_label_cannot_inject, setup, teardown),
+        cmocka_unit_test_setup_teardown(record_path, setup, teardown),
+        cmocka_unit_test_setup_teardown(save_load_delete, setup, teardown),
+        cmocka_unit_test_setup_teardown(save_relative_path_label, setup, teardown),
+        cmocka_unit_test_setup_teardown(save_fails_cleanly, setup, teardown),
+        cmocka_unit_test_setup_teardown(load_oversize, setup, teardown),
+        cmocka_unit_test_setup_teardown(load_missing, setup, teardown),
+        cmocka_unit_test_setup_teardown(load_directory_is_bad, setup, teardown),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

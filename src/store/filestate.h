@@ -36,4 +36,33 @@ int xrd_filestate_key(const char *path, char *key, size_t keylen);
 /* ".../xrdome/files" per Global Constraints; -1 if neither variable is usable. */
 int xrd_filestate_dir(char *buf, size_t len);
 
+#define XRD_FILESTATE_VERSION 1
+#define XRD_FILESTATE_MAX_BYTES 65536
+
+typedef enum { XRD_FS_OK, XRD_FS_NONE, XRD_FS_UNSUPPORTED, XRD_FS_BAD } xrd_fs_status;
+
+/* Parses record text. OK fills *out; UNSUPPORTED (version > 1, or proj other
+ * than hequirect) and BAD leave *out with set == 0. err gets "line N: ..." for BAD. */
+xrd_fs_status xrd_filestate_parse(const char *text, xrd_filestate *out, char *err, size_t errlen);
+
+/* Writes the record text (spec 5.3). Returns length, or -1 if it does not fit. */
+int xrd_filestate_format(const xrd_filestate *st, const char *path_label, const char *date,
+                         char *buf, size_t len);
+
+/* "<dir>/<key>.ini"; -1 if it does not fit. */
+int xrd_filestate_record_path(const char *dir, const char *key, char *buf, size_t len);
+
+/* NONE when the file does not exist (ENOENT or ENOTDIR); BAD (with err) for
+ * any other read error or a file over 65536 bytes. */
+xrd_fs_status xrd_filestate_load(const char *record_path, xrd_filestate *out,
+                                 char *err, size_t errlen);
+
+/* Creates dir (and parents, 0700), writes a temp file in dir, renames it to
+ * "<key>.ini". video_path is made absolute for the label. 0, or -1 with err. */
+int xrd_filestate_save(const char *dir, const char *key, const xrd_filestate *st,
+                       const char *video_path, char *err, size_t errlen);
+
+/* 1 deleted, 0 no such record, -1 error. */
+int xrd_filestate_delete(const char *dir, const char *key);
+
 #endif
