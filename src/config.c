@@ -239,7 +239,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
     enum { OPT_PROJ = 256, OPT_LAYOUT, OPT_POSE, OPT_OUTPUT, OPT_DEVICE, OPT_ZOOM,
            OPT_CONTENT_FOV, OPT_HWDEC, OPT_WINDOWED, OPT_TIMING, OPT_SYNC, OPT_FRAMES, OPT_DUMP,
            OPT_MPV_PROFILE, OPT_MPV_OPT, OPT_MPV_LOG, OPT_CONVERGENCE, OPT_FILTER,
-           OPT_FBO_FORMAT, OPT_DITHER };
+           OPT_FBO_FORMAT, OPT_DITHER, OPT_NO_MEMORY, OPT_FORGET };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
         {"layout", required_argument, NULL, OPT_LAYOUT},
@@ -261,6 +261,8 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"filter", required_argument, NULL, OPT_FILTER},
         {"fbo-format", required_argument, NULL, OPT_FBO_FORMAT},
         {"dither", required_argument, NULL, OPT_DITHER},
+        {"no-memory", no_argument, NULL, OPT_NO_MEMORY},
+        {"forget", no_argument, NULL, OPT_FORGET},
         {NULL, 0, NULL, 0},
     };
 
@@ -280,6 +282,8 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
             break;
         case OPT_LAYOUT:
             rc = parse_layout(optarg, &c->layout, err, errlen);
+            if (rc == 0)
+                c->explicit_flags |= XRD_SET_LAYOUT;
             break;
         case OPT_POSE:
             rc = set_string("--pose", c->pose, sizeof c->pose, optarg, err, errlen);
@@ -292,9 +296,13 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
             break;
         case OPT_ZOOM:
             rc = parse_ranged("--zoom", optarg, XRD_ZOOM_MIN, XRD_ZOOM_MAX, &c->zoom, err, errlen);
+            if (rc == 0)
+                c->explicit_flags |= XRD_SET_ZOOM;
             break;
         case OPT_CONTENT_FOV:
             rc = parse_content_fov(optarg, &c->content_hfov, &c->content_vfov, err, errlen);
+            if (rc == 0)
+                c->explicit_flags |= XRD_SET_CONTENT_FOV;
             break;
         case OPT_HWDEC:
             c->require_hwdec = true;
@@ -358,6 +366,8 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         case OPT_CONVERGENCE:
             rc = parse_ranged("--convergence", optarg, -XRD_CONVERGENCE_MAX, XRD_CONVERGENCE_MAX,
                               &c->convergence, err, errlen);
+            if (rc == 0)
+                c->explicit_flags |= XRD_SET_CONVERGENCE;
             break;
         case OPT_FILTER:
             if (!strcmp(optarg, "bilinear"))
@@ -390,6 +400,12 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
                 set_err(err, errlen, "--dither: unknown value '%s' (expected on or off)", optarg);
                 rc = -1;
             }
+            break;
+        case OPT_NO_MEMORY:
+            c->no_memory = true;
+            break;
+        case OPT_FORGET:
+            c->forget = true;
             break;
         case ':':
             set_err(err, errlen, "option '%s' requires an argument", argv[optind - 1]);
