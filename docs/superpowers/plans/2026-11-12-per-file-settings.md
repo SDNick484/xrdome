@@ -139,8 +139,8 @@ int xrd_filestate_format(const xrd_filestate *st, const char *path_label, const 
                          char *buf, size_t len);
 /* "<dir>/<key>.ini"; -1 if it does not fit. */
 int xrd_filestate_record_path(const char *dir, const char *key, char *buf, size_t len);
-/* NONE when the file does not exist; BAD (with err) for any other read error
- * or a file over 65536 bytes. */
+/* NONE when the file does not exist (ENOENT or ENOTDIR); BAD (with err) for
+ * any other read error or a file over 65536 bytes. */
 xrd_fs_status xrd_filestate_load(const char *record_path, xrd_filestate *out,
                                  char *err, size_t errlen);
 /* Creates dir (and parents, 0700), writes a temp file in dir, renames it to
@@ -189,6 +189,7 @@ Decisions the tests rely on:
 /* save_fails_cleanly: dir is "<regular file>/files" -> -1 with non-empty err;
    nothing else is created */
 /* load_oversize: a 70000-byte record -> BAD */
+/* load_missing: a path in an empty directory -> NONE; "<regular file>/x.ini" -> NONE */
 ```
 
 - [ ] **Step 2: Run** `meson test -C build filestate -v`; expect compile failure on the new names.
@@ -335,7 +336,7 @@ Behaviour to implement in `main()` (spec 5.4 to 5.8):
 6. Track whether any video frame was rendered (`tex != 0` at least once).
 7. At the `out:` label, before teardown: if memory is on, saving is not blocked and a frame was rendered, build the end values from `ctl` (zoom, layout, swap, convergence) and `cfg` (content FOV), call `xrd_filestate_collect`, and skip the write when the result has `set == 0` and no record was loaded, or when a record was loaded and `xrd_filestate_equal` holds. Otherwise `xrd_filestate_save`; on success print `settings: saved <describe(all set bits)>`, on failure print `xrdome: warning: cannot save settings: <err>`. The exit status is not changed by any of this.
 
-- [ ] **Step 1: Isolate the existing smoke cases.** In both scripts, after `work=` is created add `export XDG_STATE_HOME="$work/state"`, and add `--no-memory` to every existing `xrdome` invocation. Run `meson test -C build`; expect failure (`unknown option` is already fixed by Task 4, so expect pass here and treat this as the baseline).
+- [ ] **Step 1: Isolate the existing smoke cases.** In both scripts, after `work=` is created add `export XDG_STATE_HOME="$work/state"`, and add `--no-memory` to every existing `xrdome` invocation. Run `meson test -C build`; expect pass (Task 4 added the flag). This is the baseline.
 - [ ] **Step 2: Add failing smoke cases** at the end of `tests/smoke_player.sh`, before `exit $fail`, using a copy of the pattern at `$work/mem.mp4` and `rec() { ls "$XDG_STATE_HOME"/xrdome/files/*.ini 2>/dev/null; }`:
 
 ```sh
