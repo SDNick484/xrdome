@@ -149,8 +149,11 @@ since it has no key.
 ### 5.6 When it saves
 
 Once, after the render loop ends, for any reason: `Q`, window close, end of file, SIGTERM,
-the glasses being unplugged, or a playback error after the file had opened. Nothing is saved
-if startup failed before the file opened.
+the glasses being unplugged, or a playback error. The condition is that at least one video
+frame was rendered during the run **(call)**. mpv loads the file asynchronously, so "the
+player object exists" is too early: a text file, an audio-only file or a truncated download
+given with `--content-fov` would otherwise get a record without ever playing. A run that
+never rendered a frame saves nothing.
 
 - The record is written to a temporary file in the same directory and renamed into place.
 - If nothing is set and no record existed, no file is created.
@@ -176,8 +179,8 @@ Nothing is printed for a file with no record.
 - `--no-memory`: do not read or write the record for this run. For timing runs, comparisons
   and tests.
 - `--forget`: delete this file's record at startup (including an unreadable or newer-format
-  one), then continue from the defaults. The run saves at quit as usual, unless `--no-memory`
-  is also given.
+  one), then continue from the defaults. The run saves at quit as usual. With `--no-memory`
+  as well, the record is still deleted, and then nothing is read or written. **(call)**
 
 Both are command-line only.
 
@@ -208,7 +211,8 @@ xrdome: warning: video is 1920x1080, which is not the aspect of a side-by-side v
 video covering less than 180 degrees, set --content-fov. Playing it as given.
 ```
 
-It stays a single `xrdome: warning:` line. A flat 3D movie in half-SBS has the same frame
+It is printed as one physical line (it is wrapped above only for this document), because
+the smoke tests count lines that start with `xrdome:`. A flat 3D movie in half-SBS has the same frame
 size as a flat 2D one, so the message does not try to tell them apart.
 
 ## 6. Approaches considered
@@ -268,6 +272,8 @@ Smoke tests (Xvfb):
   frame passes the existing 90x90 frame check; after `mv` to a new name it still restores;
   `--no-memory` does not restore; `--forget` prints `settings: forgot` and the frame is back
   to the 180x180 result; a corrupt record prints one warning, plays, and is not overwritten.
+- A file that never renders a video frame (the existing audio-only case) leaves no record,
+  even with `--content-fov` given.
 - The flat-video wording: a 16:9 pattern prints the new warning once.
 
 Hardware check for the owner (Viture Pro XR):
