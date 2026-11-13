@@ -21,6 +21,7 @@ for tool in xvfb-run ffmpeg python3; do
 done
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/xrdome-track.XXXXXX") || exit 1
+work=$(cd "$work" && pwd) # absolute: a relative XDG_STATE_HOME is ignored by xrdome
 sender=""
 cleanup() {
     [ -n "$sender" ] && kill "$sender" 2>/dev/null

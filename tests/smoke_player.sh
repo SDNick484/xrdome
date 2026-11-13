@@ -12,6 +12,7 @@ for tool in xvfb-run ffmpeg python3; do
 done
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/xrdome-smoke.XXXXXX") || exit 1
+work=$(cd "$work" && pwd) # absolute: a relative XDG_STATE_HOME is ignored by xrdome
 trap 'rm -rf "$work"' EXIT
 export LIBGL_ALWAYS_SOFTWARE=1
 export XDG_STATE_HOME="$work/state"
@@ -338,6 +339,7 @@ xvfb "$xrdome" --windowed --pose null --zoom 1.0 --content-fov 90x90 --frames 30
 st=$?
 check "M6 setup run exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
 grep -q '^settings: saved .*content-fov=90x90' "$work/m6a.err"; check "M6 setup run saved 90x90" $?
+cp "$(rec)" "$work/m6.rec"
 xvfb "$xrdome" --no-memory --windowed --pose null --frames 30 --dump-frame "$work/nm.ppm" \
      "$work/moved.mp4" >"$work/m6.err" 2>&1
 st=$?
@@ -345,26 +347,37 @@ check "M6 exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
 ! grep -q '^settings:' "$work/m6.err"; check "M6 no settings line" $?
 check_frame "$work/nm.ppm"
 check "M6 dumped frame is the 180x180 picture" $?
+# A flag that differs from the record would be saved if --no-memory did not stop it.
+xvfb "$xrdome" --no-memory --windowed --pose null --zoom 0.5 --frames 30 \
+     "$work/moved.mp4" >"$work/m6b.err" 2>&1
+st=$?
+check "M6 flag run exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+! grep -q '^settings:' "$work/m6b.err"; check "M6 flag run no settings line" $?
+cmp -s "$work/m6.rec" "$(rec)"; check "M6 record byte-identical" $?
 
 # M7b. a record from a newer xrdome is noted once, kept, and not overwritten.
 sed -i 's/^version = 1$/version = 2/' "$(rec)"
-xvfb "$xrdome" --windowed --pose null --frames 30 "$work/moved.mp4" >"$work/m7b.err" 2>&1
+cp "$(rec)" "$work/m7b.rec"
+xvfb "$xrdome" --windowed --pose null --zoom 0.5 --frames 30 "$work/moved.mp4" >"$work/m7b.err" 2>&1
 st=$?
 check "M7b exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
 [ "$(grep -c '^xrdome: note: settings record' "$work/m7b.err")" -eq 1 ]; check "M7b one note" $?
 ! grep -q '^settings: restored' "$work/m7b.err"; check "M7b nothing restored" $?
 ! grep -q '^settings: saved' "$work/m7b.err"; check "M7b nothing saved" $?
 grep -qx 'version = 2' "$(rec)"; check "M7b record still version 2" $?
+cmp -s "$work/m7b.rec" "$(rec)"; check "M7b record byte-identical" $?
 sed -i 's/^version = 2$/version = 1/' "$(rec)"
 
 # M7. a corrupt record is reported, kept, and not overwritten.
 echo "zoom = 99" >>"$(rec)"
-xvfb "$xrdome" --windowed --pose null --frames 30 "$work/moved.mp4" >"$work/m7.err" 2>&1
+cp "$(rec)" "$work/m7.rec"
+xvfb "$xrdome" --windowed --pose null --zoom 0.5 --frames 30 "$work/moved.mp4" >"$work/m7.err" 2>&1
 st=$?
 check "M7 exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
 [ "$(grep -c '^xrdome: warning: settings record' "$work/m7.err")" -eq 1 ]; check "M7 one warning" $?
 ! grep -q '^settings: saved' "$work/m7.err"; check "M7 nothing saved" $?
 grep -qx 'zoom = 99' "$(rec)"; check "M7 record untouched" $?
+cmp -s "$work/m7.rec" "$(rec)"; check "M7 record byte-identical" $?
 
 # M8. --forget deletes the record and plays from the defaults.
 xvfb "$xrdome" --forget --windowed --pose null --frames 30 --dump-frame "$work/fg.ppm" \
@@ -383,11 +396,27 @@ check "M9 audio-only exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
 [ -z "$(rec)" ]; check "M9 no record" $?
 
 # M10. an unwritable state directory warns once and keeps the exit status.
-XDG_STATE_HOME="$work/pattern.mp4" xvfb "$xrdome" --windowed --pose null --zoom 0.5 --frames 30 \
-     "$work/moved.mp4" >"$work/m10.err" 2>&1
+( XDG_STATE_HOME="$work/pattern.mp4"; export XDG_STATE_HOME
+  xvfb "$xrdome" --windowed --pose null --zoom 0.5 --frames 30 \
+       "$work/moved.mp4" >"$work/m10.err" 2>&1 )
 st=$?
 check "M10 exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
 [ "$(grep -c '^xrdome: warning: cannot save settings' "$work/m10.err")" -eq 1 ]; check "M10 one warning" $?
+
+# M11. a --forget that cannot remove the record warns once, and the stale record is neither
+# restored nor overwritten (a directory in the record's place makes unlink fail, even as root).
+xvfb "$xrdome" --windowed --pose null --zoom 0.5 --frames 30 "$work/moved.mp4" >"$work/m11a.err" 2>&1
+r=$(rec)
+rm -f "$r" && mkdir "$r"
+xvfb "$xrdome" --forget --windowed --pose null --zoom 0.75 --frames 30 \
+     "$work/moved.mp4" >"$work/m11.err" 2>&1
+st=$?
+check "M11 exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+[ "$(grep -c '^xrdome: warning: cannot forget settings record ' "$work/m11.err")" -eq 1 ] &&
+    ! grep -q '^xrdome: .*settings record .*ignoring' "$work/m11.err"
+check "M11 one forget warning, record not loaded" $?
+! grep -q '^settings:' "$work/m11.err"; check "M11 nothing restored or saved" $?
+[ -d "$r" ]; check "M11 record left in place" $?
 
 
 exit $fail
