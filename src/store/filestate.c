@@ -3,6 +3,8 @@
 
 #include "store/filestate.h"
 
+#include "values.h"
+
 #include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -87,13 +89,6 @@ int xrd_filestate_dir(char *buf, size_t len)
 
 /* ---- record parse and format ------------------------------------------ */
 
-#define ZOOM_MIN 0.25f
-#define ZOOM_MAX 4.0f
-#define FOV_MIN 10.0f
-#define FOV_MAX 180.0f
-#define CONV_MIN -5.0f
-#define CONV_MAX 5.0f
-
 typedef enum { KEY_ZOOM, KEY_LAYOUT, KEY_SWAP, KEY_CONTENT_FOV, KEY_CONVERGENCE } setting_key;
 
 /* One table of key names, shared by parse and format. */
@@ -105,11 +100,6 @@ static const struct { const char *name; unsigned bit; } k_settings[] = {
     [KEY_CONVERGENCE] = { "convergence", XRD_SET_CONVERGENCE },
 };
 #define N_SETTINGS (sizeof k_settings / sizeof k_settings[0])
-
-static const char *const k_layout_names[] = {
-    [XRD_LAYOUT_SBS_LR] = "sbs-lr", [XRD_LAYOUT_SBS_RL] = "sbs-rl", [XRD_LAYOUT_MONO] = "mono",
-};
-#define N_LAYOUTS (sizeof k_layout_names / sizeof k_layout_names[0])
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
@@ -124,81 +114,29 @@ static void set_err(char *err, size_t errlen, const char *fmt, ...)
     va_end(ap);
 }
 
-/* Plain decimal float: optional leading '-', no blanks, no hex, finite. */
-static bool parse_float(const char *s, float *out)
-{
-    const char *d = s[0] == '-' ? s + 1 : s;
-    if (!(isdigit((unsigned char)d[0]) || d[0] == '.') || strpbrk(s, "xX"))
-        return false;
-    char *end;
-    errno = 0;
-    float v = strtof(s, &end);
-    if (end == s || *end != '\0' || errno == ERANGE || !isfinite(v))
-        return false;
-    *out = v;
-    return true;
-}
-
-static bool parse_ranged(const char *s, float lo, float hi, float *out)
-{
-    float v;
-    if (!parse_float(s, &v) || v < lo || v > hi)
-        return false;
-    *out = v;
-    return true;
-}
-
-/* "HxV", each FOV_MIN..FOV_MAX; same form as --content-fov. */
-static bool parse_fov(const char *s, float *h, float *v)
-{
-    const char *x = strchr(s, 'x');
-    char hs[32];
-    float hv, vv;
-    if (!x || x == s || (size_t)(x - s) >= sizeof hs)
-        return false;
-    memcpy(hs, s, (size_t)(x - s));
-    hs[x - s] = '\0';
-    if (hs[0] == '-' || x[1] == '-' || !parse_ranged(hs, FOV_MIN, FOV_MAX, &hv) ||
-        !parse_ranged(x + 1, FOV_MIN, FOV_MAX, &vv))
-        return false;
-    *h = hv;
-    *v = vv;
-    return true;
-}
-
 /* Applies one settings key to st; false if the value is not acceptable. */
 static bool apply_setting(setting_key k, const char *val, xrd_filestate *st)
 {
     switch (k) {
     case KEY_ZOOM:
-        if (!parse_ranged(val, ZOOM_MIN, ZOOM_MAX, &st->v.zoom))
+        if (xrd_value_ranged(val, XRD_ZOOM_MIN, XRD_ZOOM_MAX, &st->v.zoom) != XRD_VALUE_OK)
             return false;
         break;
-    case KEY_LAYOUT: {
-        size_t i;
-        for (i = 0; i < N_LAYOUTS; i++)
-            if (!strcmp(val, k_layout_names[i])) {
-                st->v.layout = (xrd_layout)i;
-                break;
-            }
-        if (i == N_LAYOUTS)
+    case KEY_LAYOUT:
+        if (!xrd_value_layout(val, &st->v.layout))
             return false;
         break;
-    }
     case KEY_SWAP:
-        if (!strcmp(val, "yes"))
-            st->v.swap = true;
-        else if (!strcmp(val, "no"))
-            st->v.swap = false;
-        else
+        if (!xrd_value_yesno(val, &st->v.swap))
             return false;
         break;
     case KEY_CONTENT_FOV:
-        if (!parse_fov(val, &st->v.content_hfov, &st->v.content_vfov))
+        if (xrd_value_content_fov(val, &st->v.content_hfov, &st->v.content_vfov) != XRD_VALUE_OK)
             return false;
         break;
     case KEY_CONVERGENCE:
-        if (!parse_ranged(val, CONV_MIN, CONV_MAX, &st->v.convergence))
+        if (xrd_value_ranged(val, -XRD_CONVERGENCE_MAX, XRD_CONVERGENCE_MAX,
+                             &st->v.convergence) != XRD_VALUE_OK)
             return false;
         break;
     }
@@ -345,7 +283,7 @@ int xrd_filestate_format(const xrd_filestate *st, const char *path_label, const 
         put(&s, "%s = %.4f\n", k_settings[KEY_ZOOM].name, (double)st->v.zoom);
     if (st->set & k_settings[KEY_LAYOUT].bit)
         put(&s, "%s = %s\n", k_settings[KEY_LAYOUT].name,
-            (size_t)st->v.layout < N_LAYOUTS ? k_layout_names[st->v.layout] : "sbs-lr");
+            xrd_value_layout_name(st->v.layout) ? xrd_value_layout_name(st->v.layout) : "sbs-lr");
     if (st->set & k_settings[KEY_SWAP].bit)
         put(&s, "%s = %s\n", k_settings[KEY_SWAP].name, st->v.swap ? "yes" : "no");
     if (st->set & k_settings[KEY_CONTENT_FOV].bit)

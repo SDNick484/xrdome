@@ -6,6 +6,7 @@
 #include "math/quat.h"
 #include "render/projection.h"
 #include "render/renderer_gl.h"
+#include "values.h"
 
 /* View state the user changes at runtime with keys and the mouse. */
 typedef struct {
@@ -19,12 +20,9 @@ typedef struct {
     xrd_filter filter;
 } xrd_controls;
 
-#define XRD_ZOOM_MIN 0.25f
-#define XRD_ZOOM_MAX 4.0f
 #define XRD_ZOOM_STEP 1.1f
 #define XRD_MOUSE_DEG_PER_PX 0.1
 #define XRD_MOUSE_PITCH_MAX 89.0
-#define XRD_CONVERGENCE_MAX 5.0f /* and -5 */
 #define XRD_CONVERGENCE_STEP 0.1f
 
 /* Convergence 0 (also the reset value), filter bicubic. */

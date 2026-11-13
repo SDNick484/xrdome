@@ -22,6 +22,7 @@ shaders_gen = custom_target('shaders_gen',
 core_sources = files(
   'src/math/quat.c',
   'src/render/projection.c',
+  'src/values.c',
   'src/config.c',
   'src/util/timing.c',
   'src/pose/opentrack_packet.c',
@@ -50,6 +51,7 @@ test_names = [
   'timing',
   'controls',
   'filestate',
+  'values',
 ]
 
 inc = include_directories('src')
