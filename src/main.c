@@ -161,8 +161,21 @@ static void memory_load_and_apply(xrd_memory *m, xrd_config *cfg)
     if (xrd_filestate_key(cfg->file, m->key, sizeof m->key) != 0 ||
         xrd_filestate_dir(m->dir, sizeof m->dir) != 0)
         return;
-    if (cfg->forget && xrd_filestate_delete(m->dir, m->key) == 1)
-        fprintf(stderr, "settings: forgot %s\n", m->key);
+    if (cfg->forget) {
+        int d = xrd_filestate_delete(m->dir, m->key);
+        int de = errno;
+        if (d == 1) {
+            fprintf(stderr, "settings: forgot %s\n", m->key);
+        } else if (d < 0) {
+            char rp[4200];
+            if (xrd_filestate_record_path(m->dir, m->key, rp, sizeof rp) != 0)
+                snprintf(rp, sizeof rp, "%s", m->key);
+            fprintf(stderr, "xrdome: warning: cannot forget settings record %s: %s\n", rp,
+                    strerror(de));
+            m->block_save = true; /* the stale record is neither loaded nor overwritten */
+            return;
+        }
+    }
     if (cfg->no_memory)
         return;
     m->on = true;

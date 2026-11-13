@@ -290,7 +290,7 @@ int xrd_filestate_format(const xrd_filestate *st, const char *path_label, const 
         put(&s, "%s = %gx%g\n", k_settings[KEY_CONTENT_FOV].name, (double)st->v.content_hfov,
             (double)st->v.content_vfov);
     if (st->set & k_settings[KEY_CONVERGENCE].bit)
-        put(&s, "%s = %.2f\n", k_settings[KEY_CONVERGENCE].name, (double)st->v.convergence);
+        put(&s, "%s = %.3f\n", k_settings[KEY_CONVERGENCE].name, (double)st->v.convergence);
 
     if (s.pos >= len || s.pos > (size_t)INT_MAX)
         return -1;
@@ -413,7 +413,10 @@ int xrd_filestate_save(const char *dir, const char *key, const xrd_filestate *st
         if (k < 0 && errno == EINTR)
             continue;
         if (k <= 0) {
-            set_err(err, errlen, "cannot write %s: %s", tmp, strerror(errno));
+            if (k == 0)
+                set_err(err, errlen, "cannot write %s: short write", tmp);
+            else
+                set_err(err, errlen, "cannot write %s: %s", tmp, strerror(errno));
             close(fd);
             unlink(tmp);
             return -1;

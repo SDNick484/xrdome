@@ -9,6 +9,8 @@ Plan: `docs/superpowers/plans/2026-11-11-xrdome.md` (Tasks 0-9 done, Task 10 ope
 - Head tracking from XRLinuxDriver over OpenTrack UDP (port 4242); recenter keys; seek; audio.
 - Frame timing: 0.6% late frames with defaults (mpv profile `fast`, bicubic, 10-bit FBO + dither).
 - Options and keys: see README.
+
+## Sandbox-tested, not yet run on the glasses
 - Per-file settings memory (zoom, layout, swap-eyes, content FOV, convergence, keyed by file
   size and a hash of its first and last 64 KiB; `--no-memory`, `--forget`): passes the unit tests
   and the Xvfb smoke tests on the desktop (Ubuntu 24.04, mpv 0.37, software GL). Not yet run on

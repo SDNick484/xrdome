@@ -77,7 +77,7 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 | Q | Quit |
 
 The `zoom:` and `filter:` lines are printed only when the value changes (not for
-a press at a limit, or a reset to the value already set).
+a press at a limit).
 
 ### Flags
 
@@ -233,6 +233,10 @@ that never showed a frame (audio only, a text file, a truncated download) leaves
 with `--content-fov` given. Nothing is written if nothing is set and no record existed, or if the
 record would be the same as the one loaded. A failed save prints one
 `xrdome: warning: cannot save settings: ...` line and does not change the exit status.
+
+If `--forget` cannot delete the record, it prints one
+`xrdome: warning: cannot forget settings record <path>: ...` line and carries on. The record that
+could not be removed is then neither restored nor overwritten in that run.
 
 stderr shows what happened, in lines that start with `settings:`:
 

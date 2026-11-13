@@ -253,7 +253,7 @@ static void format_all_fields(void **state)
     assert_string_equal(buf,
         "# xrdome per-file settings\nversion = 1\npath = /v/a.mp4\nsaved = 2026-11-12\n"
         "proj = hequirect\nzoom = 0.7513\nlayout = sbs-rl\nswap = yes\n"
-        "content_fov = 120x90\nconvergence = 1.50\n");
+        "content_fov = 120x90\nconvergence = 1.500\n");
 }
 
 static void format_too_small(void **state)
@@ -281,6 +281,19 @@ static void round_trip(void **state)
     assert_true(fabsf(out.v.content_hfov - st.v.content_hfov) < 1e-4f);
     assert_true(fabsf(out.v.content_vfov - st.v.content_vfov) < 1e-4f);
     assert_true(fabsf(out.v.convergence - st.v.convergence) < 1e-4f);
+}
+
+static void round_trip_convergence_precision(void **state)
+{
+    (void)state;
+    xrd_filestate st = make_state(XRD_SET_CONVERGENCE);
+    st.v.convergence = 1.234f;
+    char buf[512], err[128];
+    assert_true(xrd_filestate_format(&st, "/v/a.mp4", "2026-11-12", buf, sizeof buf) > 0);
+    xrd_filestate out;
+    memset(&out, 0, sizeof out);
+    assert_int_equal(xrd_filestate_parse(buf, &out, err, sizeof err), XRD_FS_OK);
+    assert_true(xrd_filestate_equal(&out, &st));
 }
 
 static void parse_minimal(void **state)
@@ -467,6 +480,23 @@ static void save_fails_cleanly(void **state)
     assert_true(err[0] != '\0');
     assert_int_equal(count_entries(g_dir, first, sizeof first), 1);
     assert_string_equal(first, "plain");
+}
+
+static void save_fails_unwritable_dir(void **state)
+{
+    (void)state;
+    if (geteuid() == 0)
+        skip(); /* root ignores directory modes */
+    char parent[200], dir[260], err[128] = "";
+    snprintf(parent, sizeof parent, "%s/ro", g_dir);
+    assert_int_equal(mkdir(parent, 0700), 0);
+    assert_int_equal(chmod(parent, 0500), 0);
+    snprintf(dir, sizeof dir, "%s/files", parent);
+    xrd_filestate st = make_state(XRD_SET_ZOOM);
+    int rc = xrd_filestate_save(dir, "k-1", &st, "/v/a.mp4", err, sizeof err);
+    chmod(parent, 0700); /* so teardown can remove it */
+    assert_int_equal(rc, -1);
+    assert_true(err[0] != '\0');
 }
 
 static void load_oversize(void **state)
@@ -757,6 +787,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(format_all_fields, setup, teardown),
         cmocka_unit_test_setup_teardown(format_too_small, setup, teardown),
         cmocka_unit_test_setup_teardown(round_trip, setup, teardown),
+        cmocka_unit_test(round_trip_convergence_precision),
         cmocka_unit_test_setup_teardown(parse_minimal, setup, teardown),
         cmocka_unit_test_setup_teardown(parse_tolerates, setup, teardown),
         cmocka_unit_test_setup_teardown(parse_duplicate_last_wins, setup, teardown),
@@ -768,6 +799,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(save_load_delete, setup, teardown),
         cmocka_unit_test_setup_teardown(save_relative_path_label, setup, teardown),
         cmocka_unit_test_setup_teardown(save_fails_cleanly, setup, teardown),
+        cmocka_unit_test_setup_teardown(save_fails_unwritable_dir, setup, teardown),
         cmocka_unit_test_setup_teardown(load_oversize, setup, teardown),
         cmocka_unit_test_setup_teardown(load_missing, setup, teardown),
         cmocka_unit_test_setup_teardown(load_directory_is_bad, setup, teardown),
