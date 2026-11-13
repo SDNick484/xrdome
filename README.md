@@ -304,6 +304,12 @@ Viture Pro XR glasses at 3840x1080 60 Hz, with a 4320x2160 10-bit AV1 60 fps fil
   waits for vsync on this driver, so `--sync-after-swap` is not needed here.
 - What the remaining 0.5 to 0.6% of late frames are has not been analysed.
 - Decode ceilings on this GPU: 7680x2880 AV1 at 47 fps, the same frame size in HEVC at 132 fps.
+- H.264 hardware decode on this GPU is limited to 4096x4096, so a 4320x2160 H.264 file falls back
+  to software decode (`hwdec: no`; mpv prints the reason). Software decode of that file at 60 fps
+  and 20 Mbit/s still kept up: 446 of 34376 swap intervals (1.3%) exceeded 20 ms. HEVC and AV1 do
+  not have this size limit here.
+- Source bitrate matters more than anything the player does: the same resolution looked much
+  better at 20 Mbit/s H.264 than at 2.5 Mbit/s AV1.
 
 ## Tracking notes
 
