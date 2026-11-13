@@ -1,7 +1,7 @@
 # xrdome: per-file settings memory (design spec)
 
 Date: 2026-11-12
-Status: draft, awaiting owner approval
+Status: approved 2026-11-12 (one record file per video confirmed)
 Branch: `feature/per-file-settings`
 Builds on: `docs/superpowers/specs/2026-11-11-xrdome-design.md`
 
