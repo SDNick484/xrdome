@@ -6,8 +6,9 @@ Status: plays a side-by-side VR180 file on the glasses with head tracking from
 XRLinuxDriver (OpenTrack UDP), keyboard controls, a frame-timing log and per-file settings
 memory. On the Viture Pro XR, with the default mpv profile, bicubic sampling and a 10-bit
 texture, 0.6% of swap intervals were late (see [Performance notes](#performance-notes)). Per-file
-settings memory has passed the unit tests and the Xvfb smoke tests, but has not been run on the
-glasses yet. The XREAL Air 2 Pro is untested. See `docs/STATUS.md`, `docs/superpowers/specs/2026-11-11-xrdome-design.md` and
+settings memory was run on the Viture Pro XR on 2026-11-13: saving a zoom change, restoring it,
+and keeping it across a rename were seen to work; the other remembered settings and `--forget`
+have only passed the unit and Xvfb smoke tests. The XREAL Air 2 Pro is untested. See `docs/STATUS.md`, `docs/superpowers/specs/2026-11-11-xrdome-design.md` and
 `docs/superpowers/plans/2026-11-11-xrdome.md`.
 
 ## Build and run
@@ -68,7 +69,7 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 |---|---|
 | Space | Pause / resume |
 | Left / Right | Seek -10 s / +10 s |
-| R | Recenter, yaw only (keeps the horizon level) |
+| R | Recenter, yaw only (keeps the current pitch and roll reference) |
 | Shift+R | Recenter, full |
 | [ / ] | Zoom out / in (x1.1 per step, 0.25 to 4); prints `zoom: 1.10` |
 | F | Toggle bicubic / bilinear sampling; prints `filter: bicubic` or `filter: bilinear` |
@@ -78,6 +79,10 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 
 The `zoom:` and `filter:` lines are printed only when the value changes (not for
 a press at a limit).
+
+The head pose at the first frame becomes the reference on all three axes, so a head tilted at
+start gives a tilted picture, and `R` does not correct that. Hold your head level and press
+`Shift+R`.
 
 ### Flags
 
@@ -274,7 +279,11 @@ with an `xrdome: note:` line instead. Fix the line with `vim`, or run once with 
 delete it. Records for deleted videos are not cleaned up; remove them by hand.
 
 Verification: the feature passes the unit tests and the Xvfb smoke tests, run in a sandbox (Ubuntu
-24.04, mpv 0.37, software GL). It has not yet been run on the glasses.
+24.04, mpv 0.37, software GL). On the Viture Pro XR (2026-11-13) saving a zoom change at quit,
+restoring it on reopen and keeping it across a rename were seen to work, and playing with the
+record in use missed no more vsyncs than playing with `--no-memory`. Layout, swap-eyes, content
+FOV and convergence records, `--forget` and the bad-record paths have not been run on the glasses.
+`docs/STATUS.md` has the details.
 
 ## Viewing comfort and sharpness
 
@@ -407,6 +416,9 @@ Viture Pro XR glasses at 3840x1080 60 Hz, with a 4320x2160 10-bit AV1 60 fps fil
   to software decode (`hwdec: no`; mpv prints the reason). Software decode of that file at 60 fps
   and 20 Mbit/s still kept up: 446 of 34376 swap intervals (1.3%) exceeded 20 ms. HEVC and AV1 do
   not have this size limit here.
+- That holds on AC power. On battery with the `balanced` platform profile (2026-11-13) the same
+  kind of file missed 57 to 74% of swap intervals over 3600 frames; plugged in, 0 of 3600. If
+  software-decoded playback stutters, check the charger first.
 - Source bitrate matters more than anything the player does: the same resolution looked much
   better at 20 Mbit/s H.264 than at 2.5 Mbit/s AV1.
 
