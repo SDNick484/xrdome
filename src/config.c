@@ -1,6 +1,7 @@
 #define _GNU_SOURCE /* getopt_long, strtof */
 
 #include "config.h"
+#include "values.h"
 #include "video/player_mpv.h"
 
 #include <ctype.h>
@@ -15,11 +16,6 @@
 
 #define FOV_MIN 10.f
 #define FOV_MAX 120.f
-#define ZOOM_MIN 0.25f
-#define ZOOM_MAX 4.f
-#define CONTENT_FOV_MIN 10.f
-#define CONTENT_FOV_MAX 180.f
-#define CONVERGENCE_MAX 5.f /* and -5 */
 
 static const struct { const char *name; float fov_diag; } builtin_devices[] = {
     {"viture-pro", 43.0f},
@@ -49,32 +45,20 @@ static bool copy_str(char *dst, size_t dstlen, const char *src)
     return true;
 }
 
-static bool parse_float(const char *s, float *out)
-{
-    char *end;
-    errno = 0;
-    float v = strtof(s, &end);
-    if (end == s || *end != '\0' || errno == ERANGE || !isfinite(v))
-        return false;
-    *out = v;
-    return true;
-}
-
 /* Parses and range-checks a float setting. what names the key or flag. */
 static int parse_ranged(const char *what, const char *s, float lo, float hi, float *out,
                         char *err, size_t errlen)
 {
-    float v;
-    if (!parse_float(s, &v)) {
+    switch (xrd_value_ranged(s, lo, hi, out)) {
+    case XRD_VALUE_OK:
+        return 0;
+    case XRD_VALUE_RANGE:
+        set_err(err, errlen, "%s: %s is out of range (%g to %g)", what, s, (double)lo, (double)hi);
+        return -1;
+    default:
         set_err(err, errlen, "%s: '%s' is not a number", what, s);
         return -1;
     }
-    if (v < lo || v > hi) {
-        set_err(err, errlen, "%s: %s is out of range (%g to %g)", what, s, (double)lo, (double)hi);
-        return -1;
-    }
-    *out = v;
-    return 0;
 }
 
 static int set_string(const char *what, char *dst, size_t dstlen, const char *src,
@@ -89,48 +73,28 @@ static int set_string(const char *what, char *dst, size_t dstlen, const char *sr
 
 static int parse_layout(const char *s, xrd_layout *out, char *err, size_t errlen)
 {
-    if (!strcmp(s, "sbs-lr"))
-        *out = XRD_LAYOUT_SBS_LR;
-    else if (!strcmp(s, "sbs-rl"))
-        *out = XRD_LAYOUT_SBS_RL;
-    else if (!strcmp(s, "mono"))
-        *out = XRD_LAYOUT_MONO;
-    else {
+    if (!xrd_value_layout(s, out)) {
         set_err(err, errlen, "unknown layout '%s' (expected sbs-lr, sbs-rl or mono)", s);
         return -1;
     }
     return 0;
 }
 
-/* "HxV" in degrees, each within CONTENT_FOV_MIN..CONTENT_FOV_MAX. Leaves *h
- * and *v untouched on error. */
+/* "HxV" in degrees, each within XRD_CONTENT_FOV_MIN..MAX. Leaves *h and *v
+ * untouched on error. */
 static int parse_content_fov(const char *s, float *h, float *v, char *err, size_t errlen)
 {
-    const char *x = strchr(s, 'x');
-    char hs[32];
-    float hv, vv;
-    bool ok = x && x > s && (size_t)(x - s) < sizeof hs;
-    if (ok) {
-        memcpy(hs, s, (size_t)(x - s));
-        hs[x - s] = '\0';
-        /* strtof would also take leading blanks, signs and hex floats. */
-        ok = (isdigit((unsigned char)hs[0]) || hs[0] == '.') &&
-             (isdigit((unsigned char)x[1]) || x[1] == '.') &&
-             parse_float(hs, &hv) && parse_float(x + 1, &vv);
-    }
-    if (!ok) {
+    switch (xrd_value_content_fov(s, h, v)) {
+    case XRD_VALUE_OK:
+        return 0;
+    case XRD_VALUE_RANGE:
+        set_err(err, errlen, "--content-fov: %s is out of range (each value %g to %g degrees)",
+                s, (double)XRD_CONTENT_FOV_MIN, (double)XRD_CONTENT_FOV_MAX);
+        return -1;
+    default:
         set_err(err, errlen, "--content-fov: '%s' is not HxV in degrees (e.g. 120x90)", s);
         return -1;
     }
-    if (hv < CONTENT_FOV_MIN || hv > CONTENT_FOV_MAX || vv < CONTENT_FOV_MIN ||
-        vv > CONTENT_FOV_MAX) {
-        set_err(err, errlen, "--content-fov: %s is out of range (each value %g to %g degrees)",
-                s, (double)CONTENT_FOV_MIN, (double)CONTENT_FOV_MAX);
-        return -1;
-    }
-    *h = hv;
-    *v = vv;
-    return 0;
 }
 
 void xrd_config_defaults(xrd_config *c)
@@ -248,7 +212,7 @@ static int ini_read(xrd_config *c, const char *path, bool *device_found, char *e
         } else if (sec == SEC_DEVICE && !strcmp(key, "fov_diag")) {
             rc = parse_ranged("fov_diag", val, FOV_MIN, FOV_MAX, &c->fov_diag, msg, sizeof msg);
         } else if (sec == SEC_DEVICE && !strcmp(key, "zoom")) {
-            rc = parse_ranged("zoom", val, ZOOM_MIN, ZOOM_MAX, &c->zoom, msg, sizeof msg);
+            rc = parse_ranged("zoom", val, XRD_ZOOM_MIN, XRD_ZOOM_MAX, &c->zoom, msg, sizeof msg);
         } else {
             snprintf(msg, sizeof msg, "unknown key '%s'", key);
             rc = -1;
@@ -275,7 +239,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
     enum { OPT_PROJ = 256, OPT_LAYOUT, OPT_POSE, OPT_OUTPUT, OPT_DEVICE, OPT_ZOOM,
            OPT_CONTENT_FOV, OPT_HWDEC, OPT_WINDOWED, OPT_TIMING, OPT_SYNC, OPT_FRAMES, OPT_DUMP,
            OPT_MPV_PROFILE, OPT_MPV_OPT, OPT_MPV_LOG, OPT_CONVERGENCE, OPT_FILTER,
-           OPT_FBO_FORMAT, OPT_DITHER };
+           OPT_FBO_FORMAT, OPT_DITHER, OPT_NO_MEMORY, OPT_FORGET };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
         {"layout", required_argument, NULL, OPT_LAYOUT},
@@ -297,6 +261,8 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"filter", required_argument, NULL, OPT_FILTER},
         {"fbo-format", required_argument, NULL, OPT_FBO_FORMAT},
         {"dither", required_argument, NULL, OPT_DITHER},
+        {"no-memory", no_argument, NULL, OPT_NO_MEMORY},
+        {"forget", no_argument, NULL, OPT_FORGET},
         {NULL, 0, NULL, 0},
     };
 
@@ -316,6 +282,8 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
             break;
         case OPT_LAYOUT:
             rc = parse_layout(optarg, &c->layout, err, errlen);
+            if (rc == 0)
+                c->explicit_flags |= XRD_SET_LAYOUT;
             break;
         case OPT_POSE:
             rc = set_string("--pose", c->pose, sizeof c->pose, optarg, err, errlen);
@@ -327,10 +295,14 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
             rc = set_string("--device", c->device, sizeof c->device, optarg, err, errlen);
             break;
         case OPT_ZOOM:
-            rc = parse_ranged("--zoom", optarg, ZOOM_MIN, ZOOM_MAX, &c->zoom, err, errlen);
+            rc = parse_ranged("--zoom", optarg, XRD_ZOOM_MIN, XRD_ZOOM_MAX, &c->zoom, err, errlen);
+            if (rc == 0)
+                c->explicit_flags |= XRD_SET_ZOOM;
             break;
         case OPT_CONTENT_FOV:
             rc = parse_content_fov(optarg, &c->content_hfov, &c->content_vfov, err, errlen);
+            if (rc == 0)
+                c->explicit_flags |= XRD_SET_CONTENT_FOV;
             break;
         case OPT_HWDEC:
             c->require_hwdec = true;
@@ -392,8 +364,10 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
                 copy_str(c->mpv_log, sizeof c->mpv_log, optarg);
             break;
         case OPT_CONVERGENCE:
-            rc = parse_ranged("--convergence", optarg, -CONVERGENCE_MAX, CONVERGENCE_MAX,
+            rc = parse_ranged("--convergence", optarg, -XRD_CONVERGENCE_MAX, XRD_CONVERGENCE_MAX,
                               &c->convergence, err, errlen);
+            if (rc == 0)
+                c->explicit_flags |= XRD_SET_CONVERGENCE;
             break;
         case OPT_FILTER:
             if (!strcmp(optarg, "bilinear"))
@@ -426,6 +400,12 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
                 set_err(err, errlen, "--dither: unknown value '%s' (expected on or off)", optarg);
                 rc = -1;
             }
+            break;
+        case OPT_NO_MEMORY:
+            c->no_memory = true;
+            break;
+        case OPT_FORGET:
+            c->forget = true;
             break;
         case ':':
             set_err(err, errlen, "option '%s' requires an argument", argv[optind - 1]);

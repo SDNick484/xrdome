@@ -21,6 +21,7 @@ for tool in xvfb-run ffmpeg python3; do
 done
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/xrdome-track.XXXXXX") || exit 1
+work=$(cd "$work" && pwd) # absolute: a relative XDG_STATE_HOME is ignored by xrdome
 sender=""
 cleanup() {
     [ -n "$sender" ] && kill "$sender" 2>/dev/null
@@ -28,6 +29,7 @@ cleanup() {
 }
 trap cleanup EXIT
 export LIBGL_ALWAYS_SOFTWARE=1
+export XDG_STATE_HOME="$work/state"
 
 # xvfb-run merges the program's stderr into its stdout, so callers capture both.
 # Returns the program's own exit status: xvfb-run sometimes fails with
@@ -83,7 +85,7 @@ run() { # run NAME YAW [BAD_PACKETS]
     bad=${3:-0}
     csv="$work/$name.csv"
     send 0
-    xvfb "$xrdome" --windowed --pose "udp-opentrack:port=$port" --frames 120 \
+    xvfb "$xrdome" --no-memory --windowed --pose "udp-opentrack:port=$port" --frames 120 \
          --timing-log "$csv" --dump-frame "$work/$name.ppm" "$work/pattern.mp4" \
          >"$work/$name.err" 2>&1 &
     player=$!
@@ -130,7 +132,7 @@ for _ in range(int(sys.argv[2])):
 }
 
 # 1. No pose data at all: plays at identity orientation, warns exactly once.
-xvfb "$xrdome" --windowed --pose "udp-opentrack:port=$port" --frames 10 \
+xvfb "$xrdome" --no-memory --windowed --pose "udp-opentrack:port=$port" --frames 10 \
      --dump-frame "$work/nopose.ppm" "$work/pattern.mp4" >"$work/nopose.err" 2>&1
 st=$?
 echo "--- nopose stderr:"; cat "$work/nopose.err"; echo "---"
@@ -151,7 +153,7 @@ check "ref: exit reports 0 dropped packets" $?
 # first; SIGTERM then ends the run early, which --frames reports as exit 1.
 send 0
 PIDFILE="$work/stale.pid" xvfb sh -c '"$@" & echo $! >"$PIDFILE"; wait $!' sh \
-     "$xrdome" --windowed --pose "udp-opentrack:port=$port" --frames 100000 \
+     "$xrdome" --no-memory --windowed --pose "udp-opentrack:port=$port" --frames 100000 \
      "$work/pattern.mp4" >"$work/stale.err" 2>&1 &
 player=$!
 wait_for "$work/stale.err" '^hwdec: '; check "stale: video started" $?

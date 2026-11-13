@@ -12,8 +12,10 @@ for tool in xvfb-run ffmpeg python3; do
 done
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/xrdome-smoke.XXXXXX") || exit 1
+work=$(cd "$work" && pwd) # absolute: a relative XDG_STATE_HOME is ignored by xrdome
 trap 'rm -rf "$work"' EXIT
 export LIBGL_ALWAYS_SOFTWARE=1
+export XDG_STATE_HOME="$work/state"
 
 # xvfb-run merges the program's stderr into its stdout, so callers capture both.
 # Returns the program's own exit status: xvfb-run sometimes fails with
@@ -84,7 +86,7 @@ PY
 
 # 1. Play a 2 s pattern, dump the 30th presented frame.
 "$make_pattern" 2 "$work/pattern.mp4" libx264 || { echo "FAIL: make_pattern.sh"; exit 1; }
-xvfb "$xrdome" --windowed --pose null --frames 30 --dump-frame "$work/out.ppm" \
+xvfb "$xrdome" --no-memory --windowed --pose null --frames 30 --dump-frame "$work/out.ppm" \
      "$work/pattern.mp4" >"$work/play.err" 2>&1
 st=$?
 echo "--- stderr:"; cat "$work/play.err"; echo "---"
@@ -115,7 +117,7 @@ check_frame "$work/out.ppm"
 check "dumped frame: colours and orientation" $?
 
 # 1-8bit. --fbo-format rgba8 --dither off: the previous 8-bit output.
-xvfb "$xrdome" --windowed --pose null --fbo-format rgba8 --dither off --frames 30 \
+xvfb "$xrdome" --no-memory --windowed --pose null --fbo-format rgba8 --dither off --frames 30 \
      --dump-frame "$work/out8.ppm" "$work/pattern.mp4" >"$work/rgba8.err" 2>&1
 st=$?
 cat "$work/rgba8.err"
@@ -129,13 +131,15 @@ check "--fbo-format rgba8 --dither off: colours and orientation" $?
 # the angle, so the yellow box (1.8 to 4.4 degrees up) now sits lower in the
 # view, and the horizon centre is still red / blue. No aspect warning (4096x2048
 # is two square eyes, which is what 90x90 expects too).
-xvfb "$xrdome" --windowed --pose null --content-fov 90x90 --frames 30 \
+xvfb "$xrdome" --no-memory --windowed --pose null --content-fov 90x90 --frames 30 \
      --dump-frame "$work/out90.ppm" "$work/pattern.mp4" >"$work/fov90.err" 2>&1
 st=$?
 cat "$work/fov90.err"
 check "--content-fov 90x90 playback exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
 ! grep -v '^mpv: \[' "$work/fov90.err" | grep -q 'aspect'; check "--content-fov 90x90: no aspect warning" $?
-python3 -I - "$work/out.ppm" "$work/out90.ppm" <<'PY'
+# check_narrow FULL.ppm NARROW.ppm: the 90x90 picture against the 180x180 one.
+check_narrow() {
+python3 -I - "$1" "$2" <<'PY'
 import sys
 
 def load(path):
@@ -177,11 +181,13 @@ for e, name in ((0, "left"), (1, "right")):
     expect(f"{name} no box there at 180x180", frac(full, e, .35, .65, .36, .40, yellow), lambda v: v < .05)
 sys.exit(0 if ok else 1)
 PY
+}
+check_narrow "$work/out.ppm" "$work/out90.ppm"
 check "--content-fov 90x90 dump: centre colours, content larger than at 180x180" $?
 
 # 1a1. --convergence 2 --filter bilinear: each eye turns 1 degree inwards and
 # samples bilinearly; the centre, the box band and the orientation still hold.
-xvfb "$xrdome" --windowed --pose null --convergence 2 --filter bilinear --frames 30 \
+xvfb "$xrdome" --no-memory --windowed --pose null --convergence 2 --filter bilinear --frames 30 \
      --dump-frame "$work/outconv.ppm" "$work/pattern.mp4" >"$work/conv.err" 2>&1
 st=$?
 cat "$work/conv.err"
@@ -192,7 +198,7 @@ check "--convergence 2 --filter bilinear: colours and orientation" $?
 # 1a2. mpv options: --mpv-opt that mpv rejects exits 1 naming the key; the
 # default (fast) profile is reported; a bogus profile fails naming it.
 grep -q '^mpv: profile=fast$' "$work/play.err"; check "stderr reports mpv profile fast" $?
-xvfb "$xrdome" --windowed --pose null --frames 5 --mpv-opt bogus-option-xyz=1 \
+xvfb "$xrdome" --no-memory --windowed --pose null --frames 5 --mpv-opt bogus-option-xyz=1 \
      "$work/pattern.mp4" >"$work/badopt.err" 2>&1
 st=$?
 cat "$work/badopt.err"
@@ -200,7 +206,7 @@ check "bad --mpv-opt exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
 grep -q '^xrdome: .*bogus-option-xyz' "$work/badopt.err"; check "bad --mpv-opt names the key" $?
 
 # 1a3. --mpv-profile default: no profile, same picture.
-xvfb "$xrdome" --windowed --pose null --frames 30 --mpv-profile default \
+xvfb "$xrdome" --no-memory --windowed --pose null --frames 30 --mpv-profile default \
      --dump-frame "$work/outdef.ppm" "$work/pattern.mp4" >"$work/defprof.err" 2>&1
 st=$?
 cat "$work/defprof.err"
@@ -210,7 +216,7 @@ check_frame "$work/outdef.ppm"
 check "--mpv-profile default: colours and orientation" $?
 
 # 1b. --require-hwdec: exit 1 without VA-API, play normally with it.
-xvfb "$xrdome" --windowed --pose null --require-hwdec --frames 5 "$work/pattern.mp4" \
+xvfb "$xrdome" --no-memory --windowed --pose null --require-hwdec --frames 5 "$work/pattern.mp4" \
      >"$work/reqhw.err" 2>&1
 st=$?
 cat "$work/reqhw.err"
@@ -224,7 +230,7 @@ fi
 
 # 1c. --frames N not reached: SIGTERM (SDL turns it into SDL_QUIT) after 3 s,
 # long before 100000 frames, must exit 1.
-xvfb sh -c '"$1" --windowed --pose null --frames 100000 "$2" & pid=$!
+xvfb sh -c '"$1" --no-memory --windowed --pose null --frames 100000 "$2" & pid=$!
             sleep 3; kill -TERM "$pid"; wait "$pid"' sh "$xrdome" "$work/pattern.mp4" \
      >"$work/early.err" 2>&1
 st=$?
@@ -234,7 +240,7 @@ grep -q "^xrdome: --frames 100000: exited after [0-9]* presented frames" "$work/
 check "--frames not reached message" $?
 
 # 1d. Plain playback to the end of the file exits 0 (no --frames).
-xvfb "$xrdome" --windowed --pose null "$work/pattern.mp4" >"$work/eof.err" 2>&1
+xvfb "$xrdome" --no-memory --windowed --pose null "$work/pattern.mp4" >"$work/eof.err" 2>&1
 st=$?
 cat "$work/eof.err"
 check "plays to end of file and exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
@@ -243,7 +249,7 @@ check "plays to end of file and exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
 # matters (the sandbox has no audio device).
 ffmpeg -nostdin -hide_banner -loglevel error -y -f lavfi -i anullsrc -t 2 -vn \
        "$work/audio.m4a" || { echo "FAIL: make audio.m4a"; exit 1; }
-xvfb "$xrdome" --windowed --pose null "$work/audio.m4a" >"$work/novideo.err" 2>&1
+xvfb "$xrdome" --no-memory --windowed --pose null "$work/audio.m4a" >"$work/novideo.err" 2>&1
 st=$?
 cat "$work/novideo.err"
 check "audio-only file exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
@@ -251,17 +257,166 @@ grep -q "^xrdome: '$work/audio.m4a' has no video track" "$work/novideo.err"
 check "audio-only file: no video track message" $?
 
 # 2. Missing file: exit 1 with mpv's error string.
-xvfb "$xrdome" --windowed --pose null /nonexistent/clip.mp4 >"$work/missing.err" 2>&1
+xvfb "$xrdome" --no-memory --windowed --pose null /nonexistent/clip.mp4 >"$work/missing.err" 2>&1
 st=$?
 cat "$work/missing.err"
 check "missing file exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
 grep -q "^xrdome: cannot play '/nonexistent/clip.mp4': loading failed" "$work/missing.err"; check "missing file names mpv error" $?
 
 # 3. No 3840x1080 output (Xvfb screen is 1920x1080): exit 1, tells the user to switch to SBS.
-xvfb "$xrdome" --pose null "$work/pattern.mp4" >"$work/nosbs.err" 2>&1
+xvfb "$xrdome" --no-memory --pose null "$work/pattern.mp4" >"$work/nosbs.err" 2>&1
 st=$?
 cat "$work/nosbs.err"
 check "non-SBS output exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
 grep -q "^xrdome: .*switch the glasses to SBS" "$work/nosbs.err"; check "non-SBS message" $?
+
+# 4. An ordinary flat video gets one warning that names it and suggests the mono flags.
+ffmpeg -v error -f lavfi -i testsrc=s=1920x1080:r=30 -t 2 -c:v libx264 -preset ultrafast \
+    -pix_fmt yuv420p "$work/flat.mp4"
+xvfb "$xrdome" --windowed --pose null --no-memory --frames 10 "$work/flat.mp4" >"$work/flat.err" 2>&1
+st=$?
+check "flat video exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+[ "$(grep -c '^xrdome: warning: video is 1920x1080, .*ordinary flat video.*--layout mono --content-fov 60x34' "$work/flat.err")" -eq 1 ]
+check "flat video: one warning naming flat video and the mono flags" $?
+
+# ---- per-file settings memory (M1 to M10) ----
+cp "$work/pattern.mp4" "$work/mem.mp4"
+rec() { ls "$XDG_STATE_HOME"/xrdome/files/*.ini 2>/dev/null; }
+nrec() { rec | wc -l; }
+
+# M1. no flags, no keys: nothing is saved and no record appears.
+xvfb "$xrdome" --windowed --pose null --frames 30 "$work/mem.mp4" >"$work/m1.err" 2>&1
+st=$?
+check "M1 exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+! grep -q '^settings:' "$work/m1.err"; check "M1 no settings line" $?
+[ -z "$(rec)" ]; check "M1 no record" $?
+
+# M2. flags are saved.
+xvfb "$xrdome" --windowed --pose null --zoom 1.0 --content-fov 90x90 --frames 30 \
+     "$work/mem.mp4" >"$work/m2.err" 2>&1
+st=$?
+check "M2 exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+[ "$(grep -c '^settings:' "$work/m2.err")" -eq 1 ] &&
+    grep -qx 'settings: saved zoom=1.00 content-fov=90x90' "$work/m2.err"; check "M2 saved line" $?
+[ "$(nrec)" -eq 1 ]; check "M2 exactly one record" $?
+grep -q '^content_fov = 90x90' "$(rec)" && grep -q "^path = $work/mem.mp4\$" "$(rec)"
+check "M2 record has content_fov and path" $?
+
+# M3. restored with no flags.
+xvfb "$xrdome" --windowed --pose null --frames 30 --dump-frame "$work/mem90.ppm" \
+     "$work/mem.mp4" >"$work/m3.err" 2>&1
+st=$?
+check "M3 exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+grep -qx 'settings: restored zoom=1.00 content-fov=90x90' "$work/m3.err"; check "M3 restored line" $?
+! grep -q '^settings: saved' "$work/m3.err"; check "M3 nothing saved" $?
+check_narrow "$work/out.ppm" "$work/mem90.ppm"
+check "M3 dumped frame is the 90x90 picture" $?
+
+# M4. survives a rename (the record is keyed by content).
+mv "$work/mem.mp4" "$work/moved.mp4"
+xvfb "$xrdome" --windowed --pose null --frames 30 --dump-frame "$work/mov90.ppm" \
+     "$work/moved.mp4" >"$work/m4.err" 2>&1
+st=$?
+check "M4 exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+grep -qx 'settings: restored zoom=1.00 content-fov=90x90' "$work/m4.err"; check "M4 restored line" $?
+[ "$(nrec)" -eq 1 ]; check "M4 still one record" $?
+check_narrow "$work/out.ppm" "$work/mov90.ppm"
+check "M4 dumped frame is the 90x90 picture" $?
+
+# M5. a flag wins and is saved.
+xvfb "$xrdome" --windowed --pose null --content-fov 180x180 --frames 30 \
+     --dump-frame "$work/mem180.ppm" "$work/moved.mp4" >"$work/m5.err" 2>&1
+st=$?
+check "M5 exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+grep -qx 'settings: restored zoom=1.00' "$work/m5.err"; check "M5 restored line names only zoom" $?
+grep -qx 'settings: saved zoom=1.00 content-fov=180x180' "$work/m5.err"; check "M5 saved line" $?
+check_frame "$work/mem180.ppm"
+check "M5 dumped frame is the 180x180 picture" $?
+
+# M6. --no-memory neither reads nor writes.
+xvfb "$xrdome" --windowed --pose null --zoom 1.0 --content-fov 90x90 --frames 30 \
+     "$work/moved.mp4" >"$work/m6a.err" 2>&1
+st=$?
+check "M6 setup run exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+grep -q '^settings: saved .*content-fov=90x90' "$work/m6a.err"; check "M6 setup run saved 90x90" $?
+cp "$(rec)" "$work/m6.rec"
+xvfb "$xrdome" --no-memory --windowed --pose null --frames 30 --dump-frame "$work/nm.ppm" \
+     "$work/moved.mp4" >"$work/m6.err" 2>&1
+st=$?
+check "M6 exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+! grep -q '^settings:' "$work/m6.err"; check "M6 no settings line" $?
+check_frame "$work/nm.ppm"
+check "M6 dumped frame is the 180x180 picture" $?
+# A flag that differs from the record would be saved if --no-memory did not stop it.
+xvfb "$xrdome" --no-memory --windowed --pose null --zoom 0.5 --frames 30 \
+     "$work/moved.mp4" >"$work/m6b.err" 2>&1
+st=$?
+check "M6 flag run exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+! grep -q '^settings:' "$work/m6b.err"; check "M6 flag run no settings line" $?
+cmp -s "$work/m6.rec" "$(rec)"; check "M6 record byte-identical" $?
+
+# M7b. a record from a newer xrdome is noted once, kept, and not overwritten.
+sed -i 's/^version = 1$/version = 2/' "$(rec)"
+cp "$(rec)" "$work/m7b.rec"
+xvfb "$xrdome" --windowed --pose null --zoom 0.5 --frames 30 "$work/moved.mp4" >"$work/m7b.err" 2>&1
+st=$?
+check "M7b exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+[ "$(grep -c '^xrdome: note: settings record' "$work/m7b.err")" -eq 1 ]; check "M7b one note" $?
+! grep -q '^settings: restored' "$work/m7b.err"; check "M7b nothing restored" $?
+! grep -q '^settings: saved' "$work/m7b.err"; check "M7b nothing saved" $?
+grep -qx 'version = 2' "$(rec)"; check "M7b record still version 2" $?
+cmp -s "$work/m7b.rec" "$(rec)"; check "M7b record byte-identical" $?
+sed -i 's/^version = 2$/version = 1/' "$(rec)"
+
+# M7. a corrupt record is reported, kept, and not overwritten.
+echo "zoom = 99" >>"$(rec)"
+cp "$(rec)" "$work/m7.rec"
+xvfb "$xrdome" --windowed --pose null --zoom 0.5 --frames 30 "$work/moved.mp4" >"$work/m7.err" 2>&1
+st=$?
+check "M7 exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+[ "$(grep -c '^xrdome: warning: settings record' "$work/m7.err")" -eq 1 ]; check "M7 one warning" $?
+! grep -q '^settings: saved' "$work/m7.err"; check "M7 nothing saved" $?
+grep -qx 'zoom = 99' "$(rec)"; check "M7 record untouched" $?
+cmp -s "$work/m7.rec" "$(rec)"; check "M7 record byte-identical" $?
+
+# M8. --forget deletes the record and plays from the defaults.
+xvfb "$xrdome" --forget --windowed --pose null --frames 30 --dump-frame "$work/fg.ppm" \
+     "$work/moved.mp4" >"$work/m8.err" 2>&1
+st=$?
+check "M8 exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+grep -q '^settings: forgot ' "$work/m8.err"; check "M8 forgot line" $?
+check_frame "$work/fg.ppm"
+check "M8 dumped frame is the 180x180 picture" $?
+[ -z "$(rec)" ]; check "M8 no record afterwards" $?
+
+# M9. a run that never renders a frame saves nothing.
+xvfb "$xrdome" --windowed --pose null --content-fov 120x90 "$work/audio.m4a" >"$work/m9.err" 2>&1
+st=$?
+check "M9 audio-only exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
+[ -z "$(rec)" ]; check "M9 no record" $?
+
+# M10. an unwritable state directory warns once and keeps the exit status.
+( XDG_STATE_HOME="$work/pattern.mp4"; export XDG_STATE_HOME
+  xvfb "$xrdome" --windowed --pose null --zoom 0.5 --frames 30 \
+       "$work/moved.mp4" >"$work/m10.err" 2>&1 )
+st=$?
+check "M10 exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+[ "$(grep -c '^xrdome: warning: cannot save settings' "$work/m10.err")" -eq 1 ]; check "M10 one warning" $?
+
+# M11. a --forget that cannot remove the record warns once, and the stale record is neither
+# restored nor overwritten (a directory in the record's place makes unlink fail, even as root).
+xvfb "$xrdome" --windowed --pose null --zoom 0.5 --frames 30 "$work/moved.mp4" >"$work/m11a.err" 2>&1
+r=$(rec)
+rm -f "$r" && mkdir "$r"
+xvfb "$xrdome" --forget --windowed --pose null --zoom 0.75 --frames 30 \
+     "$work/moved.mp4" >"$work/m11.err" 2>&1
+st=$?
+check "M11 exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+[ "$(grep -c '^xrdome: warning: cannot forget settings record ' "$work/m11.err")" -eq 1 ] &&
+    ! grep -q '^xrdome: .*settings record .*ignoring' "$work/m11.err"
+check "M11 one forget warning, record not loaded" $?
+! grep -q '^settings:' "$work/m11.err"; check "M11 nothing restored or saved" $?
+[ -d "$r" ]; check "M11 record left in place" $?
+
 
 exit $fail

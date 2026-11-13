@@ -22,6 +22,7 @@ shaders_gen = custom_target('shaders_gen',
 core_sources = files(
   'src/math/quat.c',
   'src/render/projection.c',
+  'src/values.c',
   'src/config.c',
   'src/util/timing.c',
   'src/pose/opentrack_packet.c',
@@ -33,6 +34,7 @@ core_sources = files(
   'src/display/output.c',
   'src/video/player_mpv.c',
   'src/app/controls.c',
+  'src/store/filestate.c',
 )
 
 # Test names: each entry NAME builds tests/test_NAME.c into test_NAME.
@@ -48,6 +50,8 @@ test_names = [
   'player',
   'timing',
   'controls',
+  'filestate',
+  'values',
 ]
 
 inc = include_directories('src')

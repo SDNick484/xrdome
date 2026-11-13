@@ -3,9 +3,12 @@
 A Linux player for VR180 video on XR glasses (Viture Pro XR, XREAL Air 2 Pro) with head tracking.
 
 Status: plays a side-by-side VR180 file on the glasses with head tracking from
-XRLinuxDriver (OpenTrack UDP), keyboard controls and a frame-timing log. Tested
-on the desktop with synthetic poses; the hardware timing check on the Viture Pro XR
-is still to do. See `docs/superpowers/specs/2026-11-11-xrdome-design.md` and
+XRLinuxDriver (OpenTrack UDP), keyboard controls, a frame-timing log and per-file settings
+memory. On the Viture Pro XR, with the default mpv profile, bicubic sampling and a 10-bit
+texture, 0.6% of swap intervals were late (see [Performance notes](#performance-notes)). Per-file
+settings memory was run on the Viture Pro XR on 2026-11-13: saving a zoom change, restoring it,
+and keeping it across a rename were seen to work; the other remembered settings and `--forget`
+have only passed the unit and Xvfb smoke tests. The XREAL Air 2 Pro is untested. See `docs/STATUS.md`, `docs/superpowers/specs/2026-11-11-xrdome-design.md` and
 `docs/superpowers/plans/2026-11-11-xrdome.md`.
 
 ## Build and run
@@ -66,18 +69,20 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 |---|---|
 | Space | Pause / resume |
 | Left / Right | Seek -10 s / +10 s |
-| R | Recenter, yaw only (keeps the horizon level) |
+| R | Recenter, yaw only (keeps the current pitch and roll reference) |
 | Shift+R | Recenter, full |
 | [ / ] | Zoom out / in (x1.1 per step, 0.25 to 4); prints `zoom: 1.10` |
-| , / . | Convergence -0.1 / +0.1 degrees (-5 to 5); prints `convergence: 0.3 deg` |
-| / | Convergence back to the `--convergence` value |
 | F | Toggle bicubic / bilinear sampling; prints `filter: bicubic` or `filter: bilinear` |
 | S | Swap eyes |
 | M | Cycle layout: sbs-lr, sbs-rl, mono |
 | Q | Quit |
 
-The `zoom:`, `convergence:` and `filter:` lines are printed only when the value changes (not for
-a press at a limit, or a reset to the value already set).
+The `zoom:` and `filter:` lines are printed only when the value changes (not for
+a press at a limit).
+
+The head pose at the first frame becomes the reference on all three axes, so a head tilted at
+start gives a tilted picture, and `R` does not correct that. Hold your head level and press
+`Shift+R`.
 
 ### Flags
 
@@ -87,12 +92,14 @@ a press at a limit, or a reset to the value already set).
 `--content-fov HxV`, `--proj hequirect` (the only projection so far, so optional),
 `--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)), `--mpv-profile NAME`,
 `--mpv-opt KEY=VALUE` (repeatable, up to 16), `--mpv-log LEVEL`, `--convergence DEG`,
-`--filter bilinear|bicubic`, `--fbo-format rgb10|rgba8`, `--dither on|off`.
+`--filter bilinear|bicubic`, `--fbo-format rgb10|rgba8`, `--dither on|off`, `--no-memory`,
+`--forget` (the last two are described under [Per-file settings](#per-file-settings)).
 
 `--convergence DEG` (default 0, -5 to 5) turns each eye's view by half the angle in opposite
 directions; positive turns the eyes inwards. `--filter` chooses how the eye pass samples the
-video: `bicubic` (Catmull-Rom, the default) or `bilinear`. Both are command-line flags only; see
-[Viewing comfort and sharpness](#viewing-comfort-and-sharpness).
+video: `bicubic` (Catmull-Rom, the default) or `bilinear`. Neither is an ini key.
+`--convergence` is also remembered per file (see [Per-file settings](#per-file-settings)), and
+`--filter` is not. See [Viewing comfort and sharpness](#viewing-comfort-and-sharpness).
 
 `--fbo-format rgb10|rgba8` (default `rgb10`) is the format of the texture mpv renders each
 video frame into before the eye pass reads it. `rgb10` (`GL_RGB10_A2`, 10 bits per colour, the
@@ -115,7 +122,7 @@ forwards mpv's own log messages at that level and above to stderr, one line each
 `mpv: [ao/alsa] Playback open error: Device or resource busy`. `no` turns them off. Use `info` or
 `v` when audio or decoding fails without an obvious reason.
 
-`--content-fov HxV` says how many degrees of longitude (H) and latitude (V) each eye of the file
+`--content-fov HxV` (also remembered per file) says how many degrees of longitude (H) and latitude (V) each eye of the file
 covers, centred straight ahead. The default is `180x180`; each value is 10 to 180. For a
 side-by-side file whose author gives 120 degrees horizontal by 90 vertical per eye:
 
@@ -181,21 +188,122 @@ zoom = 1.0
 fov_diag = 50
 ```
 
+## Per-file settings
+
+xrdome remembers these settings for each video file and restores them the next time you open the
+same file: zoom, layout (`sbs-lr`, `sbs-rl`, `mono`), swap-eyes, content FOV and convergence.
+
+Only settings you changed are stored. A setting counts as changed for a file when a key changed it
+during the run (`[`, `]`, `S`, `M`), when you gave its flag (`--zoom`, `--layout`, `--content-fov`,
+`--convergence`) on the command line, or when the file's record already held it. Settings you
+never touched are left out of the record and keep following the defaults, so if you later change
+`zoom` in `config.ini`, files whose zoom you never adjusted pick up the new value. A flag given
+once is therefore remembered. This is the only way content FOV is remembered, since it has no key.
+Zooming out and back in to the starting value does not count as a change.
+
+Precedence, lowest to highest: built-in defaults, built-in device values, `config.ini`, the
+file's record, command-line flags. A record value is used only where the matching flag was not
+given. There is no flag for swap-eyes, so a recorded swap is always restored.
+
+Records are one small file per video, in
+`$XDG_STATE_HOME/xrdome/files/`, or `~/.local/state/xrdome/files/` when `XDG_STATE_HOME` is unset,
+empty or not an absolute path. The directories are created on first save with mode 0700. The file
+name is the video's key, `<size>-<hash>.ini`: the size in bytes, then a 64-bit FNV-1a hash (16
+lowercase hex digits) over the first 64 KiB and the last 64 KiB of the file, for example
+`8123456789-9f3c0a1b22d4e6f7.ini`. The key comes from the file's content, not its name, so
+renaming or moving a file keeps its settings. A re-encode or a trim is a new file with no record.
+If the argument is not a regular file you can read (a URL, a pipe, a missing file), memory is off
+for that run and nothing is printed about it.
+
+A record looks like this:
+
+```ini
+# xrdome per-file settings
+version = 1
+path = /home/nick/vr/coast-walk.mp4
+saved = 2026-11-12
+proj = hequirect
+zoom = 0.7513
+content_fov = 120x90
+```
+
+`path` and `saved` are labels for you (and for `grep`); xrdome never uses them to find or check a
+record. The settings keys are `zoom` (0.25 to 4), `layout`, `swap` (`yes` or `no`), `content_fov`
+(`HxV`, each 10 to 180) and `convergence` (-5 to 5); a missing key means "follow the defaults".
+`proj` is always `hequirect`.
+
+The record is saved once, when the player exits for any reason (`Q`, closing the window, end of
+file, the glasses being unplugged, an error), as long as at least one video frame was shown. A file
+that never showed a frame (audio only, a text file, a truncated download) leaves no record, even
+with `--content-fov` given. Nothing is written if nothing is set and no record existed, or if the
+record would be the same as the one loaded. A failed save prints one
+`xrdome: warning: cannot save settings: ...` line and does not change the exit status.
+
+If `--forget` cannot delete the record, it prints one
+`xrdome: warning: cannot forget settings record <path>: ...` line and carries on. The record that
+could not be removed is then neither restored nor overwritten in that run.
+
+stderr shows what happened, in lines that start with `settings:`:
+
+```
+settings: restored zoom=0.75 content-fov=120x90
+settings: saved zoom=0.68 layout=sbs-rl
+settings: forgot 8123456789-9f3c0a1b22d4e6f7
+```
+
+`restored` is printed at open and lists only the values actually applied (not ones a flag
+overrode). `saved` is printed at exit when a record was written. `forgot` is printed by `--forget`
+when it deleted a record. A file with no record prints nothing.
+
+- `--no-memory`: do not read or write the record for this run. Use it for timing runs and
+  comparisons.
+- `--forget`: delete the file's record at startup (including an unreadable or newer one), then
+  continue from the defaults. The run saves at exit as usual. With `--no-memory` as well, the
+  record is still deleted and then nothing is read or written.
+
+Both are command-line only.
+
+To find the record for a video, search the `path` labels, then open it in an editor:
+
+```sh
+grep -l coast-walk ~/.local/state/xrdome/files/*
+vim ~/.local/state/xrdome/files/8123456789-9f3c0a1b22d4e6f7.ini
+```
+
+The `path` label is the absolute path at the time of the last save, so after a rename it names the
+old file. Unknown keys are ignored. A record that has a malformed line, no `version` or a value out
+of range is not used: xrdome prints one `xrdome: warning: settings record PATH: ...` line, plays
+the file from the defaults and does not overwrite the record at exit. A record with a `version`
+above 1 or a `proj` other than `hequirect` (written by a newer xrdome) is treated the same way,
+with an `xrdome: note:` line instead. Fix the line with `vim`, or run once with `--forget` to
+delete it. Records for deleted videos are not cleaned up; remove them by hand.
+
+Verification: the feature passes the unit tests and the Xvfb smoke tests, run in a sandbox (Ubuntu
+24.04, mpv 0.37, software GL). On the Viture Pro XR (2026-11-13) saving a zoom change at quit,
+restoring it on reopen and keeping it across a rename were seen to work, and playing with the
+record in use missed no more vsyncs than playing with `--no-memory`. Layout, swap-eyes, content
+FOV and convergence records, `--forget` and the bad-record paths have not been run on the glasses.
+`docs/STATUS.md` has the details.
+
 ## Viewing comfort and sharpness
 
-**Convergence.** The glasses show both eyes' images on a virtual screen a few metres away, so
+**Close subjects.** The glasses show both eyes' images on a virtual screen a few metres away, so
 content that is identical in both eyes appears at that distance, not at infinity. A VR180 camera
-was set up for objects at infinity to line up, so anything close to the camera needs more
-eye-crossing on the glasses than it did in the scene, and a near subject can split into two
-images that will not fuse. Press `.` a few times (0.1 degrees per step) until the near subject
-becomes one image, `,` to go back, and `/` to return to the starting value. Each step prints the
-current value; to start a file with it, pass it on the command line, e.g. `--convergence 1.5`.
-Convergence is a display-side adjustment, not a property of the file: it shifts the left eye's
-picture left and the right eye's picture right (by half the angle each), the same in every
-layout, and does not change what the camera recorded. Positive values suit near subjects: they
-move everything in the scene further away, so the larger the value, the more your eyes must
-diverge for distant content; use the smallest value that fuses the subject. Negative values
-bring the scene nearer.
+was set up for objects at infinity to line up, so a subject close to the camera is hard to fuse
+at zoom 1 and above: it can split into two images. Zoom out (`[`) until the near subject becomes
+one image. Each press prints the new zoom, and the value is remembered for the file (see
+[Per-file settings](#per-file-settings)).
+
+`--convergence DEG` (default 0, -5 to 5) is an experimental flag, not a recommended fix. It is a
+display-side adjustment, not a property of the file: it shifts the left eye's picture left and the
+right eye's picture right (by turning each eye's view inwards by half the angle), the same in
+every layout, and does not change
+what the camera recorded. Positive values move everything in the scene further away, so your eyes
+must diverge more for distant content; negative values bring the scene nearer. On the Viture Pro
+XR (tested 2026-11-12), values up to 2 degrees made no significant difference, and 5 degrees put
+the scene out of focus until zoomed far out. It is untested on the XREAL Air 2 Pro. There are no
+keys for it; it can be given on the command line and is remembered per file like the other
+settings.
 
 **Sharpness.** The glasses show about 51 display pixels per degree, while a 4K VR180 file has
 about 11 source pixels per degree, so every source pixel is enlarged about five times. Two things
@@ -308,6 +416,9 @@ Viture Pro XR glasses at 3840x1080 60 Hz, with a 4320x2160 10-bit AV1 60 fps fil
   to software decode (`hwdec: no`; mpv prints the reason). Software decode of that file at 60 fps
   and 20 Mbit/s still kept up: 446 of 34376 swap intervals (1.3%) exceeded 20 ms. HEVC and AV1 do
   not have this size limit here.
+- That holds on AC power. On battery with the `balanced` platform profile (2026-11-13) the same
+  kind of file missed 57 to 74% of swap intervals over 3600 frames; plugged in, 0 of 3600. If
+  software-decoded playback stutters, check the charger first.
 - Source bitrate matters more than anything the player does: the same resolution looked much
   better at 20 Mbit/s H.264 than at 2.5 Mbit/s AV1.
 

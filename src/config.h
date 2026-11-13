@@ -6,6 +6,7 @@
 
 #include "render/projection.h"
 #include "render/renderer_gl.h"
+#include "store/filestate.h"
 #include "video/player_mpv.h"
 
 typedef struct {
@@ -30,6 +31,9 @@ typedef struct {
     xrd_filter filter;     /* --filter bilinear|bicubic, default bicubic */
     xrd_fbo_format fbo_format; /* --fbo-format rgb10|rgba8, default rgb10 */
     bool dither;           /* --dither on|off, default on */
+    unsigned explicit_flags; /* XRD_SET_ZOOM|LAYOUT|CONTENT_FOV|CONVERGENCE given on the command line */
+    bool no_memory;        /* --no-memory */
+    bool forget;           /* --forget */
     /* development only (smoke test), not documented: */
     int frames;            /* --frames N: exit 0 after N presented frames
                               once a video frame has been rendered; 0 = off */

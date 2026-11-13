@@ -64,6 +64,9 @@ static void defaults_match_spec(void **state)
     assert_string_equal(c.mpv_log, "warn");
     assert_int_equal(c.fbo_format, XRD_FBO_RGB10);
     assert_true(c.dither);
+    assert_int_equal(c.explicit_flags, 0);
+    assert_false(c.no_memory);
+    assert_false(c.forget);
 }
 
 static void ini_absent_is_ok(void **state)
@@ -864,6 +867,92 @@ static void args_dev_dump_requires_frames(void **state)
     assert_non_null(strstr(err, "--frames"));
 }
 
+static unsigned load_flags(int argc, char **argv)
+{
+    char err[256] = "";
+    xrd_config c;
+    assert_int_equal(xrd_config_load(&c, NULL, argc, argv, err, sizeof err), 0);
+    return c.explicit_flags;
+}
+
+static void args_explicit_flags(void **state)
+{
+    (void)state;
+    char *none[] = {"xrdome", "a.mp4", NULL};
+    assert_int_equal(load_flags(2, none), 0);
+    char *zoom[] = {"xrdome", "--zoom", "0.5", "a.mp4", NULL};
+    assert_int_equal(load_flags(4, zoom), XRD_SET_ZOOM);
+    char *layout[] = {"xrdome", "--layout", "mono", "a.mp4", NULL};
+    assert_int_equal(load_flags(4, layout), XRD_SET_LAYOUT);
+    char *fov[] = {"xrdome", "--content-fov", "120x90", "a.mp4", NULL};
+    assert_int_equal(load_flags(4, fov), XRD_SET_CONTENT_FOV);
+    char *conv[] = {"xrdome", "--convergence", "1", "a.mp4", NULL};
+    assert_int_equal(load_flags(4, conv), XRD_SET_CONVERGENCE);
+    char *all[] = {"xrdome", "--zoom", "0.5", "--layout", "mono", "--content-fov", "120x90",
+                   "--convergence", "1", "a.mp4", NULL};
+    assert_int_equal(load_flags(10, all),
+                     XRD_SET_ZOOM | XRD_SET_LAYOUT | XRD_SET_CONTENT_FOV | XRD_SET_CONVERGENCE);
+}
+
+static void explicit_default_value_counts(void **state)
+{
+    (void)state;
+    char *argv[] = {"xrdome", "--zoom", "1.0", "a.mp4", NULL};
+    assert_int_equal(load_flags(4, argv), XRD_SET_ZOOM);
+}
+
+static void ini_zoom_is_not_explicit(void **state)
+{
+    (void)state;
+    char path[64], err[256] = "";
+    write_tmp(path, "[device.viture-pro]\nzoom = 0.8\n");
+    char *argv[] = {"xrdome", "a.mp4", NULL};
+    xrd_config c;
+    int rc = xrd_config_load(&c, path, 2, argv, err, sizeof err);
+    unlink(path);
+    assert_int_equal(rc, 0);
+    assert_float_equal(c.zoom, 0.8f, TOL);
+    assert_int_equal(c.explicit_flags, 0);
+}
+
+static void args_memory_flags(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    xrd_config c;
+    char *a1[] = {"xrdome", "--no-memory", "a.mp4", NULL};
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_parse_args(&c, 3, a1, err, sizeof err), 0);
+    assert_true(c.no_memory);
+    assert_false(c.forget);
+    char *a2[] = {"xrdome", "--forget", "a.mp4", NULL};
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_parse_args(&c, 3, a2, err, sizeof err), 0);
+    assert_false(c.no_memory);
+    assert_true(c.forget);
+    char *a3[] = {"xrdome", "--no-memory", "--forget", "a.mp4", NULL};
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_parse_args(&c, 4, a3, err, sizeof err), 0);
+    assert_true(c.no_memory);
+    assert_true(c.forget);
+}
+
+static void ini_rejects_new_keys(void **state)
+{
+    (void)state;
+    const char *keys[] = {"no_memory = 1", "forget = 1"};
+    for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
+        char path[64], err[256] = "", text[128];
+        snprintf(text, sizeof text, "[general]\n%s\n", keys[i]);
+        write_tmp(path, text);
+        xrd_config c;
+        xrd_config_defaults(&c);
+        assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), -1);
+        assert_non_null(strstr(err, "unknown key"));
+        unlink(path);
+    }
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -913,6 +1002,11 @@ int main(void)
         cmocka_unit_test(args_dev_frames_bad_values),
         cmocka_unit_test(args_dev_dump_requires_frames),
         cmocka_unit_test(args_sync_after_swap_flag),
+        cmocka_unit_test(args_explicit_flags),
+        cmocka_unit_test(explicit_default_value_counts),
+        cmocka_unit_test(ini_zoom_is_not_explicit),
+        cmocka_unit_test(args_memory_flags),
+        cmocka_unit_test(ini_rejects_new_keys),
     };
     save_env(NULL);
     int failed = cmocka_run_group_tests(tests, NULL, NULL);
