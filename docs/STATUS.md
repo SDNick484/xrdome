@@ -9,12 +9,20 @@ Plan: `docs/superpowers/plans/2026-11-11-xrdome.md` (Tasks 0-9 done, Task 10 ope
 - Head tracking from XRLinuxDriver over OpenTrack UDP (port 4242); recenter keys; seek; audio.
 - Frame timing: 0.6% late frames with defaults (mpv profile `fast`, bicubic, 10-bit FBO + dither).
 - Options and keys: see README.
+- Per-file settings memory (zoom, layout, swap-eyes, content FOV, convergence, keyed by file
+  size and a hash of its first and last 64 KiB; `--no-memory`, `--forget`): passes the unit tests
+  and the Xvfb smoke tests on the desktop (Ubuntu 24.04, mpv 0.37, software GL). Not yet run on
+  the glasses; the hardware check is under Open.
 
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship
   `libglasses.so` or XRLinuxDriver source. A Viture SDK backend, if added, uses dlopen.
 - mpv default profile is `fast`; the default mpv render path saturated the integrated GPU.
+- Convergence is demoted to the `--convergence` flag (still remembered per file); the `,` `.` and
+  `/` keys are removed. Reason: on the Viture Pro XR up to 2 deg made no significant difference
+  and 5 deg put the scene out of focus, while zooming out is what fuses close subjects. The flag
+  stays because the finding is one viewer on one pair of glasses and the XREAL Air 2 Pro is untested.
 - Source bitrate dominates picture quality (20 Mbit/s H.264 looked far better than 2.5 Mbit/s AV1).
 
 ## Findings from hardware testing
@@ -32,7 +40,14 @@ Plan: `docs/superpowers/plans/2026-11-11-xrdome.md` (Tasks 0-9 done, Task 10 ope
 - Unanalysed: the remaining 0.6-1.3% late frames.
 - LICENSE not chosen. Depends on whether the installed mpv is a GPL build:
   `grep -n -i gpl "$(equery which media-video/mpv)"`.
-- Candidate next features, in suggested order: per-file settings memory (zoom, content FOV,
-  convergence), format auto-detection, per-eye HUD, Viture SDK backend, GTK launcher,
-  Gentoo overlay ebuild.
-- Convergence keys: decide whether to keep, widen, or demote given the finding above.
+- Per-file settings: hardware check on the Viture:
+  ```sh
+  ./build/xrdome clip.mp4          # press [ a few times, then Q
+  cat ~/.local/state/xrdome/files/*.ini
+  ./build/xrdome clip.mp4          # expect "settings: restored zoom=..."; picture as left
+  mv clip.mp4 renamed.mp4 && ./build/xrdome renamed.mp4   # still restored
+  ```
+  Also compare the late-frame share for the same file with and without `--no-memory` (each with
+  `--timing-log`); it should match the 0.6% above within run-to-run noise.
+- Candidate next features, in suggested order: format auto-detection and flat projection with
+  head tracking and zoom, per-eye HUD, Viture SDK backend, GTK launcher, Gentoo overlay ebuild.
