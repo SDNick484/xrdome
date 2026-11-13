@@ -16,6 +16,7 @@
 #include "pose/pose.h"
 #include "render/projection.h"
 #include "render/renderer_gl.h"
+#include "store/filestate.h"
 #include "track/tracker.h"
 #include "util/timing.h"
 #include "video/player_mpv.h"
@@ -64,8 +65,7 @@ static int dump_ppm(const char *path, int w, int h)
 }
 
 /* Prints the zoom and filter lines for the values that differ
- * between before and after (a key press at a limit, or a reset to the value
- * already set, prints nothing). */
+ * between before and after (a key press at a limit prints nothing). */
 static void report_display_changes(const xrd_controls *before, const xrd_controls *after)
 {
     if (after->zoom != before->zoom)
@@ -131,6 +131,98 @@ static bool handle_key(const SDL_KeyboardEvent *k, xrd_controls *ctl, xrd_tracke
     return quit;
 }
 
+/* Per-file settings memory (spec 5.4 to 5.8): the record found at start and
+ * what decides whether anything is written at quit. */
+typedef struct {
+    bool on;            /* a key and a state directory exist and --no-memory is not given */
+    bool have_loaded;   /* a record was read and parsed */
+    bool block_save;    /* the record is unreadable or newer: never overwrite it */
+    char key[XRD_FILESTATE_KEY_MAX];
+    char dir[4096];
+    xrd_filestate loaded;
+    xrd_file_settings start; /* the values playback starts with, after the record */
+} xrd_memory;
+
+static xrd_file_settings settings_from_config(const xrd_config *cfg)
+{
+    xrd_file_settings s = {.zoom = cfg->zoom, .layout = cfg->layout, .swap = false,
+                           .content_hfov = cfg->content_hfov, .content_vfov = cfg->content_vfov,
+                           .convergence = cfg->convergence};
+    return s;
+}
+
+/* Handles --forget and --no-memory, loads the file's record and applies it
+ * under the command-line flags into cfg. Silent when the file has no key or
+ * there is no state directory. */
+static void memory_load_and_apply(xrd_memory *m, xrd_config *cfg)
+{
+    memset(m, 0, sizeof *m);
+    m->start = settings_from_config(cfg);
+    if (xrd_filestate_key(cfg->file, m->key, sizeof m->key) != 0 ||
+        xrd_filestate_dir(m->dir, sizeof m->dir) != 0)
+        return;
+    if (cfg->forget && xrd_filestate_delete(m->dir, m->key) == 1)
+        fprintf(stderr, "settings: forgot %s\n", m->key);
+    if (cfg->no_memory)
+        return;
+    m->on = true;
+
+    char path[4200], err[256] = "", text[160];
+    if (xrd_filestate_record_path(m->dir, m->key, path, sizeof path) != 0)
+        return;
+    switch (xrd_filestate_load(path, &m->loaded, err, sizeof err)) {
+    case XRD_FS_OK: {
+        m->have_loaded = true;
+        xrd_file_settings s = settings_from_config(cfg);
+        unsigned applied = xrd_filestate_apply(&m->loaded, cfg->explicit_flags, &s);
+        cfg->zoom = s.zoom;
+        cfg->layout = s.layout;
+        cfg->content_hfov = s.content_hfov;
+        cfg->content_vfov = s.content_vfov;
+        cfg->convergence = s.convergence;
+        m->start = s;
+        if (applied && xrd_filestate_describe(&m->loaded, applied, text, sizeof text) > 0)
+            fprintf(stderr, "settings: restored %s\n", text);
+        break;
+    }
+    case XRD_FS_UNSUPPORTED:
+        m->block_save = true;
+        fprintf(stderr,
+                "xrdome: note: settings record %s is from a newer xrdome; ignoring it "
+                "(--forget removes it)\n", path);
+        break;
+    case XRD_FS_BAD:
+        m->block_save = true;
+        fprintf(stderr, "xrdome: warning: settings record %s: %s; ignoring it "
+                        "(--forget removes it)\n", path, err);
+        break;
+    case XRD_FS_NONE:
+        break;
+    }
+}
+
+/* Writes the record at quit when something is set and it differs from what
+ * was loaded. Failure only warns; the exit status is not touched. */
+static void memory_save(const xrd_memory *m, const xrd_config *cfg, const xrd_controls *ctl)
+{
+    xrd_file_settings end = {.zoom = ctl->zoom, .layout = ctl->layout, .swap = ctl->swap_eyes,
+                             .content_hfov = cfg->content_hfov, .content_vfov = cfg->content_vfov,
+                             .convergence = ctl->convergence_deg};
+    xrd_filestate out; /* distinct from m->loaded: collect clears it first */
+    xrd_filestate_collect(m->have_loaded ? &m->loaded : NULL, cfg->explicit_flags, &m->start,
+                          &end, &out);
+    if (out.set == 0 && !m->have_loaded)
+        return;
+    if (m->have_loaded && xrd_filestate_equal(&m->loaded, &out))
+        return;
+
+    char err[256] = "", text[160];
+    if (xrd_filestate_save(m->dir, m->key, &out, cfg->file, err, sizeof err) != 0)
+        fprintf(stderr, "xrdome: warning: cannot save settings: %s\n", err);
+    else if (xrd_filestate_describe(&out, out.set, text, sizeof text) > 0)
+        fprintf(stderr, "settings: saved %s\n", text);
+}
+
 int main(int argc, char **argv)
 {
     char err[512] = "";
@@ -139,6 +231,9 @@ int main(int argc, char **argv)
     bool have_ini = xrd_config_default_path(ini, sizeof ini) == 0;
     if (xrd_config_load(&cfg, have_ini ? ini : NULL, argc, argv, err, sizeof err) != 0)
         return fail("%s", err);
+
+    xrd_memory mem;
+    memory_load_and_apply(&mem, &cfg);
 
     xrd_pose_source *pose = xrd_pose_source_create(cfg.pose, err, sizeof err);
     if (!pose)
@@ -153,6 +248,8 @@ int main(int argc, char **argv)
     xrd_player *p = NULL;
     int presented = 0; /* frames swapped since the first video frame (--frames) */
     bool done = false; /* --frames reached, or the glasses went away */
+    bool rendered = false; /* a video frame was drawn (gates saving the settings) */
+    xrd_controls ctl;      /* valid once rendered is set */
 
     trk = xrd_tracker_new(pose);
     if (!trk) {
@@ -264,9 +361,9 @@ int main(int argc, char **argv)
     if (cfg.frames > 0)
         xrd_player_hold_at_end(p);
 
-    xrd_controls ctl;
     xrd_controls_init(&ctl, cfg.zoom, cfg.layout);
     xrd_controls_init_display(&ctl, cfg.convergence, cfg.filter);
+    ctl.swap_eyes = mem.start.swap;
     const bool mouse_look = strcmp(pose->name, "null") == 0;
     float eye_aspect = 1.f;
     bool size_dirty = true; /* recompute the per-eye aspect and tans on the next frame */
@@ -323,6 +420,8 @@ int main(int argc, char **argv)
             break;
 
         unsigned tex = xrd_player_texture(p);
+        if (tex)
+            rendered = true;
         if (tex && !hwdec_checked) {
             const char *hw = xrd_player_hwdec(p);
             fprintf(stderr, "hwdec: %s\n", hw[0] ? hw : "unknown");
@@ -411,6 +510,8 @@ int main(int argc, char **argv)
     rc = 0;
 
 out:
+    if (mem.on && !mem.block_save && rendered)
+        memory_save(&mem, &cfg, &ctl);
     if (pose && strcmp(pose->name, "udp-opentrack") == 0)
         fprintf(stderr, "pose: %u malformed UDP packets dropped\n",
                 (unsigned)xrd_pose_udp_dropped(pose));
