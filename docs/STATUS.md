@@ -10,7 +10,12 @@ Plan: `docs/superpowers/plans/2026-11-11-xrdome.md` (Tasks 0-9 done, Task 10 ope
 - Head tracking from XRLinuxDriver over OpenTrack UDP (port 4242); recenter keys; seek; audio.
 - Frame timing: 0.6% late frames with defaults (mpv profile `fast`, bicubic, 10-bit FBO + dither).
 - Options and keys: see README.
-- CI (GitHub Actions, Ubuntu 24.04) builds with `-Dwerror=true` and runs the whole suite, failing if any of the three Xvfb smoke tests (`smoke`, `smoke_tracking`, `smoke_sbs`) skips.
+- CI (GitHub Actions) builds with `-Dwerror=true` and runs the whole suite, failing if any of the three
+  Xvfb smoke tests (`smoke`, `smoke_tracking`, `smoke_sbs`) skips, in two jobs: Ubuntu 24.04 (mpv 0.37)
+  and an `archlinux:latest` container (gcc 16.2.1, mpv 0.41 / libmpv 2.5.0, `sdl2-compat` 2.32.74 on
+  SDL3, Mesa 26.2 on 2026-11-14). Arch's SDL adds `-D_GNU_SOURCE=1` to the cflags, and its
+  `xvfb-run` (T2 SDE's copy of an old Debian script) sleeps 3 s per start, so `smoke` takes about 315 s there; that job
+  runs with `--timeout-multiplier 2`.
 
 ## Per-file settings memory (merged in PR #1, `main` at `3358de5`)
 
