@@ -9,6 +9,7 @@ Plan: `docs/superpowers/plans/2026-11-11-xrdome.md` (Tasks 0-9 done, Task 10 ope
 - Head tracking from XRLinuxDriver over OpenTrack UDP (port 4242); recenter keys; seek; audio.
 - Frame timing: 0.6% late frames with defaults (mpv profile `fast`, bicubic, 10-bit FBO + dither).
 - Options and keys: see README.
+- CI (GitHub Actions, Ubuntu 24.04) builds with `-Dwerror=true` and runs the whole suite, failing if either Xvfb smoke test skips.
 
 ## Per-file settings memory (branch `feature/per-file-settings`, head `6d93d87`)
 

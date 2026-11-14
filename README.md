@@ -24,6 +24,8 @@ meson compile -C build
 meson test -C build
 ```
 
+CI builds with warnings as errors and runs the whole suite, including both Xvfb smoke tests, on Ubuntu 24.04 (mpv 0.37).
+
 Make a test pattern (left eye red grid, right eye blue grid, yellow marks at the top):
 
 ```sh
