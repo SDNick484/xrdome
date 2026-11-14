@@ -1,8 +1,9 @@
-/* xrdome: VR180 side-by-side playback on XR glasses with head tracking. */
+/* xrdome: VR180 and flat video on XR glasses with head tracking. */
 #include <SDL.h>
 #include <SDL_syswm.h>
 #include <errno.h>
 #include <epoxy/gl.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -10,7 +11,10 @@
 #include <string.h>
 
 #include "app/controls.h"
+#include "app/session.h"
 #include "config.h"
+#include "detect/detect.h"
+#include "detect/probe.h"
 #include "display/output.h"
 #include "math/quat.h"
 #include "pose/pose.h"
@@ -19,12 +23,13 @@
 #include "store/filestate.h"
 #include "track/tracker.h"
 #include "util/timing.h"
+#include "values.h"
 #include "video/player_mpv.h"
 
 #define MAX_OUTPUTS 16
 #define WINDOWED_W 1280
 #define WINDOWED_H 360
-#define SEEK_STEP_S 10.0
+#define XRD_PI_D 3.14159265358979323846
 
 static int fail(const char *fmt, const char *arg)
 {
@@ -64,6 +69,205 @@ static int dump_ppm(const char *path, int w, int h)
     return fclose(f) == 0 ? 0 : -1;
 }
 
+/* Per-file settings memory (spec 5.4 to 5.8 of the per-file design): the
+ * record found at start and what decides whether anything is written at quit. */
+typedef struct {
+    bool on;            /* a key and a state directory exist and --no-memory is not given */
+    bool have_loaded;   /* a record was read and parsed */
+    bool block_save;    /* the record is unreadable or newer: never overwrite it */
+    char key[XRD_FILESTATE_KEY_MAX];
+    char dir[4096];
+    xrd_filestate loaded;
+    xrd_file_settings start; /* the values playback starts with (xrd_session_start) */
+    unsigned explicit_flags; /* xrd_session.explicit_flags */
+} xrd_memory;
+
+/* Everything the keys, the per-frame view and the I key read or change. */
+typedef struct {
+    const xrd_config *cfg;
+    xrd_controls *ctl;
+    xrd_tracker *trk;
+    xrd_player *p;
+    xrd_memory *mem;
+    const xrd_timing *timing;
+    xrd_detect det;          /* detection at start: the sources of proj, layout, packing */
+    xrd_probe probe;         /* valid when have_probe */
+    bool have_probe;
+    float content_hfov, content_vfov;
+    bool proj_keyed, layout_keyed, packing_keyed; /* changed by a key in this run (for I) */
+    float eye_aspect;        /* (out_w / 2) / out_h of the last frame */
+    int out_eye_w, out_eye_h;
+    xrd_view_geom geom;      /* of the last frame drawn */
+    bool mip_want;           /* mipmaps requested from the player */
+    bool trilinear;          /* the last draw sampled trilinearly */
+    unsigned long frames;    /* video frames presented */
+} xrd_app;
+
+/* F of spec 5.3 for the frame now playing: the video texture's (coded) size
+ * times the probe's pixel aspect, which counts as 1:1 when the container
+ * carries stereo metadata or there was no probe. Before the first frame, the
+ * probe's own F (0 when unknown). */
+static double frame_aspect_now(const xrd_app *a)
+{
+    int vw = 0, vh = 0;
+    xrd_player_video_size(a->p, &vw, &vh);
+    if (vw <= 0 || vh <= 0)
+        return a->det.frame_aspect;
+    double sn = 1.0, sd = 1.0;
+    if (a->have_probe && a->probe.stereo == XRD_STEREO_NONE && a->probe.sar_num > 0 &&
+        a->probe.sar_den > 0) {
+        sn = a->probe.sar_num;
+        sd = a->probe.sar_den;
+    }
+    return (double)vw * sn / ((double)vh * sd);
+}
+
+/* "layout: sbs-lr half" for flat stereo (AUTO packing resolved), otherwise
+ * "layout: mono" or "layout: sbs-lr". */
+static void print_layout(const xrd_app *a)
+{
+    const xrd_controls *c = a->ctl;
+    const char *name = xrd_value_layout_name(c->layout);
+    if (c->proj == XRD_PROJ_FLAT && c->layout != XRD_LAYOUT_MONO) {
+        xrd_packing k = xrd_packing_resolve(c->layout, c->packing, frame_aspect_now(a));
+        fprintf(stderr, "layout: %s %s\n", name, xrd_value_packing_name(k));
+    } else {
+        fprintf(stderr, "layout: %s\n", name);
+    }
+}
+
+/* What depends on the projection and layout in the player: subtitles only in
+ * flat 2D (spec 5.11), the aspect warning only for hequirect (spec 5.12). */
+static void apply_format(const xrd_app *a)
+{
+    const xrd_controls *c = a->ctl;
+    xrd_player_set_sub_visible(a->p, c->proj == XRD_PROJ_FLAT && c->layout == XRD_LAYOUT_MONO);
+    xrd_player_set_content(a->p, c->layout, a->content_hfov, a->content_vfov);
+    xrd_player_set_aspect_warning(a->p, c->proj == XRD_PROJ_HEQUIRECT);
+}
+
+/* View geometry for the current state and the eye size, and the mipmap
+ * decision of spec 5.6: mipmaps while the picture is shrunk at the centre. */
+static void update_view(xrd_app *a, int out_w, int out_h)
+{
+    const xrd_controls *c = a->ctl;
+    int vw = 0, vh = 0;
+    xrd_player_video_size(a->p, &vw, &vh);
+    double f = frame_aspect_now(a);
+    double pa = xrd_picture_aspect(c->layout, xrd_packing_resolve(c->layout, c->packing, f), f);
+    a->out_eye_w = out_w / 2;
+    a->out_eye_h = out_h;
+    a->eye_aspect = (out_w / 2.0f) / (float)out_h;
+    xrd_view_geometry(c->proj, c->zoom_mode, a->cfg->fov_diag, a->eye_aspect, c->zoom, pa, &a->geom);
+    int ew = xrd_layout_is_sbs(c->layout) ? vw / 2 : vw;
+    int eh = xrd_layout_is_tb(c->layout) ? vh / 2 : vh;
+    float ratio = xrd_minify_ratio(c->proj, &a->geom, ew, eh, a->out_eye_w, a->out_eye_h,
+                                   a->content_hfov, a->content_vfov);
+    bool want = a->cfg->mipmap_force || (a->cfg->mipmap && ratio > 1.0f);
+    if (want != a->mip_want) {
+        xrd_player_set_mipmaps(a->p, want);
+        a->mip_want = want;
+    }
+    a->trilinear = want && xrd_player_mipmapped(a->p);
+}
+
+/* The source words of the detect: line, or "key" for a value a key changed. */
+static const char *src_text(xrd_detect_src s, const char *tok, bool keyed, char *buf, size_t len)
+{
+    const char *w;
+    if (keyed)
+        return "key";
+    switch (s) {
+    case XRD_SRC_FLAG:     w = "flag"; break;
+    case XRD_SRC_RECORD:   w = "record"; break;
+    case XRD_SRC_METADATA: w = "metadata"; break;
+    case XRD_SRC_NAME:     snprintf(buf, len, "file name \"%s\"", tok); return buf;
+    case XRD_SRC_SHAPE:    w = "frame shape"; break;
+    case XRD_SRC_AUTO:     w = "auto"; break;
+    case XRD_SRC_FALLBACK: w = "fallback"; break;
+    default:               w = "unknown"; break;
+    }
+    return w;
+}
+
+/* The key list (?), in the order of the README's table. */
+static void print_keys(void)
+{
+    static const char *const keys[][2] = {
+        {"Space", "pause / resume"},
+        {"Left / Right", "seek -10 s / +10 s"},
+        {"Up / Down", "seek +60 s / -60 s"},
+        {"R", "recenter, yaw only"},
+        {"Shift+R", "recenter, full"},
+        {"[ / ]", "zoom out / in"},
+        {"F", "bicubic / bilinear sampling"},
+        {"S", "swap eyes"},
+        {"M", "cycle layout (flat: 2D, half SBS, full SBS, half TB, full TB)"},
+        {"P", "projection: flat / VR180"},
+        {"Z", "zoom mode: screen / magnify (flat)"},
+        {"L", "screen: fixed / head-locked (flat)"},
+        {"?", "this list"},
+        {"I", "playback information"},
+        {"Q", "quit"},
+    };
+    for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++)
+        fprintf(stderr, "keys: %s  %s\n", keys[i][0], keys[i][1]);
+}
+
+/* The I key (spec 5.7): one item per line. */
+static void print_info(xrd_app *a)
+{
+    const xrd_controls *c = a->ctl;
+    bool flat = c->proj == XRD_PROJ_FLAT;
+    char sb[64];
+    int vw = 0, vh = 0;
+    xrd_player_video_size(a->p, &vw, &vh);
+    const char *codec = xrd_player_codec(a->p);
+    const char *hw = xrd_player_hwdec(a->p);
+    double fps = xrd_player_fps(a->p);
+
+    fprintf(stderr, "info: file: %s\n", a->cfg->file);
+    fprintf(stderr, "info: video: %s %dx%d", codec[0] ? codec : "unknown codec", vw, vh);
+    if (fps > 0.0)
+        fprintf(stderr, " %.3f fps\n", fps);
+    else
+        fprintf(stderr, " unknown fps\n");
+    fprintf(stderr, "info: hwdec: %s\n", hw[0] ? hw : "unknown");
+    fprintf(stderr, "info: projection: %s (%s)\n", xrd_value_proj_name(c->proj),
+            src_text(a->det.proj_src, a->det.proj_token, a->proj_keyed, sb, sizeof sb));
+    fprintf(stderr, "info: layout: %s (%s)\n", xrd_value_layout_name(c->layout),
+            src_text(a->det.layout_src, a->det.layout_token, a->layout_keyed, sb, sizeof sb));
+    if (flat && c->layout != XRD_LAYOUT_MONO) {
+        xrd_packing k = xrd_packing_resolve(c->layout, c->packing, frame_aspect_now(a));
+        bool is_auto = c->packing == XRD_PACKING_AUTO;
+        xrd_detect_src ks = is_auto ? XRD_SRC_AUTO : a->det.packing_src;
+        fprintf(stderr, "info: packing: %s (%s)\n", xrd_value_packing_name(k),
+                src_text(ks, a->det.packing_token, a->packing_keyed && !is_auto, sb, sizeof sb));
+    }
+    if (flat) {
+        fprintf(stderr, "info: zoom: %.2f, zoom mode %s", (double)c->zoom,
+                xrd_value_zoom_mode_name(c->zoom_mode));
+        if (a->frames > 0)
+            fprintf(stderr, ", screen %.1f x %.1f degrees\n",
+                    2.0 * atan((double)a->geom.half_w) * 180.0 / XRD_PI_D,
+                    2.0 * atan((double)a->geom.half_h) * 180.0 / XRD_PI_D);
+        else
+            fputc('\n', stderr);
+        fprintf(stderr, "info: screen: %s\n", c->screen_locked ? "head-locked" : "fixed");
+    } else {
+        fprintf(stderr, "info: zoom: %.2f\n", (double)c->zoom);
+        fprintf(stderr, "info: screen: fixed (VR180)\n");
+    }
+    fprintf(stderr, "info: filter: %s, mipmaps %s\n",
+            a->trilinear ? "trilinear" : c->filter == XRD_FILTER_BICUBIC ? "bicubic" : "bilinear",
+            a->mip_want ? "on" : "off");
+    fprintf(stderr, "info: texture: %s %dx%d dither=%s\n",
+            xrd_texture_bits_name(xrd_player_texture_bits(a->p)), vw, vh,
+            a->cfg->dither ? "on" : "off");
+    fprintf(stderr, "info: frames: %lu presented, %u missed vsyncs\n", a->frames,
+            xrd_timing_missed_vsyncs(a->timing));
+}
+
 /* Prints the zoom and filter lines for the values that differ
  * between before and after (a key press at a limit prints nothing). */
 static void report_display_changes(const xrd_controls *before, const xrd_controls *after)
@@ -75,26 +279,58 @@ static void report_display_changes(const xrd_controls *before, const xrd_control
                 after->filter == XRD_FILTER_BICUBIC ? "bicubic" : "bilinear");
 }
 
-/* Spec 6.4 keys. Returns true when the key asks to quit. */
-static bool handle_key_action(const SDL_KeyboardEvent *k, xrd_controls *ctl, xrd_tracker *trk,
-                              xrd_player *p)
+/* P (spec 5.7): the other projection, with its own zoom. A layout that was
+ * only a frame-shape or fallback guess, and not chosen with M or S, is worked
+ * out again for the new projection, and packing likewise when it was auto. */
+static void key_proj(xrd_app *a)
 {
+    xrd_controls *c = a->ctl;
+    xrd_layout layout0 = c->layout;
+    xrd_packing packing0 = c->packing;
+    xrd_controls_toggle_proj(c);
+    a->proj_keyed = true;
+    if (!c->layout_chosen &&
+        (a->det.layout_src == XRD_SRC_SHAPE || a->det.layout_src == XRD_SRC_FALLBACK)) {
+        xrd_detect_relayout(frame_aspect_now(a), c->proj, &c->layout, &c->packing);
+        if (a->det.packing_src != XRD_SRC_AUTO)
+            c->packing = packing0;
+        /* Still a guess, not a choice: it is not saved for the file. */
+        a->mem->start.layout = c->layout;
+        a->mem->start.packing = c->packing;
+    }
+    fprintf(stderr, "proj: %s\n", xrd_value_proj_name(c->proj));
+    if (c->layout != layout0 || c->packing != packing0)
+        print_layout(a);
+    apply_format(a);
+}
+
+/* Spec 6.4 and flat-projection 5.2 to 5.7 keys. Returns true when the key
+ * asks to quit. Key repeat is ignored except for zoom and seek. */
+static bool handle_key_action(const SDL_KeyboardEvent *k, xrd_app *a)
+{
+    xrd_controls *ctl = a->ctl;
     bool shift = (k->keysym.mod & KMOD_SHIFT) != 0;
     switch (k->keysym.sym) {
     case SDLK_q:
         return true;
     case SDLK_SPACE:
         if (!k->repeat)
-            xrd_player_toggle_pause(p);
+            xrd_player_toggle_pause(a->p);
         break;
     case SDLK_LEFT:
-        xrd_player_seek(p, -SEEK_STEP_S);
+        xrd_player_seek(a->p, -XRD_SEEK_SMALL_S);
         break;
     case SDLK_RIGHT:
-        xrd_player_seek(p, SEEK_STEP_S);
+        xrd_player_seek(a->p, XRD_SEEK_SMALL_S);
+        break;
+    case SDLK_UP:
+        xrd_player_seek(a->p, XRD_SEEK_LARGE_S);
+        break;
+    case SDLK_DOWN:
+        xrd_player_seek(a->p, -XRD_SEEK_LARGE_S);
         break;
     case SDLK_r:
-        xrd_tracker_recenter(trk, !shift); /* R: yaw only, Shift+R: full */
+        xrd_tracker_recenter(a->trk, !shift); /* R: yaw only, Shift+R: full */
         xrd_controls_recenter(ctl);
         break;
     case SDLK_LEFTBRACKET:
@@ -112,8 +348,52 @@ static bool handle_key_action(const SDL_KeyboardEvent *k, xrd_controls *ctl, xrd
             xrd_controls_toggle_swap(ctl);
         break;
     case SDLK_m:
+        if (!k->repeat) {
+            xrd_packing packing0 = ctl->packing;
+            xrd_controls_cycle_layout(ctl, frame_aspect_now(a));
+            a->layout_keyed = true;
+            if (ctl->packing != packing0)
+                a->packing_keyed = true;
+            print_layout(a);
+            apply_format(a);
+        }
+        break;
+    case SDLK_p:
         if (!k->repeat)
-            xrd_controls_cycle_layout(ctl, 0.0); /* frame_aspect arrives with the wiring issue */
+            key_proj(a);
+        break;
+    case SDLK_z:
+        if (k->repeat)
+            break;
+        if (xrd_controls_toggle_zoom_mode(ctl))
+            fprintf(stderr, "zoom mode: %s\n", xrd_value_zoom_mode_name(ctl->zoom_mode));
+        else
+            fprintf(stderr, "zoom mode: magnify (VR180 has no screen mode)\n");
+        break;
+    case SDLK_l:
+        if (k->repeat)
+            break;
+        if (xrd_controls_toggle_lock(ctl)) {
+            if (!ctl->screen_locked) { /* the screen reappears straight ahead */
+                xrd_tracker_recenter(a->trk, false);
+                xrd_controls_recenter(ctl);
+            }
+            fprintf(stderr, "screen: %s\n", ctl->screen_locked ? "head-locked" : "fixed");
+        } else {
+            fprintf(stderr, "screen: fixed (VR180 cannot be head-locked)\n");
+        }
+        break;
+    case SDLK_SLASH: /* '?' is Shift+/ on a US layout */
+        if (shift && !k->repeat)
+            print_keys();
+        break;
+    case SDLK_QUESTION:
+        if (!k->repeat)
+            print_keys();
+        break;
+    case SDLK_i:
+        if (!k->repeat)
+            print_info(a);
         break;
     default:
         break;
@@ -122,46 +402,20 @@ static bool handle_key_action(const SDL_KeyboardEvent *k, xrd_controls *ctl, xrd
 }
 
 /* handle_key_action, then a status line for each display value it changed. */
-static bool handle_key(const SDL_KeyboardEvent *k, xrd_controls *ctl, xrd_tracker *trk,
-                       xrd_player *p)
+static bool handle_key(const SDL_KeyboardEvent *k, xrd_app *a)
 {
-    const xrd_controls before = *ctl;
-    bool quit = handle_key_action(k, ctl, trk, p);
-    report_display_changes(&before, ctl);
+    const xrd_controls before = *a->ctl;
+    bool quit = handle_key_action(k, a);
+    report_display_changes(&before, a->ctl);
     return quit;
 }
 
-/* Per-file settings memory (spec 5.4 to 5.8): the record found at start and
- * what decides whether anything is written at quit. */
-typedef struct {
-    bool on;            /* a key and a state directory exist and --no-memory is not given */
-    bool have_loaded;   /* a record was read and parsed */
-    bool block_save;    /* the record is unreadable or newer: never overwrite it */
-    char key[XRD_FILESTATE_KEY_MAX];
-    char dir[4096];
-    xrd_filestate loaded;
-    xrd_file_settings start; /* the values playback starts with, after the record */
-} xrd_memory;
-
-static xrd_file_settings settings_from_config(const xrd_config *cfg)
-{
-    xrd_file_settings s = {.zoom = cfg->zoom, .layout = cfg->layout, .swap = false,
-                           .content_hfov = cfg->content_hfov, .content_vfov = cfg->content_vfov,
-                           .convergence = cfg->convergence};
-    return s;
-}
-
-/* Record bits main.c does not act on yet; the wiring issue (#8) drops this mask so
- * "settings:" lines stay as they were. */
-#define XRD_SET_FLAT_BITS (XRD_SET_PROJ | XRD_SET_FLAT_ZOOM | XRD_SET_PACKING | XRD_SET_ZOOM_MODE)
-
-/* Handles --forget and --no-memory, loads the file's record and applies it
- * under the command-line flags into cfg. Silent when the file has no key or
- * there is no state directory. */
-static void memory_load_and_apply(xrd_memory *m, xrd_config *cfg)
+/* Handles --forget and --no-memory and loads the file's record (applied
+ * later by xrd_session_start). Silent when the file has no key or there is
+ * no state directory. */
+static void memory_load(xrd_memory *m, const xrd_config *cfg)
 {
     memset(m, 0, sizeof *m);
-    m->start = settings_from_config(cfg);
     if (xrd_filestate_key(cfg->file, m->key, sizeof m->key) != 0 ||
         xrd_filestate_dir(m->dir, sizeof m->dir) != 0)
         return;
@@ -184,25 +438,13 @@ static void memory_load_and_apply(xrd_memory *m, xrd_config *cfg)
         return;
     m->on = true;
 
-    char path[4200], err[256] = "", text[160];
+    char path[4200], err[256] = "";
     if (xrd_filestate_record_path(m->dir, m->key, path, sizeof path) != 0)
         return;
     switch (xrd_filestate_load(path, &m->loaded, err, sizeof err)) {
-    case XRD_FS_OK: {
+    case XRD_FS_OK:
         m->have_loaded = true;
-        xrd_file_settings s = settings_from_config(cfg);
-        unsigned applied = xrd_filestate_apply(&m->loaded, cfg->explicit_flags, &s) &
-                           ~XRD_SET_FLAT_BITS;
-        cfg->zoom = s.zoom;
-        cfg->layout = s.layout;
-        cfg->content_hfov = s.content_hfov;
-        cfg->content_vfov = s.content_vfov;
-        cfg->convergence = s.convergence;
-        m->start = s;
-        if (applied && xrd_filestate_describe(&m->loaded, applied, text, sizeof text) > 0)
-            fprintf(stderr, "settings: restored %s\n", text);
         break;
-    }
     case XRD_FS_UNSUPPORTED:
         m->block_save = true;
         fprintf(stderr,
@@ -220,25 +462,75 @@ static void memory_load_and_apply(xrd_memory *m, xrd_config *cfg)
 }
 
 /* Writes the record at quit when something is set and it differs from what
- * was loaded. Failure only warns; the exit status is not touched. */
-static void memory_save(const xrd_memory *m, const xrd_config *cfg, const xrd_controls *ctl)
+ * was loaded. Every record states the projection in effect at quit (spec
+ * 5.9), so proj is always set in what is written and in the saved line.
+ * Failure only warns; the exit status is not touched. */
+static void memory_save(const xrd_memory *m, const char *file, const xrd_controls *ctl)
 {
-    xrd_file_settings end = {.zoom = ctl->zoom, .layout = ctl->layout, .swap = ctl->swap_eyes,
-                             .content_hfov = cfg->content_hfov, .content_vfov = cfg->content_vfov,
-                             .convergence = ctl->convergence_deg};
+    xrd_file_settings end;
+    xrd_session_settings(ctl, m->start.content_hfov, m->start.content_vfov, &end);
     xrd_filestate out; /* distinct from m->loaded: collect clears it first */
-    xrd_filestate_collect(m->have_loaded ? &m->loaded : NULL, cfg->explicit_flags, &m->start,
+    xrd_filestate_collect(m->have_loaded ? &m->loaded : NULL, m->explicit_flags, &m->start,
                           &end, &out);
     if (out.set == 0 && !m->have_loaded)
         return;
+    out.set |= XRD_SET_PROJ;
+    out.v.proj = end.proj;
     if (m->have_loaded && xrd_filestate_equal(&m->loaded, &out))
         return;
 
-    char err[256] = "", text[160];
-    if (xrd_filestate_save(m->dir, m->key, &out, cfg->file, err, sizeof err) != 0)
+    char err[256] = "", text[200];
+    if (xrd_filestate_save(m->dir, m->key, &out, file, err, sizeof err) != 0)
         fprintf(stderr, "xrdome: warning: cannot save settings: %s\n", err);
-    else if (xrd_filestate_describe(&out, out.set & ~XRD_SET_FLAT_BITS, text, sizeof text) > 0)
+    else if (xrd_filestate_describe(&out, ~0u, text, sizeof text) > 0)
         fprintf(stderr, "settings: saved %s\n", text);
+}
+
+/* Probe, detection and the starting state, before the window opens (plan
+ * Task 8): the notes, the detect: line and the settings: restored line. */
+static void detect_and_start(xrd_app *a, const xrd_config *cfg, xrd_memory *mem,
+                             xrd_session *ss)
+{
+    char perr[256] = "";
+    xrd_probe_status pst = xrd_probe_run(cfg->ffprobe, cfg->file, XRD_PROBE_TIMEOUT_MS,
+                                         &a->probe, perr, sizeof perr);
+    a->have_probe = pst == XRD_PROBE_OK;
+
+    const xrd_filestate *rec = mem->have_loaded ? &mem->loaded : NULL;
+    xrd_detect_given flags, record;
+    xrd_session_given(cfg, rec, &flags, &record);
+    xrd_detect_resolve(&flags, rec ? &record : NULL, a->have_probe ? &a->probe : NULL,
+                       cfg->file, &a->det);
+
+    /* At most one note for a failed probe: a failure leaves no probe data, so
+     * the only other possible note is the fallback, and the two are one line. */
+    int first = 0;
+    if (pst == XRD_PROBE_FAILED) {
+        if (a->det.note_count > 0) {
+            fprintf(stderr, "xrdome: note: %s; %s\n", perr, a->det.notes[0]);
+            first = 1;
+        } else {
+            fprintf(stderr, "xrdome: note: %s\n", perr);
+        }
+    }
+    for (int i = first; i < a->det.note_count; i++)
+        fprintf(stderr, "xrdome: note: %s\n", a->det.notes[i]);
+    char line[256];
+    if (xrd_detect_describe(&a->det, line, sizeof line) > 0)
+        fprintf(stderr, "detect: %s\n", line);
+
+    xrd_session_start(cfg, rec, &a->det, ss);
+    char text[200];
+    if (rec && ss->applied && xrd_filestate_describe(rec, ss->applied, text, sizeof text) > 0)
+        fprintf(stderr, "settings: restored %s\n", text);
+    if (a->det.proj == XRD_PROJ_FLAT && (cfg->explicit_flags & XRD_SET_CONTENT_FOV))
+        fprintf(stderr, "xrdome: note: --content-fov applies to VR180 only; "
+                        "ignored for this flat video\n");
+
+    mem->start = ss->s;
+    mem->explicit_flags = ss->explicit_flags;
+    a->content_hfov = ss->s.content_hfov;
+    a->content_vfov = ss->s.content_vfov;
 }
 
 int main(int argc, char **argv)
@@ -251,7 +543,13 @@ int main(int argc, char **argv)
         return fail("%s", err);
 
     xrd_memory mem;
-    memory_load_and_apply(&mem, &cfg);
+    memory_load(&mem, &cfg);
+    xrd_app app;
+    memset(&app, 0, sizeof app);
+    app.cfg = &cfg;
+    app.mem = &mem;
+    xrd_session ss;
+    detect_and_start(&app, &cfg, &mem, &ss);
 
     xrd_pose_source *pose = xrd_pose_source_create(cfg.pose, err, sizeof err);
     if (!pose)
@@ -373,23 +671,21 @@ int main(int argc, char **argv)
         fail("%s", err);
         goto out;
     }
-    xrd_player_set_content(p, cfg.layout, cfg.content_hfov, cfg.content_vfov);
-    xrd_renderer_set_content_fov(r, cfg.content_hfov, cfg.content_vfov);
+    xrd_session_controls(&ss, &cfg, &ctl);
+    app.ctl = &ctl;
+    app.trk = trk;
+    app.p = p;
+    app.timing = timing;
+    apply_format(&app); /* before the first xrd_player_update */
+    xrd_renderer_set_content_fov(r, ss.s.content_hfov, ss.s.content_vfov);
     xrd_renderer_set_dither(r, cfg.dither);
     if (cfg.frames > 0)
         xrd_player_hold_at_end(p);
-    /* Development (--mipmap-force) until the shrink decision is wired up. */
-    if (cfg.mipmap_force)
-        xrd_player_set_mipmaps(p, true);
-    int mip_draws = 0;      /* --mipmap-check: trilinear draws checked */
+    int mip_draws = 0;      /* --mipmap-check: draws that wanted trilinear sampling */
     char mip_sizes[256] = ""; /* --mipmap-check: texture sizes drawn trilinearly, in order */
     int mip_w = 0, mip_h = 0;
 
-    xrd_controls_init(&ctl, cfg.zoom, cfg.layout);
-    xrd_controls_init_display(&ctl, cfg.convergence, cfg.filter);
-    ctl.swap_eyes = mem.start.swap;
     const bool mouse_look = strcmp(pose->name, "null") == 0;
-    float eye_aspect = 1.f;
     bool size_dirty = true; /* recompute the per-eye aspect and tans on the next frame */
     /* If the swap does not wait for vsync (no swap interval, or the driver
      * ignores it), the loop is paced to this period after the swap. */
@@ -411,7 +707,7 @@ int main(int argc, char **argv)
                     size_dirty = true;
                 break;
             case SDL_KEYDOWN:
-                if (handle_key(&ev.key, &ctl, trk, p))
+                if (handle_key(&ev.key, &app))
                     quit = true;
                 break;
             case SDL_MOUSEMOTION:
@@ -446,6 +742,18 @@ int main(int argc, char **argv)
         unsigned tex = xrd_player_texture(p);
         if (tex)
             rendered = true;
+
+        if (size_dirty) {
+            SDL_GL_GetDrawableSize(win, &out_w, &out_h);
+            if (out_w < 2)
+                out_w = 2;
+            if (out_h < 1)
+                out_h = 1;
+            size_dirty = false;
+        }
+        if (tex) /* geometry and the mipmap decision for this frame */
+            update_view(&app, out_w, out_h);
+
         if (tex && !hwdec_checked) {
             const char *hw = xrd_player_hwdec(p);
             fprintf(stderr, "hwdec: %s\n", hw[0] ? hw : "unknown");
@@ -458,7 +766,7 @@ int main(int argc, char **argv)
             xrd_player_video_size(p, &vw, &vh);
             fprintf(stderr, "video texture: %s %dx%d dither=%s mipmap=%s\n",
                     xrd_texture_bits_name(xrd_player_texture_bits(p)), vw, vh,
-                    cfg.dither ? "on" : "off", cfg.mipmap_force ? "on" : "off");
+                    cfg.dither ? "on" : "off", app.mip_want ? "on" : "off");
             if (strcmp(hw, "vaapi") != 0) {
                 snprintf(err, sizeof err, "hardware decoding is '%s', not vaapi",
                          hw[0] ? hw : "unknown");
@@ -470,15 +778,6 @@ int main(int argc, char **argv)
             }
         }
 
-        if (size_dirty) {
-            SDL_GL_GetDrawableSize(win, &out_w, &out_h);
-            if (out_w < 2)
-                out_w = 2;
-            if (out_h < 1)
-                out_h = 1;
-            eye_aspect = (out_w / 2.0f) / (float)out_h;
-            size_dirty = false;
-        }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, out_w, out_h);
 
@@ -487,23 +786,29 @@ int main(int argc, char **argv)
         xrd_quat view = xrd_tracker_view(trk, pose_sample_ns);
         if (mouse_look)
             view = xrd_quat_mul(view, xrd_controls_mouse_quat(&ctl));
+        /* A head-locked flat screen ignores the tracker and the mouse (spec 5.4). */
+        if (ctl.screen_locked && ctl.proj == XRD_PROJ_FLAT)
+            view = XRD_QUAT_IDENTITY;
         if (tex) {
-            float rot[9], tan_h, tan_v;
+            float rot[9];
             xrd_quat_to_mat3(view, rot);
-            xrd_fov_tan_half(cfg.fov_diag, eye_aspect, ctl.zoom, &tan_h, &tan_v);
             xrd_renderer_set_convergence(r, ctl.convergence_deg);
             xrd_renderer_set_filter(r, ctl.filter);
             const xrd_draw_params dp = {
-                .proj = XRD_PROJ_HEQUIRECT,
+                .proj = ctl.proj,
                 .layout = ctl.layout,
                 .swap_eyes = ctl.swap_eyes,
-                .geom = {.tan_h = tan_h, .tan_v = tan_v},
-                .trilinear = cfg.mipmap_force,
+                .geom = app.geom,
+                .trilinear = app.trilinear,
             };
-            if (dp.trilinear && cfg.mipmap_check) {
+            /* --mipmap-check: every draw that wants mipmaps must find a chain
+             * generated for the frame in the texture. Without one the draw
+             * falls back to level 0 (trilinear needs xrd_player_mipmapped),
+             * so this checks the player's decisions, not the fallback. */
+            if (app.mip_want && cfg.mipmap_check) {
                 int vw, vh;
                 xrd_player_video_size(p, &vw, &vh);
-                if (!xrd_player_mipmapped(p)) {
+                if (!dp.trilinear) {
                     fprintf(stderr, "xrdome: --mipmap-check: trilinear draw %d samples a %dx%d "
                                     "texture whose mipmaps were not generated for its frame\n",
                             mip_draws + 1, vw, vh);
@@ -540,6 +845,8 @@ int main(int argc, char **argv)
             glFinish(); /* diagnostic: wait here for a driver that blocks on vsync later */
         uint64_t post_swap_ns = xrd_now_ns();
         xrd_player_report_swap(p);
+        if (tex)
+            app.frames++;
         if (tex) /* timing starts with the first video frame, like --frames */
             xrd_timing_frame(timing, pose_sample_ns, pre_swap_ns, xrd_tracker_last_pose_ns(trk),
                              post_swap_ns - pre_swap_ns);
@@ -565,7 +872,7 @@ int main(int argc, char **argv)
 
 out:
     if (mem.on && !mem.block_save && rendered)
-        memory_save(&mem, &cfg, &ctl);
+        memory_save(&mem, cfg.file, &ctl);
     if (pose && strcmp(pose->name, "udp-opentrack") == 0)
         fprintf(stderr, "pose: %u malformed UDP packets dropped\n",
                 (unsigned)xrd_pose_udp_dropped(pose));

@@ -79,14 +79,16 @@ wait_for() { # wait_for FILE REGEX: up to 30 s for a line matching REGEX
     done
 }
 
-run() { # run NAME YAW [BAD_PACKETS]
+run() { # run NAME YAW [BAD_PACKETS [FILE [FLAG...]]]
     name=$1
     yaw=$2
     bad=${3:-0}
+    file=${4:-$work/pattern.mp4}
+    if [ $# -ge 4 ]; then shift 4; else shift $#; fi
     csv="$work/$name.csv"
     send 0
     xvfb "$xrdome" --no-memory --windowed --pose "udp-opentrack:port=$port" --frames 120 \
-         --timing-log "$csv" --dump-frame "$work/$name.ppm" "$work/pattern.mp4" \
+         --timing-log "$csv" --dump-frame "$work/$name.ppm" "$@" "$file" \
          >"$work/$name.err" 2>&1 &
     player=$!
 
@@ -236,5 +238,37 @@ for eye, name in ((0, "left"), (1, "right")):
 sys.exit(0 if ok else 1)
 PY
 check "no pose is identity; head turned left moves the image right" $?
+
+# 4. Screen lock (spec 5.4) with a flat 2D file: head-locked, the frame with the
+# head turned 20 degrees is the frame with the head straight; fixed, they differ.
+"$make_pattern" --kind flat2d 2 "$work/flat2d.mp4" libx264 || { echo "FAIL: make flat2d"; exit 1; }
+run lock0 0 0 "$work/flat2d.mp4" --screen locked
+run lock20 20 0 "$work/flat2d.mp4" --screen locked
+run fixed0 0 0 "$work/flat2d.mp4" --screen fixed
+run fixed20 20 0 "$work/flat2d.mp4" --screen fixed
+# same_frames A B: at most 0.2 percent of pixels differ by more than 32 in any channel.
+same_frames() {
+python3 -I - "$1" "$2" <<'PY'
+import sys
+
+def load(path):
+    with open(path, "rb") as f:
+        magic, size, maxval, px = f.read().split(b"\n", 3)
+    assert magic == b"P6" and maxval == b"255", "bad PPM"
+    return size, px
+
+(sa, a), (sb, b) = load(sys.argv[1]), load(sys.argv[2])
+assert sa == sb and len(a) == len(b), "frame sizes differ"
+n = len(a) // 3
+diff = sum(1 for i in range(0, len(a), 3)
+           if max(abs(a[i] - b[i]), abs(a[i + 1] - b[i + 1]), abs(a[i + 2] - b[i + 2])) > 32)
+print(f"  {diff / n:.4f} of pixels differ")
+sys.exit(0 if diff / n <= .002 else 1)
+PY
+}
+same_frames "$work/lock0.ppm" "$work/lock20.ppm"
+check "screen locked: head turn leaves the frame unchanged" $?
+! same_frames "$work/fixed0.ppm" "$work/fixed20.ppm"
+check "screen fixed: head turn changes the frame" $?
 
 exit $fail

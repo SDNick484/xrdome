@@ -26,6 +26,9 @@ struct xrd_player {
     unsigned long frame_serial, mip_serial;
     bool finished;
     bool warned_aspect;
+    bool aspect_warning; /* xrd_player_set_aspect_warning */
+    bool sub_pref;       /* mpv's sub-visibility at open */
+    char codec[128];
     xrd_layout layout; /* what the aspect warning expects; see xrd_player_set_content */
     float hfov_deg, vfov_deg;
     char hwdec[64];
@@ -34,6 +37,7 @@ struct xrd_player {
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
+static void check_aspect(xrd_player *p);
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...)
 {
@@ -63,10 +67,32 @@ bool xrd_video_aspect_matches(int w, int h, xrd_layout layout, float hfov_deg, f
 {
     if (w <= 0 || h <= 0 || !(hfov_deg > 0.f) || !(vfov_deg > 0.f))
         return false;
-    double have = (layout == XRD_LAYOUT_MONO ? (double)w : w / 2.0) / h;
+    double have = xrd_layout_is_sbs(layout) ? (w / 2.0) / h
+                : xrd_layout_is_tb(layout)  ? w / (h / 2.0)
+                                            : (double)w / h;
     double want = (double)hfov_deg / vfov_deg;
     double rel = have / want - 1.0;
     return rel >= -0.05 && rel <= 0.05;
+}
+
+int xrd_aspect_warning_text(char *buf, size_t len, int w, int h, xrd_layout layout,
+                            float hfov_deg, float vfov_deg)
+{
+    const char *kind = xrd_layout_is_sbs(layout) ? "side-by-side"
+                     : xrd_layout_is_tb(layout)  ? "top-bottom"
+                                                 : "mono";
+    int n = snprintf(buf, len,
+                     "video is %dx%d, which is not the aspect of a %s VR video covering %gx%g "
+                     "degrees. If it is an ordinary flat video, press P or use --proj flat. If it "
+                     "is VR video covering less than 180 degrees, set --content-fov. Playing it "
+                     "as given.",
+                     w, h, kind, (double)hfov_deg, (double)vfov_deg);
+    if (n < 0 || (size_t)n >= len) {
+        if (len > 0)
+            buf[0] = '\0';
+        return -1;
+    }
+    return n;
 }
 
 bool xrd_video_is_sbs_2to1(int w, int h)
@@ -213,6 +239,8 @@ xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void 
     p->hfov_deg = 180.f;
     p->vfov_deg = 180.f;
     p->fbo_format = opt ? opt->fbo_format : XRD_FBO_RGBA8;
+    p->aspect_warning = true;
+    p->sub_pref = true;
 
     p->mpv = mpv_create();
     if (!p->mpv) {
@@ -287,6 +315,12 @@ xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void 
         goto fail;
     }
 
+    /* What the user's options (or mpv's default) say about subtitles; xrdome
+     * only ever hides them on top of it. */
+    int subs = 1;
+    if (mpv_get_property(p->mpv, "sub-visibility", MPV_FORMAT_FLAG, &subs) >= 0)
+        p->sub_pref = subs != 0;
+
     mpv_opengl_init_params gl_init = {.get_proc_address = get_proc, .get_proc_address_ctx = NULL};
     mpv_render_param params[] = {
         {MPV_RENDER_PARAM_API_TYPE, (void *)MPV_RENDER_API_TYPE_OPENGL},
@@ -320,6 +354,36 @@ void xrd_player_set_content(xrd_player *p, xrd_layout layout, float hfov_deg, fl
     p->layout = layout;
     p->hfov_deg = hfov_deg;
     p->vfov_deg = vfov_deg;
+}
+
+void xrd_player_set_aspect_warning(xrd_player *p, bool on)
+{
+    bool was = p->aspect_warning;
+    p->aspect_warning = on;
+    if (on && !was)
+        check_aspect(p);
+}
+
+void xrd_player_set_sub_visible(xrd_player *p, bool on)
+{
+    int flag = on && p->sub_pref;
+    mpv_set_property(p->mpv, "sub-visibility", MPV_FORMAT_FLAG, &flag);
+}
+
+const char *xrd_player_codec(xrd_player *p)
+{
+    char *s = mpv_get_property_string(p->mpv, "video-codec");
+    snprintf(p->codec, sizeof p->codec, "%s", s ? s : "");
+    mpv_free(s);
+    return p->codec;
+}
+
+double xrd_player_fps(xrd_player *p)
+{
+    double fps = 0.0;
+    if (mpv_get_property(p->mpv, "container-fps", MPV_FORMAT_DOUBLE, &fps) < 0 || !(fps > 0.0))
+        return 0.0;
+    return fps;
 }
 
 void xrd_player_free(xrd_player *p)
@@ -367,6 +431,20 @@ static GLenum attach_texture(xrd_player *p, int internal, int w, int h)
     return status;
 }
 
+/* Prints the aspect warning once, while it is on and the size is known. */
+static void check_aspect(xrd_player *p)
+{
+    if (!p->aspect_warning || p->warned_aspect || p->w <= 0 || p->h <= 0)
+        return;
+    if (xrd_video_aspect_matches(p->w, p->h, p->layout, p->hfov_deg, p->vfov_deg))
+        return;
+    char text[512];
+    if (xrd_aspect_warning_text(text, sizeof text, p->w, p->h, p->layout, p->hfov_deg,
+                                p->vfov_deg) > 0)
+        fprintf(stderr, "xrdome: warning: %s\n", text);
+    p->warned_aspect = true;
+}
+
 /* (Re)creates the FBO for a w x h video. Returns <0 with p->err set. */
 static int ensure_fbo(xrd_player *p, int w, int h)
 {
@@ -377,18 +455,6 @@ static int ensure_fbo(xrd_player *p, int w, int h)
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max);
     if (!xrd_video_size_fits(w, h, max, p->err, sizeof p->err))
         return -1;
-    if (!xrd_video_aspect_matches(w, h, p->layout, p->hfov_deg, p->vfov_deg) &&
-        !p->warned_aspect) {
-        fprintf(stderr, "xrdome: warning: video is %dx%d, which is not the aspect of a %s video "
-                        "covering %gx%g degrees. If this is an ordinary flat video, xrdome has "
-                        "no flat projection yet; --layout mono --content-fov 60x34 shows it as "
-                        "an approximate curved screen. If it is VR video covering less than "
-                        "180 degrees, set --content-fov. Playing it as given.\n",
-                w, h, p->layout == XRD_LAYOUT_MONO ? "mono" : "side-by-side",
-                (double)p->hfov_deg, (double)p->vfov_deg);
-        p->warned_aspect = true;
-    }
-
     if (!p->fbo)
         glGenFramebuffers(1, &p->fbo);
     int depth;
@@ -411,6 +477,7 @@ static int ensure_fbo(xrd_player *p, int w, int h)
     p->fbo_depth = depth;
     p->w = w;
     p->h = h;
+    check_aspect(p);
     p->have_frame = false; /* new size: wait for a frame drawn at it */
     p->frame_serial++;     /* level 0 is new: no chain matches it */
     xrd_mip_on_resize(&p->mip);

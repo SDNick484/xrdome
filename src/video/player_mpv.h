@@ -45,10 +45,22 @@ typedef struct {
 xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void *x11_display,
                                const xrd_player_options *opt, char *err, size_t errlen);
 void        xrd_player_free(xrd_player *p);
-/* What the one-time aspect warning expects of the video: the starting layout
- * and the content FOV (--content-fov). Call before the first xrd_player_update;
- * defaults are sbs-lr and 180 x 180. */
+/* What the one-time aspect warning expects of the video: the layout and the
+ * content FOV (--content-fov). Defaults are sbs-lr and 180 x 180. The warning
+ * is checked when the video size becomes known and when it is turned on
+ * (xrd_player_set_aspect_warning), against the values set then; a later call
+ * alone does not check again. */
 void        xrd_player_set_content(xrd_player *p, xrd_layout layout, float hfov_deg, float vfov_deg);
+/* The aspect warning (spec 5.12, xrd_aspect_warning_text) is printed only
+ * while this is on (hequirect), at most once per player. Default on. Turning
+ * it on with the video size known checks at once. */
+void        xrd_player_set_aspect_warning(xrd_player *p, bool on);
+/* Subtitles drawn by mpv into the video texture: shown only while on (flat
+ * 2D) and mpv's own sub-visibility at open (default yes; --mpv-opt
+ * sub-visibility=no) allows them. */
+void        xrd_player_set_sub_visible(xrd_player *p, bool on);
+const char *xrd_player_codec(xrd_player *p);   /* mpv "video-codec", "" if unknown */
+double      xrd_player_fps(xrd_player *p);     /* mpv "container-fps", 0 if unknown */
 /* Call once per loop. Creates or resizes the FBO when video size is known, renders a new
    frame if one is due. Returns <0 on fatal error (err text via xrd_player_error).
    After rendering into its FBO it binds framebuffer 0 again. */
@@ -88,9 +100,16 @@ void        xrd_player_hold_at_end(xrd_player *p);
  * dimensions and the limit in err (err may be NULL). */
 bool xrd_video_size_fits(int w, int h, int gl_max, char *err, size_t errlen);
 /* True when the frame's aspect fits a video covering hfov_deg x vfov_deg: for
- * side-by-side layouts the per-eye aspect (w/2)/h, for mono w/h, must be
- * within 5 percent of hfov/vfov. False for non-positive sizes. */
+ * side-by-side layouts the per-eye aspect (w/2)/h, for top-bottom w/(h/2),
+ * for mono w/h, must be within 5 percent of hfov/vfov. False for non-positive
+ * sizes. */
 bool xrd_video_aspect_matches(int w, int h, xrd_layout layout, float hfov_deg, float vfov_deg);
+/* The aspect warning of spec 5.12 without the "xrdome: warning: " prefix, one
+ * line with no newline: "video is WxH, which is not the aspect of a
+ * side-by-side|top-bottom|mono VR video covering HxV degrees. ...". Returns
+ * the length, or -1 (buf emptied) when it does not fit. */
+int xrd_aspect_warning_text(char *buf, size_t len, int w, int h, xrd_layout layout,
+                            float hfov_deg, float vfov_deg);
 /* Splits "KEY=VALUE" at the first '='. The value may contain '=' and be empty.
  * False for no '=', an empty key, or a key or value that does not fit. */
 bool xrd_mpv_opt_split(const char *s, char *key, size_t keylen, char *val, size_t vallen);
