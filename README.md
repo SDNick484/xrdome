@@ -14,11 +14,13 @@ have only passed the unit and Xvfb smoke tests. The XREAL Air 2 Pro is untested.
 
 Flat video and format detection (an ordinary film opens as a flat screen fixed in the room, a
 VR180 file opens as before, both without flags; see [Flat video](#flat-video) and
-[Format detection](#format-detection)) pass the unit tests and the Xvfb smoke tests only.
-**None of it has been run on the glasses yet**: not the flat screen, its zoom modes or screen
-lock, not detection on real files, not the new keys, not mipmaps or their cost, not subtitles,
-and not the VR180 regression check on the owner's files. `docs/STATUS.md` lists what the
-hardware run will cover.
+[Format detection](#format-detection)) were run on the Viture Pro XR on 2026-11-14: flat 1080p
+and 4K films opened flat at 1.5 by frame shape, and the owner's VR180 files as VR180; the screen
+stayed put when the head turned, `[` `]` `Z` `L` `R` `?` `I` and Up/Down worked; half SBS (a test
+clip) showed the right depth and `S` inverted it; flat and VR180 records restored; mipmaps cost no
+more than 0.14 percentage points of missed vsyncs. Not seen on the glasses: whether mipmaps reduce
+shimmer, a real half-SBS film, subtitles, top-bottom and full SBS. `docs/STATUS.md` has the
+details.
 
 ## Build and run
 
@@ -512,7 +514,9 @@ delete it. Records for deleted videos are not cleaned up; remove them by hand.
 
 Verification: the feature passes the unit tests and the Xvfb smoke tests, run in a sandbox (Ubuntu
 24.04, mpv 0.37, software GL). The flat keys (`proj` other than `hequirect`, `flat_zoom`, `packing`,
-`zoom_mode`, `tb-lr` and `tb-rl`) have been run only there and in Xvfb, not on the glasses. On the Viture Pro XR (2026-11-13) saving a zoom change at quit,
+`zoom_mode`, `tb-lr` and `tb-rl`) have been run there and in Xvfb; on the glasses (2026-11-14) a
+flat film's `proj = flat` and flat zoom were restored, and a VR180 record written before them still
+restored. On the Viture Pro XR (2026-11-13) saving a zoom change at quit,
 restoring it on reopen and keeping it across a rename were seen to work, and playing with the
 record in use missed no more vsyncs than playing with `--no-memory`. Layout, swap-eyes, content
 FOV and convergence records, `--forget` and the bad-record paths have not been run on the glasses.
@@ -573,8 +577,9 @@ mode:
 | 1920x1080 | shrunk 2x, mipmaps | 1:1, none | enlarged 1.5x, none | enlarged 2x, none |
 | 3840x2160 | shrunk 4x, mipmaps | shrunk 2x, mipmaps | shrunk 1.33x, mipmaps | 1:1, none |
 
-What mipmap generation costs on the owner's Radeon has not been measured; that is part of the
-hardware run.
+On the owner's Radeon (2026-11-14, AC power) a 4K film at zoom 1.0 missed 8 of 3600 vsyncs with
+`--mipmap off` and 13 with `on`; whether mipmaps visibly reduce shimmer was not settled (no clear
+difference seen on one film at zoom 0.5).
 
 ## Diagnostics
 
@@ -674,6 +679,11 @@ Viture Pro XR glasses at 3840x1080 60 Hz, with a 4320x2160 10-bit AV1 60 fps fil
   software-decoded playback stutters, check the charger first.
 - Source bitrate matters more than anything the player does: the same resolution looked much
   better at 20 Mbit/s H.264 than at 2.5 Mbit/s AV1.
+- Mipmaps (2026-11-14, AC power, 3600 frames per run, no keys): a 3840x2160 AV1 flat film at
+  `--zoom 1.0` missed 8 vsyncs (0.22%) with `--mipmap off` and 13 (0.36%) with `on`. A 7680x3840
+  AV1 VR180 file at `--zoom 0.5` missed 113 (3.1%) without mipmaps and 85 (2.4%) with
+  `--mipmap-force`, which makes the chain every frame. One pair each; the differences are within
+  run-to-run noise. A flat 1080p AV1 film missed 0 of 10754.
 
 ## Tracking notes
 

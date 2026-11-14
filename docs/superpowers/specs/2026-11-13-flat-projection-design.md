@@ -1,7 +1,7 @@
 # xrdome: flat projection and format auto-detection (design spec)
 
 Date: 2026-11-13
-Status: approved 2026-11-13 (reviewed once by a fresh reader; three points settled as calls in 5.7, 5.8 and 5.9); implemented in PRs #11, #12, #13, #15 and the PR that closes issue #8 (wiring, keys, docs). Not yet run on the glasses.
+Status: approved 2026-11-13 (reviewed once by a fresh reader; three points settled as calls in 5.7, 5.8 and 5.9); implemented in PRs #11, #12, #13, #15 and #16 (wiring, keys, docs). Run on the Viture Pro XR on 2026-11-14 (8.4, all steps; results in `docs/STATUS.md`).
 Branch: `feature/flat-projection` (from `main` at `3358de5`)
 Builds on: `docs/superpowers/specs/2026-11-11-xrdome-design.md` and
 `docs/superpowers/specs/2026-11-12-per-file-settings-design.md`
@@ -538,7 +538,9 @@ XREAL Air 2 Pro.
 
 ## 11. Not verified
 
-- The text `ffprobe` prints for Spherical Mapping side data, on any version. Verified:
+- The text `ffprobe` prints for Spherical Mapping side data from a camera's or a site's file, and
+  on versions other than 9.0.2. FFmpeg 9.0.2 on a synthetic `sv3d` box prints what the fixtures
+  hold (made again byte for byte in the 2026-11-14 hardware run). Verified:
   Stereo 3D on FFmpeg 6.1 for Matroska and MP4; on FFmpeg 9.0.2 (the owner's laptop, in
   the Xvfb smoke test) for a Matroska file tagged `stereo_mode=left_right`, read as
   `layout=sbs-lr (metadata)`. MP4 stereo on 9.0.2 is not verified.
@@ -548,9 +550,12 @@ XREAL Air 2 Pro.
 - Subtitles with `osd-level=0`: verified in Xvfb with software GL and mpv's
   `gpu-dumb-mode`, on the owner's laptop (libmpv 2.6.0); a flat 2D smoke case asserts the
   subtitle pixels. Not seen on the Radeon with mpv's normal render path.
-- Mipmap generation cost on the owner's Radeon. Measured in the hardware run.
+- Mipmap generation cost on the owner's Radeon: measured 2026-11-14, within 0.5 percentage
+  points (8 against 13 missed of 3600 for a 4K film). Whether mipmaps visibly reduce shimmer on
+  the glasses was not settled: no clear difference was seen on one film at zoom 0.5.
 - That FFmpeg does not decode both eyes of MVC. Not relied on; MVC is a non-goal.
 - Rotated video (phone footage with a rotation tag). Expected to work through mpv; not
   tested.
-- Nothing in this spec has been run on the glasses (spec 8.4). It was written against the
+- Run on the glasses on 2026-11-14 (8.4): not seen there are a real half-SBS film (a test clip
+  was used), subtitles, top-bottom, full SBS and the XREAL Air 2 Pro. It was written against the
   code at `3358de5`.
