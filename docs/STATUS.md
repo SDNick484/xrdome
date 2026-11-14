@@ -493,6 +493,15 @@ Hardware check (owner, after merge):
 4. `I` shows `info: mpv scale: spline36, 1920x1080 to 2880x1620` at zoom 1.5, and `[` `]`
    change the `video texture:` line once per burst with no black flash.
 
+## XREAL Air 2 Pro (owner, 2026-11-14, `main` at `bb95090`)
+- VR180 and flat files played on the XREAL Air 2 Pro with head tracking, "pretty much the same" as
+  on the Viture Pro XR, both with `--device xreal-air2pro` and without it.
+- Without `--device` xrdome uses the Viture's diagonal FOV (43 degrees) on the XREAL's 45, so the
+  picture is drawn about 4% smaller than intended and moves slightly less than the head turns;
+  nothing was reported about that difference. `--device xreal-air2pro` is the correct setting.
+- Not covered by this run: yaw drift over 5 minutes, EDID/`xrandr --props` capture, convergence,
+  per-file settings, and the features in the open PRs #28-#34 (this was `main`).
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship
@@ -503,7 +512,8 @@ Hardware check (owner, after merge):
 - Convergence is demoted to the `--convergence` flag (still remembered per file); the `,` `.` and
   `/` keys are removed. Reason: on the Viture Pro XR up to 2 deg made no significant difference
   and 5 deg put the scene out of focus, while zooming out is what fuses close subjects. The flag
-  stays because the finding is one viewer on one pair of glasses and the XREAL Air 2 Pro is untested.
+  stays because the finding is one viewer on one pair of glasses and convergence was not tried on
+  the XREAL Air 2 Pro.
 - Source bitrate dominates picture quality (20 Mbit/s H.264 looked far better than 2.5 Mbit/s AV1).
 
 ## Findings from hardware testing
@@ -536,8 +546,8 @@ Hardware check (owner, after merge):
   calibrated (see README, Tracking notes).
 
 ## Open
-- Task 10: XREAL Air 2 Pro check (`--device xreal-air2pro`), yaw drift over 5 minutes on both
-  glasses, EDID/`xrandr --props` capture, README hardware notes.
+- Task 10: the XREAL Air 2 Pro plays (2026-11-14, see its section); still open: yaw drift over
+  5 minutes on both glasses, EDID/`xrandr --props` capture, README hardware notes.
 - Untested: unplug behaviour during playback (a disconnect between runs happened on 2026-11-13,
   see Findings), automatic 8-bit FBO fallback.
 - Unanalysed: the remaining 0.6-1.3% late frames.
