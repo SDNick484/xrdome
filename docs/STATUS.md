@@ -218,10 +218,73 @@ Awaits the glasses: resuming a real long film (hardware decode, seeking with `st
 file, how long mpv takes to reach the position on an 8K file), and a real quit with `Q` or the
 window close in the middle of a film (the sandbox quits by `--frames`).
 
+## Dimming and brightness on the Viture Pro XR (issue #22, research only, 2026-11-14)
+Question: can xrdome set the electrochromic dimming and the display brightness while XRLinuxDriver
+runs? Answer: not today, and not safely from a second process. Decision (b): the controls belong in
+the driver; an upstream feature request is drafted in the description of the PR that closes
+issue #22, for the owner to file. Nothing was sent to the glasses or the driver; all of this is
+from reading source, headers, docs and the installed binaries.
+
+Findings (XRLinuxDriver at `da303d2`, 2026-11-05, the commit the spec was checked against; the
+Viture SDK 2.4.0 headers it bundles, `include/sdks/viture_version.h`, brought in by its PR #138):
+- The SDK has both controls. `viture_protocol_public.h`: `xr_device_provider_set_film_mode(handle,
+  float voltage)` is the electrochromic film ("controls the tint level of the glasses lenses"),
+  binary on Gen1 (0.0 off, any non-zero on; One and Pro: range [0, 1]; Pro 2 has no film; Beast
+  [0, 8]). `xr_device_provider_set_brightness_level(handle, int level)` is display brightness,
+  [0, 8] on the Pro ([0, 6] on the One). `set_duty_cycle` (0 to 100) is a lower-level brightness
+  that Viture's page says most applications should not use. Viture's SDK page
+  (https://www.viture.com/developer/glasses-sdk/glasses) gives the same ranges. That the Pro XR
+  is the "Pro" row is an inference from the driver's market names, not checked on the glasses.
+- The driver uses neither. `src/devices/viture.c` calls no brightness, film or duty-cycle
+  function, and the installed `~/xr_driver/bin/xrDriver` imports none of them (`strings`).
+  `read_control_flags` in `src/state.c` knows `recenter_screen`, `recalibrate`, `sbs_mode`,
+  `force_quit` and `request_features`; plugins add `refresh_device_license` and the smooth-follow
+  keys. `device_driver_type` (`include/devices.h`) has SBS get/set only. So option (a), a control
+  file request the driver already supports, does not exist. The SDK's state-change callback
+  (which reports brightness and film changes) is not registered: the call is commented out
+  (`viture.c`, `// viture_register_state_callback_locked();`).
+- `libGlassSDK.so` is Rokid's SDK, not Viture's (`CMakeLists.txt` pairs it with
+  `src/devices/rokid.c`; `include/sdks/rokid.h` declares its `SetBrightness(handle, channel,
+  level)`). Its brightness calls do not apply to the Viture.
+- Controls and the IMU share one connection. `libglasses.so` (installed copy) has a statically
+  built libusb and opens the glasses' "MCU" and "IMU" USB interfaces through usbfs (its strings:
+  `No MCU device found`, `No IMU device found`, `libusb_claim_interface`). Viture's page says one
+  pair of glasses exposes several USB interfaces (IMU, MCU, audio, camera) and that a handle
+  "represents one open connection to one physical device". Display mode, brightness and film are
+  MCU commands sent through the provider the driver already holds.
+- A second process cannot get those interfaces. While one process has claimed an interface
+  through usbfs, another's `libusb_claim_interface` gets `LIBUSB_ERROR_BUSY`, and libusb refuses
+  to detach an interface whose driver is `usbfs` (libusb `libusb/os/linux_usbfs.c`,
+  `claim_interface` and `op_detach_kernel_driver`, master `d3937ff`). What `create` and
+  `initialize` do on the device before that fails is not documented (`initialize` can fail with
+  `VITURE_GLASSES_ERROR_SERIAL_FETCH`, so it talks to the glasses), and the SDK documents no
+  shared access. So a `dlopen` backend in xrdome (option c) would at best fail with BUSY and at
+  worst disturb the driver's IMU stream. This confirms the spec's note (section 4.1) that only
+  one process can own the glasses.
+- The driver's SBS switch is the model for an upstream change: `handle_control_flags_update`
+  (`src/driver.c`) calls `device_set_sbs_mode_func`, which takes `viture_connection_mutex` and
+  calls the SDK on the driver's own provider. It stops the IMU stream first because
+  `switch_dimension` "fails if we're still streaming IMU data"; whether brightness and film
+  commands need the same is not documented.
+- No request for this exists upstream: searching wheaney/XRLinuxDriver issues and PRs for
+  brightness, dimming, dim, film mode and electrochromic found nothing relevant (2026-11-14).
+
+Why (b), not (c) or (d): the safe path is one owner of the USB connection, and the driver is that
+owner. The change upstream is small and follows an existing pattern (the SBS request). Option (d)
+would leave a reachable fix unasked. If the request lands, xrdome's side is a few one-shot control
+file writes through issue #18's writer: `D` toggles dimming, `Shift+[` / `Shift+]` step brightness
+(keys reserved, not bound), stepping from the level the driver reports in its state file.
+
+Not checked, and needs the glasses or the maintainer: which SDK device type the Pro XR reports
+(Gen1 is assumed from the market name); whether film and brightness commands work while the IMU
+streams; whether the glasses keep the levels across a reconnect.
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship
   `libglasses.so` or XRLinuxDriver source. A Viture SDK backend, if added, uses dlopen.
+- No second process opens the glasses while XRLinuxDriver runs (it holds their USB interfaces).
+  Device controls such as dimming and brightness go through the driver (issue #22).
 - mpv default profile is `fast`; the default mpv render path saturated the integrated GPU.
 - Convergence is demoted to the `--convergence` flag (still remembered per file); the `,` `.` and
   `/` keys are removed. Reason: on the Viture Pro XR up to 2 deg made no significant difference
@@ -274,5 +337,9 @@ window close in the middle of a film (the sandbox quits by `--frames`).
 - Flat projection and format detection, after the hardware run: shimmer with and without
   mipmaps on content with fine detail; a real half-SBS film, and `M` into half SBS from mono;
   subtitles on the glasses; top-bottom and full SBS if such files turn up.
+- Dimming and brightness keys wait on an XRLinuxDriver feature (control-file requests for
+  brightness and the electrochromic film); the request is drafted in issue #22's PR for the owner
+  to file. Keys `D` and `Shift+[` / `Shift+]` are reserved for it.
 - Candidate next features, in suggested order: per-eye HUD (takes over `?` and `I`, which print
-  to the terminal for now), Viture SDK backend, GTK launcher.
+  to the terminal for now), Viture SDK backend (only in place of XRLinuxDriver, not beside it:
+  see the dimming findings), GTK launcher.
