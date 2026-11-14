@@ -30,9 +30,21 @@ xrd_value_status xrd_value_ranged(const char *s, float lo, float hi, float *out)
 /* "HxV" in degrees, each XRD_CONTENT_FOV_MIN..MAX. *h and *v are set only on OK. */
 xrd_value_status xrd_value_content_fov(const char *s, float *h, float *v);
 
-/* "sbs-lr", "sbs-rl" or "mono". */
+/* "sbs-lr", "sbs-rl", "tb-lr", "tb-rl" or "mono". */
 bool xrd_value_layout(const char *s, xrd_layout *out);
 const char *xrd_value_layout_name(xrd_layout layout); /* NULL if out of enum range */
+
+/* "hequirect" or "flat". "auto" is handled by config.c, not here. */
+bool xrd_value_proj(const char *s, xrd_proj *out);
+const char *xrd_value_proj_name(xrd_proj p);           /* NULL if out of enum range */
+
+/* "half" or "full"; the name of AUTO is "auto". */
+bool xrd_value_packing(const char *s, xrd_packing *out);
+const char *xrd_value_packing_name(xrd_packing p);     /* NULL if out of enum range */
+
+/* "screen" or "magnify". */
+bool xrd_value_zoom_mode(const char *s, xrd_zoom_mode *out);
+const char *xrd_value_zoom_mode_name(xrd_zoom_mode m); /* NULL if out of enum range */
 
 /* "yes" or "no". */
 bool xrd_value_yesno(const char *s, bool *out);

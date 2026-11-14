@@ -252,6 +252,166 @@ static void args_bad_proj(void **state)
     assert_int_equal(xrd_config_parse_args(&c, 4, ok, err, sizeof err), 0);
 }
 
+static int parse_flags(xrd_config *c, char *err, size_t errlen, const char *a, const char *b)
+{
+    char *argv[] = {"xrdome", (char *)a, (char *)b, "a.mp4", NULL};
+    xrd_config_defaults(c);
+    return xrd_config_parse_args(c, 4, argv, err, errlen);
+}
+
+static void flat_defaults(void **state)
+{
+    (void)state;
+    xrd_config c;
+    xrd_config_defaults(&c);
+    assert_true(c.proj_auto);
+    assert_true(c.layout_auto);
+    assert_int_equal(c.packing, XRD_PACKING_AUTO);
+    assert_int_equal(c.zoom_mode, XRD_ZOOM_SCREEN);
+    assert_float_equal(c.flat_zoom, 1.5f, TOL);
+    assert_float_equal(c.zoom_default, 1.0f, TOL);
+    assert_false(c.screen_locked);
+    assert_true(c.mipmap);
+    assert_string_equal(c.ffprobe, "ffprobe");
+    assert_int_equal((int)c.explicit_flags, 0);
+}
+
+static void flat_flag_proj(void **state)
+{
+    (void)state;
+    xrd_config c;
+    char err[256] = "";
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--proj", "flat"), 0);
+    assert_false(c.proj_auto);
+    assert_int_equal(c.proj, XRD_PROJ_FLAT);
+    assert_true(c.explicit_flags & XRD_SET_PROJ);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--proj", "hequirect"), 0);
+    assert_false(c.proj_auto);
+    assert_int_equal(c.proj, XRD_PROJ_HEQUIRECT);
+    assert_true(c.explicit_flags & XRD_SET_PROJ);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--proj", "auto"), 0);
+    assert_true(c.proj_auto);
+    assert_false(c.explicit_flags & XRD_SET_PROJ);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--proj", "Flat"), -1);
+    assert_non_null(strstr(err, "--proj"));
+}
+
+static void flat_flag_layout_auto_and_tb(void **state)
+{
+    (void)state;
+    xrd_config c;
+    char err[256] = "";
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--layout", "mono"), 0);
+    assert_false(c.layout_auto);
+    assert_int_equal(c.layout, XRD_LAYOUT_MONO);
+    assert_true(c.explicit_flags & XRD_SET_LAYOUT);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--layout", "tb-lr"), 0);
+    assert_int_equal(c.layout, XRD_LAYOUT_TB_LR);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--layout", "tb-rl"), 0);
+    assert_int_equal(c.layout, XRD_LAYOUT_TB_RL);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--layout", "auto"), 0);
+    assert_true(c.layout_auto);
+    assert_false(c.explicit_flags & XRD_SET_LAYOUT);
+}
+
+static void flat_flag_packing(void **state)
+{
+    (void)state;
+    xrd_config c;
+    char err[256] = "";
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--packing", "half"), 0);
+    assert_int_equal(c.packing, XRD_PACKING_HALF);
+    assert_true(c.explicit_flags & XRD_SET_PACKING);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--packing", "full"), 0);
+    assert_int_equal(c.packing, XRD_PACKING_FULL);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--packing", "auto"), 0);
+    assert_int_equal(c.packing, XRD_PACKING_AUTO);
+    assert_false(c.explicit_flags & XRD_SET_PACKING);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--packing", "double"), -1);
+    assert_non_null(strstr(err, "--packing"));
+}
+
+static void flat_flag_zoom_mode_screen_mipmap(void **state)
+{
+    (void)state;
+    xrd_config c;
+    char err[256] = "";
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--zoom-mode", "magnify"), 0);
+    assert_int_equal(c.zoom_mode, XRD_ZOOM_MAGNIFY);
+    assert_true(c.explicit_flags & XRD_SET_ZOOM_MODE);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--zoom-mode", "screen"), 0);
+    assert_int_equal(c.zoom_mode, XRD_ZOOM_SCREEN);
+    assert_true(c.explicit_flags & XRD_SET_ZOOM_MODE);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--zoom-mode", "auto"), -1);
+    assert_non_null(strstr(err, "--zoom-mode"));
+
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--screen", "locked"), 0);
+    assert_true(c.screen_locked);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--screen", "fixed"), 0);
+    assert_false(c.screen_locked);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--screen", "free"), -1);
+    assert_non_null(strstr(err, "--screen"));
+
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--mipmap", "off"), 0);
+    assert_false(c.mipmap);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--mipmap", "on"), 0);
+    assert_true(c.mipmap);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--mipmap", "yes"), -1);
+    assert_non_null(strstr(err, "--mipmap"));
+}
+
+static void flat_ini_keys(void **state)
+{
+    (void)state;
+    char path[64], err[256] = "";
+    write_tmp(path, "[general]\nscreen = locked\nffprobe = /opt/ff/ffprobe\n"
+                    "[device.viture-pro]\nzoom = 1.2\nflat_zoom = 2.0\n");
+    char *argv[] = {"xrdome", "movie.mp4", NULL};
+    xrd_config c;
+    int rc = xrd_config_load(&c, path, 2, argv, err, sizeof err);
+    unlink(path);
+    assert_int_equal(rc, 0);
+    assert_float_equal(c.flat_zoom, 2.0f, TOL);
+    assert_true(c.screen_locked);
+    assert_string_equal(c.ffprobe, "/opt/ff/ffprobe");
+    assert_float_equal(c.zoom, 1.2f, TOL);
+    assert_float_equal(c.zoom_default, 1.2f, TOL);
+}
+
+static void flat_zoom_default_survives_zoom_flag(void **state)
+{
+    (void)state;
+    char path[64], err[256] = "";
+    write_tmp(path, "[device.viture-pro]\nzoom = 1.2\n");
+    char *argv[] = {"xrdome", "--zoom", "3", "movie.mp4", NULL};
+    xrd_config c;
+    int rc = xrd_config_load(&c, path, 4, argv, err, sizeof err);
+    unlink(path);
+    assert_int_equal(rc, 0);
+    assert_float_equal(c.zoom, 3.0f, TOL);
+    assert_float_equal(c.zoom_default, 1.2f, TOL);
+    assert_true(c.explicit_flags & XRD_SET_ZOOM);
+}
+
+static void flat_ini_bad_values_name_file_and_line(void **state)
+{
+    (void)state;
+    const char *texts[] = {"[general]\nscreen = sideways\n", "[device.viture-pro]\nflat_zoom = 9\n",
+                           "[device.viture-pro]\nflat_zoom = abc\n"};
+    const char *keys[] = {"screen", "flat_zoom", "flat_zoom"};
+    for (int i = 0; i < 3; i++) {
+        char path[64], err[256] = "", want[80];
+        write_tmp(path, texts[i]);
+        xrd_config c;
+        xrd_config_defaults(&c);
+        assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), -1);
+        snprintf(want, sizeof want, "%s:2:", path);
+        assert_non_null(strstr(err, want));
+        assert_non_null(strstr(err, keys[i]));
+        unlink(path);
+    }
+}
+
 static void args_sync_after_swap_flag(void **state)
 {
     (void)state;
@@ -988,6 +1148,14 @@ int main(void)
         cmocka_unit_test(args_dither),
         cmocka_unit_test(args_mpv_log),
         cmocka_unit_test(ini_new_flags_are_not_keys),
+        cmocka_unit_test(flat_defaults),
+        cmocka_unit_test(flat_flag_proj),
+        cmocka_unit_test(flat_flag_layout_auto_and_tb),
+        cmocka_unit_test(flat_flag_packing),
+        cmocka_unit_test(flat_flag_zoom_mode_screen_mipmap),
+        cmocka_unit_test(flat_ini_keys),
+        cmocka_unit_test(flat_zoom_default_survives_zoom_flag),
+        cmocka_unit_test(flat_ini_bad_values_name_file_and_line),
         cmocka_unit_test(ini_content_fov_is_not_a_key),
         cmocka_unit_test(load_unknown_device_names_it),
         cmocka_unit_test(load_ini_defined_device_ok),

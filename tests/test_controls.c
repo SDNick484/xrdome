@@ -59,21 +59,145 @@ static void zoom_clamps_to_quarter_and_four(void **state)
     assert_float_equal(c.zoom, 0.25f, TOL);
 }
 
-static void layout_cycles_lr_rl_mono(void **state)
+static void hequirect_layout_cycle(void **state)
 {
     (void)state;
     xrd_controls c;
     xrd_controls_init(&c, 1.0f, XRD_LAYOUT_SBS_LR);
-    xrd_controls_cycle_layout(&c);
-    assert_int_equal(c.layout, XRD_LAYOUT_SBS_RL);
-    xrd_controls_cycle_layout(&c);
+    const xrd_layout want[] = { XRD_LAYOUT_SBS_RL, XRD_LAYOUT_TB_LR, XRD_LAYOUT_MONO,
+                                XRD_LAYOUT_SBS_LR };
+    for (int i = 0; i < 4; i++) {
+        xrd_controls_cycle_layout(&c, 16.0 / 9.0);
+        assert_int_equal(c.layout, want[i]);
+    }
+    xrd_controls_init(&c, 1.0f, XRD_LAYOUT_TB_RL);
+    xrd_controls_cycle_layout(&c, 0.0);
     assert_int_equal(c.layout, XRD_LAYOUT_MONO);
-    xrd_controls_cycle_layout(&c);
-    assert_int_equal(c.layout, XRD_LAYOUT_SBS_LR);
+}
 
-    xrd_controls_init(&c, 1.0f, XRD_LAYOUT_MONO);
-    xrd_controls_cycle_layout(&c);
-    assert_int_equal(c.layout, XRD_LAYOUT_SBS_LR);
+static void check_flat_step(xrd_layout from, xrd_packing from_pk, double aspect,
+                            xrd_layout want, xrd_packing want_pk)
+{
+    xrd_controls c;
+    xrd_controls_init(&c, 1.5f, from);
+    xrd_controls_init_format(&c, XRD_PROJ_FLAT, from_pk, 1.0f, XRD_ZOOM_SCREEN, false);
+    xrd_controls_cycle_layout(&c, aspect);
+    assert_int_equal(c.layout, want);
+    assert_int_equal(c.packing, want_pk);
+}
+
+static void flat_layout_cycle(void **state)
+{
+    (void)state;
+    const double a = 16.0 / 9.0;
+    check_flat_step(XRD_LAYOUT_MONO, XRD_PACKING_AUTO, a, XRD_LAYOUT_SBS_LR, XRD_PACKING_HALF);
+    check_flat_step(XRD_LAYOUT_SBS_LR, XRD_PACKING_HALF, a, XRD_LAYOUT_SBS_LR, XRD_PACKING_FULL);
+    check_flat_step(XRD_LAYOUT_SBS_LR, XRD_PACKING_FULL, a, XRD_LAYOUT_TB_LR, XRD_PACKING_HALF);
+    check_flat_step(XRD_LAYOUT_TB_LR, XRD_PACKING_HALF, a, XRD_LAYOUT_TB_LR, XRD_PACKING_FULL);
+    check_flat_step(XRD_LAYOUT_TB_LR, XRD_PACKING_FULL, a, XRD_LAYOUT_MONO, XRD_PACKING_AUTO);
+    /* an -rl layout steps to the next entry of its family position */
+    check_flat_step(XRD_LAYOUT_SBS_RL, XRD_PACKING_HALF, a, XRD_LAYOUT_SBS_LR, XRD_PACKING_FULL);
+    check_flat_step(XRD_LAYOUT_SBS_RL, XRD_PACKING_FULL, a, XRD_LAYOUT_TB_LR, XRD_PACKING_HALF);
+    check_flat_step(XRD_LAYOUT_TB_RL, XRD_PACKING_HALF, a, XRD_LAYOUT_TB_LR, XRD_PACKING_FULL);
+    check_flat_step(XRD_LAYOUT_TB_RL, XRD_PACKING_FULL, a, XRD_LAYOUT_MONO, XRD_PACKING_AUTO);
+}
+
+static void flat_layout_cycle_from_auto_packing(void **state)
+{
+    (void)state;
+    /* sbs AUTO resolves HALF at 16:9 and FULL at 32:9 */
+    check_flat_step(XRD_LAYOUT_SBS_LR, XRD_PACKING_AUTO, 16.0 / 9.0,
+                    XRD_LAYOUT_SBS_LR, XRD_PACKING_FULL);
+    check_flat_step(XRD_LAYOUT_SBS_LR, XRD_PACKING_AUTO, 32.0 / 9.0,
+                    XRD_LAYOUT_TB_LR, XRD_PACKING_HALF);
+    /* tb AUTO resolves HALF at 16:9 and FULL at 16:18 */
+    check_flat_step(XRD_LAYOUT_TB_LR, XRD_PACKING_AUTO, 16.0 / 9.0,
+                    XRD_LAYOUT_TB_LR, XRD_PACKING_FULL);
+    check_flat_step(XRD_LAYOUT_TB_LR, XRD_PACKING_AUTO, 16.0 / 18.0,
+                    XRD_LAYOUT_MONO, XRD_PACKING_AUTO);
+    /* the 32/9 case named in the plan, from AUTO with an -rl layout */
+    check_flat_step(XRD_LAYOUT_SBS_RL, XRD_PACKING_AUTO, 32.0 / 9.0,
+                    XRD_LAYOUT_TB_LR, XRD_PACKING_HALF);
+}
+
+static void toggle_proj_exchanges_zooms(void **state)
+{
+    (void)state;
+    xrd_controls c;
+    xrd_controls_init(&c, 1.5f, XRD_LAYOUT_MONO);
+    xrd_controls_init_format(&c, XRD_PROJ_FLAT, XRD_PACKING_AUTO, 1.0f, XRD_ZOOM_SCREEN, false);
+    xrd_controls_toggle_proj(&c);
+    assert_int_equal(c.proj, XRD_PROJ_HEQUIRECT);
+    assert_float_equal(c.zoom, 1.0f, TOL);
+    assert_float_equal(c.zoom_other, 1.5f, TOL);
+    xrd_controls_toggle_proj(&c);
+    assert_int_equal(c.proj, XRD_PROJ_FLAT);
+    assert_float_equal(c.zoom, 1.5f, TOL);
+    assert_float_equal(c.zoom_other, 1.0f, TOL);
+}
+
+static void zoom_keys_change_only_active_zoom(void **state)
+{
+    (void)state;
+    xrd_controls c;
+    xrd_controls_init(&c, 1.5f, XRD_LAYOUT_MONO);
+    xrd_controls_init_format(&c, XRD_PROJ_FLAT, XRD_PACKING_AUTO, 1.0f, XRD_ZOOM_SCREEN, false);
+    xrd_controls_zoom_in(&c);
+    assert_float_equal(c.zoom, 1.65f, TOL);
+    assert_float_equal(c.zoom_other, 1.0f, 0.0f);
+    xrd_controls_zoom_out(&c);
+    xrd_controls_zoom_out(&c);
+    assert_float_equal(c.zoom_other, 1.0f, 0.0f);
+}
+
+static void mode_and_lock_toggles_are_flat_only(void **state)
+{
+    (void)state;
+    xrd_controls c;
+    xrd_controls_init(&c, 1.0f, XRD_LAYOUT_SBS_LR);
+    assert_false(xrd_controls_toggle_zoom_mode(&c));
+    assert_false(xrd_controls_toggle_lock(&c));
+    assert_int_equal(c.zoom_mode, XRD_ZOOM_SCREEN);
+    assert_false(c.screen_locked);
+
+    xrd_controls_init_format(&c, XRD_PROJ_FLAT, XRD_PACKING_AUTO, 1.0f, XRD_ZOOM_SCREEN, false);
+    assert_true(xrd_controls_toggle_zoom_mode(&c));
+    assert_int_equal(c.zoom_mode, XRD_ZOOM_MAGNIFY);
+    assert_true(xrd_controls_toggle_zoom_mode(&c));
+    assert_int_equal(c.zoom_mode, XRD_ZOOM_SCREEN);
+    assert_true(xrd_controls_toggle_lock(&c));
+    assert_true(c.screen_locked);
+    assert_true(xrd_controls_toggle_lock(&c));
+    assert_false(c.screen_locked);
+}
+
+static void layout_chosen_follows_cycle_and_swap(void **state)
+{
+    (void)state;
+    xrd_controls c;
+    xrd_controls_init(&c, 1.0f, XRD_LAYOUT_SBS_LR);
+    assert_false(c.layout_chosen);
+    xrd_controls_cycle_layout(&c, 0.0);
+    assert_true(c.layout_chosen);
+    xrd_controls_init(&c, 1.0f, XRD_LAYOUT_SBS_LR);
+    assert_false(c.layout_chosen);
+    xrd_controls_toggle_swap(&c);
+    assert_true(c.layout_chosen);
+    xrd_controls_init_format(&c, XRD_PROJ_FLAT, XRD_PACKING_AUTO, 1.0f, XRD_ZOOM_SCREEN, false);
+    assert_true(c.layout_chosen); /* only init clears it */
+    xrd_controls_init(&c, 1.0f, XRD_LAYOUT_SBS_LR);
+    assert_false(c.layout_chosen);
+}
+
+static void init_format_defaults(void **state)
+{
+    (void)state;
+    xrd_controls c;
+    xrd_controls_init(&c, 1.0f, XRD_LAYOUT_SBS_LR);
+    assert_int_equal(c.proj, XRD_PROJ_HEQUIRECT);
+    assert_int_equal(c.packing, XRD_PACKING_AUTO);
+    assert_int_equal(c.zoom_mode, XRD_ZOOM_SCREEN);
+    assert_false(c.screen_locked);
 }
 
 static void swap_toggles(void **state)
@@ -181,7 +305,14 @@ int main(void)
         cmocka_unit_test(init_copies_start_values),
         cmocka_unit_test(zoom_steps_by_1_1),
         cmocka_unit_test(zoom_clamps_to_quarter_and_four),
-        cmocka_unit_test(layout_cycles_lr_rl_mono),
+        cmocka_unit_test(hequirect_layout_cycle),
+        cmocka_unit_test(flat_layout_cycle),
+        cmocka_unit_test(flat_layout_cycle_from_auto_packing),
+        cmocka_unit_test(toggle_proj_exchanges_zooms),
+        cmocka_unit_test(zoom_keys_change_only_active_zoom),
+        cmocka_unit_test(mode_and_lock_toggles_are_flat_only),
+        cmocka_unit_test(layout_chosen_follows_cycle_and_swap),
+        cmocka_unit_test(init_format_defaults),
         cmocka_unit_test(swap_toggles),
         cmocka_unit_test(drag_right_looks_right_drag_up_looks_up),
         cmocka_unit_test(pitch_clamps_to_89),

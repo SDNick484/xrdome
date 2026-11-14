@@ -16,7 +16,7 @@ typedef struct {
     char device[32];       /* default "viture-pro" */
     float fov_diag;        /* from [device.<name>], default 43.0 */
     float zoom;            /* default 1.0 */
-    xrd_layout layout;     /* default XRD_LAYOUT_SBS_LR */
+    xrd_layout layout;     /* default XRD_LAYOUT_SBS_LR; valid when !layout_auto */
     float content_hfov;    /* --content-fov HxV (degrees the video covers), default 180 */
     float content_vfov;    /* default 180 */
     bool require_hwdec;
@@ -31,9 +31,19 @@ typedef struct {
     xrd_filter filter;     /* --filter bilinear|bicubic, default bicubic */
     xrd_fbo_format fbo_format; /* --fbo-format rgb10|rgba8, default rgb10 */
     bool dither;           /* --dither on|off, default on */
-    unsigned explicit_flags; /* XRD_SET_ZOOM|LAYOUT|CONTENT_FOV|CONVERGENCE given on the command line */
+    unsigned explicit_flags; /* XRD_SET_ZOOM|LAYOUT|CONTENT_FOV|CONVERGENCE|PROJ|PACKING|ZOOM_MODE given on the command line */
     bool no_memory;        /* --no-memory */
     bool forget;           /* --forget */
+    bool proj_auto;        /* --proj auto (default true) */
+    xrd_proj proj;         /* valid when !proj_auto */
+    bool layout_auto;      /* --layout auto (default true); layout valid when false */
+    xrd_packing packing;   /* --packing auto|half|full, default AUTO */
+    xrd_zoom_mode zoom_mode; /* --zoom-mode, default XRD_ZOOM_SCREEN */
+    float zoom_default;    /* VR180 zoom from device and ini, before --zoom */
+    float flat_zoom;       /* [device.X] flat_zoom, default 1.5 */
+    bool screen_locked;    /* --screen fixed|locked, [general] screen */
+    bool mipmap;           /* --mipmap on|off, default on */
+    char ffprobe[256];     /* [general] ffprobe, default "ffprobe" */
     /* development only (smoke test), not documented: */
     int frames;            /* --frames N: exit 0 after N presented frames
                               once a video frame has been rendered; 0 = off */

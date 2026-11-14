@@ -1,11 +1,11 @@
 #include "detect/detect.h"
+#include "values.h"
 
 #include <ctype.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
-
 
 /* ---- file name hints ---------------------------------------------------- */
 
@@ -134,22 +134,6 @@ void xrd_detect_relayout(double frame_aspect, xrd_proj new_proj,
     *packing = XRD_PACKING_AUTO;
 }
 
-static const char *proj_name(xrd_proj p)
-{
-    return p == XRD_PROJ_FLAT ? "flat" : "hequirect";
-}
-
-static const char *layout_name(xrd_layout l)
-{
-    switch (l) {
-    case XRD_LAYOUT_SBS_LR: return "sbs-lr";
-    case XRD_LAYOUT_SBS_RL: return "sbs-rl";
-    case XRD_LAYOUT_TB_LR:  return "tb-lr";
-    case XRD_LAYOUT_TB_RL:  return "tb-rl";
-    default:                return "mono";
-    }
-}
-
 /* ---- resolve ------------------------------------------------------------ */
 
 static void add_note(xrd_detect *d, const char *fmt, ...)
@@ -276,8 +260,8 @@ void xrd_detect_resolve(const xrd_detect_given *flags, const xrd_detect_given *r
                 out->layout_src = XRD_SRC_FALLBACK;
             }
             add_note(out, "could not detect the video format (no frame size); "
-                          "assuming %s %s", proj_name(out->proj),
-                     layout_name(out->layout));
+                          "assuming %s %s", xrd_value_proj_name(out->proj),
+                     xrd_value_layout_name(out->layout));
         }
     }
 
@@ -314,9 +298,9 @@ int xrd_detect_describe(const xrd_detect *d, char *buf, size_t len)
     size_t at = 0;
     int n;
 #define ADD(call) do { n = (call); if (n < 0 || (size_t)n >= len - at) { buf[0] = '\0'; return -1; } at += (size_t)n; } while (0)
-    ADD(snprintf(buf + at, len - at, "proj=%s (", proj_name(d->proj)));
+    ADD(snprintf(buf + at, len - at, "proj=%s (", xrd_value_proj_name(d->proj)));
     ADD(put_src(buf, len, at, d->proj_src, d->proj_token));
-    ADD(snprintf(buf + at, len - at, ") layout=%s (", layout_name(d->layout)));
+    ADD(snprintf(buf + at, len - at, ") layout=%s (", xrd_value_layout_name(d->layout)));
     ADD(put_src(buf, len, at, d->layout_src, d->layout_token));
     ADD(snprintf(buf + at, len - at, ")"));
     if (d->proj == XRD_PROJ_FLAT && d->layout != XRD_LAYOUT_MONO) {

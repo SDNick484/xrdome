@@ -227,6 +227,10 @@ static xrd_filestate make_state(unsigned set)
     st.v.content_hfov = 120.0f;
     st.v.content_vfov = 90.0f;
     st.v.convergence = 1.5f;
+    st.v.proj = XRD_PROJ_FLAT;
+    st.v.flat_zoom = 1.65f;
+    st.v.packing = XRD_PACKING_HALF;
+    st.v.zoom_mode = XRD_ZOOM_MAGNIFY;
     return st;
 }
 
@@ -238,9 +242,10 @@ static void format_only_set_fields(void **state)
     int n = xrd_filestate_format(&st, "/v/a.mp4", "2026-11-12", buf, sizeof buf);
     const char *want =
         "# xrdome per-file settings\nversion = 1\npath = /v/a.mp4\nsaved = 2026-11-12\n"
-        "proj = hequirect\nzoom = 0.7513\ncontent_fov = 120x90\n";
+        "proj = flat\nzoom = 0.7513\ncontent_fov = 120x90\n";
     assert_string_equal(buf, want);
     assert_int_equal(n, (int)strlen(want));
+    assert_null(strstr(buf, "flat_zoom"));
 }
 
 static void format_all_fields(void **state)
@@ -252,7 +257,7 @@ static void format_all_fields(void **state)
     assert_true(xrd_filestate_format(&st, "/v/a.mp4", "2026-11-12", buf, sizeof buf) > 0);
     assert_string_equal(buf,
         "# xrdome per-file settings\nversion = 1\npath = /v/a.mp4\nsaved = 2026-11-12\n"
-        "proj = hequirect\nzoom = 0.7513\nlayout = sbs-rl\nswap = yes\n"
+        "proj = flat\nzoom = 0.7513\nlayout = sbs-rl\nswap = yes\n"
         "content_fov = 120x90\nconvergence = 1.500\n");
 }
 
@@ -268,13 +273,14 @@ static void round_trip(void **state)
 {
     (void)state;
     xrd_filestate st = make_state(XRD_SET_ZOOM | XRD_SET_LAYOUT | XRD_SET_SWAP |
-                                  XRD_SET_CONTENT_FOV | XRD_SET_CONVERGENCE);
+                                  XRD_SET_CONTENT_FOV | XRD_SET_CONVERGENCE | XRD_SET_PROJ);
     char buf[512], err[128];
     assert_true(xrd_filestate_format(&st, "/v/a.mp4", "2026-11-12", buf, sizeof buf) > 0);
     xrd_filestate out;
     memset(&out, 0, sizeof out);
     assert_int_equal(xrd_filestate_parse(buf, &out, err, sizeof err), XRD_FS_OK);
     assert_int_equal((int)out.set, (int)st.set);
+    assert_int_equal(out.v.proj, st.v.proj);
     assert_true(fabsf(out.v.zoom - st.v.zoom) < 1e-4f);
     assert_int_equal(out.v.layout, st.v.layout);
     assert_true(out.v.swap == st.v.swap);
@@ -286,7 +292,7 @@ static void round_trip(void **state)
 static void round_trip_convergence_precision(void **state)
 {
     (void)state;
-    xrd_filestate st = make_state(XRD_SET_CONVERGENCE);
+    xrd_filestate st = make_state(XRD_SET_CONVERGENCE | XRD_SET_PROJ); /* format always writes proj */
     st.v.convergence = 1.234f;
     char buf[512], err[128];
     assert_true(xrd_filestate_format(&st, "/v/a.mp4", "2026-11-12", buf, sizeof buf) > 0);
@@ -313,7 +319,7 @@ static void parse_tolerates(void **state)
     const char *t = "# comment\r\n\r\nversion = 1   \r\nfuture_key = 7\r\n  zoom=0.5  \r\n"
                     "path = ignored\nsaved = whenever\nproj = hequirect\n";
     assert_int_equal(xrd_filestate_parse(t, &out, err, sizeof err), XRD_FS_OK);
-    assert_int_equal((int)out.set, (int)XRD_SET_ZOOM);
+    assert_int_equal((int)out.set, (int)(XRD_SET_ZOOM | XRD_SET_PROJ));
     assert_true(fabsf(out.v.zoom - 0.5f) < 1e-6f);
 }
 
@@ -365,13 +371,112 @@ static void parse_unsupported(void **state)
                      XRD_FS_UNSUPPORTED);
     assert_int_equal((int)out.set, 0);
     out = make_state(XRD_SET_ZOOM);
-    assert_int_equal(xrd_filestate_parse("version = 1\nproj = flat\n", &out, err, sizeof err),
+    assert_int_equal(xrd_filestate_parse("version = 1\nproj = fisheye\n", &out, err, sizeof err),
                      XRD_FS_UNSUPPORTED);
     assert_int_equal((int)out.set, 0);
+    assert_int_equal(xrd_filestate_parse("version = 1\nproj = Flat\n", &out, err, sizeof err),
+                     XRD_FS_UNSUPPORTED);
     assert_int_equal(xrd_filestate_parse("version = 2\nzoom = abc\n", &out, err, sizeof err),
                      XRD_FS_UNSUPPORTED);
     assert_int_equal(xrd_filestate_parse("zoom = abc\nversion = 2\n", &out, err, sizeof err),
                      XRD_FS_UNSUPPORTED);
+}
+
+static void parse_proj_values(void **state)
+{
+    (void)state;
+    xrd_filestate out;
+    char err[128];
+    assert_int_equal(xrd_filestate_parse("version = 1\nproj = flat\n", &out, err, sizeof err),
+                     XRD_FS_OK);
+    assert_int_equal((int)out.set, XRD_SET_PROJ);
+    assert_int_equal(out.v.proj, XRD_PROJ_FLAT);
+    assert_int_equal(xrd_filestate_parse("version = 1\nproj = hequirect\n", &out, err, sizeof err),
+                     XRD_FS_OK);
+    assert_int_equal((int)out.set, XRD_SET_PROJ);
+    assert_int_equal(out.v.proj, XRD_PROJ_HEQUIRECT);
+}
+
+static void parse_readme_example_gains_proj(void **state)
+{
+    (void)state;
+    xrd_filestate out;
+    char err[128];
+    const char *text = "# xrdome per-file settings\nversion = 1\npath = /v/a.mp4\n"
+                       "saved = 2026-11-12\nproj = hequirect\nzoom = 0.7513\nlayout = sbs-rl\n"
+                       "swap = yes\ncontent_fov = 120x90\nconvergence = 1.500\n";
+    assert_int_equal(xrd_filestate_parse(text, &out, err, sizeof err), XRD_FS_OK);
+    assert_int_equal((int)out.set, XRD_SET_ZOOM | XRD_SET_LAYOUT | XRD_SET_SWAP |
+                                   XRD_SET_CONTENT_FOV | XRD_SET_CONVERGENCE | XRD_SET_PROJ);
+    assert_int_equal(out.v.proj, XRD_PROJ_HEQUIRECT);
+    assert_float_equal(out.v.zoom, 0.7513f, 1e-4);
+    assert_int_equal(out.v.layout, XRD_LAYOUT_SBS_RL);
+    assert_true(out.v.swap);
+}
+
+static void flat_record_round_trips(void **state)
+{
+    (void)state;
+    xrd_filestate out, again;
+    char err[128], buf[512];
+    const char *text = "version = 1\nproj = flat\nflat_zoom = 1.65\nlayout = tb-lr\n"
+                       "packing = half\nzoom_mode = magnify\n";
+    assert_int_equal(xrd_filestate_parse(text, &out, err, sizeof err), XRD_FS_OK);
+    assert_int_equal((int)out.set, XRD_SET_PROJ | XRD_SET_FLAT_ZOOM | XRD_SET_LAYOUT |
+                                   XRD_SET_PACKING | XRD_SET_ZOOM_MODE);
+    assert_int_equal(out.v.proj, XRD_PROJ_FLAT);
+    assert_float_equal(out.v.flat_zoom, 1.65f, 1e-4);
+    assert_int_equal(out.v.layout, XRD_LAYOUT_TB_LR);
+    assert_int_equal(out.v.packing, XRD_PACKING_HALF);
+    assert_int_equal(out.v.zoom_mode, XRD_ZOOM_MAGNIFY);
+    assert_true(xrd_filestate_format(&out, "/v/a.mp4", "2026-11-13", buf, sizeof buf) > 0);
+    assert_non_null(strstr(buf, "proj = flat\n"));
+    assert_non_null(strstr(buf, "flat_zoom = 1.6500\n"));
+    assert_non_null(strstr(buf, "layout = tb-lr\n"));
+    assert_non_null(strstr(buf, "packing = half\n"));
+    assert_non_null(strstr(buf, "zoom_mode = magnify\n"));
+    assert_int_equal(xrd_filestate_parse(buf, &again, err, sizeof err), XRD_FS_OK);
+    assert_true(xrd_filestate_equal(&out, &again));
+}
+
+static void flat_keys_reject_bad_values(void **state)
+{
+    (void)state;
+    xrd_filestate out;
+    char err[128];
+    assert_int_equal(xrd_filestate_parse("version = 1\nproj = flat\nflat_zoom = 9\n", &out, err,
+                                         sizeof err), XRD_FS_BAD);
+    assert_non_null(strstr(err, "line 3"));
+    assert_int_equal(xrd_filestate_parse("version = 1\nzoom = 1\npacking = auto\n", &out, err,
+                                         sizeof err), XRD_FS_BAD);
+    assert_non_null(strstr(err, "line 3"));
+    assert_int_equal(xrd_filestate_parse("version = 1\nzoom_mode = zoomy\n", &out, err,
+                                         sizeof err), XRD_FS_BAD);
+    assert_non_null(strstr(err, "line 2"));
+}
+
+static void format_proj_line_follows_state(void **state)
+{
+    (void)state;
+    xrd_filestate st;
+    memset(&st, 0, sizeof st);
+    char buf[512];
+    assert_true(xrd_filestate_format(&st, "/v/a.mp4", "2026-11-13", buf, sizeof buf) > 0);
+    assert_non_null(strstr(buf, "proj = hequirect\n"));
+    st.v.proj = XRD_PROJ_FLAT; /* written even with no bit set */
+    assert_true(xrd_filestate_format(&st, "/v/a.mp4", "2026-11-13", buf, sizeof buf) > 0);
+    assert_non_null(strstr(buf, "proj = flat\n"));
+}
+
+static void format_only_zoom_has_no_flat_zoom_line(void **state)
+{
+    (void)state;
+    xrd_filestate st = make_state(XRD_SET_ZOOM);
+    char buf[512];
+    assert_true(xrd_filestate_format(&st, "/v/a.mp4", "2026-11-13", buf, sizeof buf) > 0);
+    assert_null(strstr(buf, "flat_zoom"));
+    assert_null(strstr(buf, "packing"));
+    assert_null(strstr(buf, "zoom_mode"));
 }
 
 static void path_label_cannot_inject(void **state)
@@ -388,7 +493,7 @@ static void path_label_cannot_inject(void **state)
     assert_non_null(strstr(buf, "path = /v/a?zoom = 4.mp4\n"));
     xrd_filestate out;
     assert_int_equal(xrd_filestate_parse(buf, &out, err, sizeof err), XRD_FS_OK);
-    assert_int_equal((int)out.set, 0);
+    assert_int_equal((int)out.set, XRD_SET_PROJ); /* the proj line is always written */
 }
 
 static void record_path(void **state)
@@ -421,7 +526,7 @@ static void save_load_delete(void **state)
     (void)state;
     char dir[160], rec[200], err[128] = "", first[128] = "", key[XRD_FILESTATE_KEY_MAX] = "abc-0123";
     snprintf(dir, sizeof dir, "%s/s/xrdome/files", g_dir);
-    xrd_filestate st = make_state(XRD_SET_ZOOM | XRD_SET_LAYOUT | XRD_SET_CONTENT_FOV);
+    xrd_filestate st = make_state(XRD_SET_ZOOM | XRD_SET_LAYOUT | XRD_SET_CONTENT_FOV | XRD_SET_PROJ);
     assert_int_equal(xrd_filestate_save(dir, key, &st, "/v/a.mp4", err, sizeof err), 0);
 
     struct stat sb;
@@ -540,7 +645,8 @@ static void load_directory_is_bad(void **state)
 
 static xrd_file_settings defaults(void)
 {
-    xrd_file_settings s = { 1.0f, XRD_LAYOUT_SBS_LR, false, 180.0f, 180.0f, 0.0f };
+    xrd_file_settings s = { 1.0f, XRD_LAYOUT_SBS_LR, false, 180.0f, 180.0f, 0.0f,
+                           XRD_PROJ_HEQUIRECT, 1.5f, XRD_PACKING_AUTO, XRD_ZOOM_SCREEN };
     return s;
 }
 
@@ -695,6 +801,63 @@ static void collect_nothing(void **state)
     assert_int_equal(out.set, 0);
 }
 
+static void collect_proj_change_sets_only_proj(void **state)
+{
+    (void)state;
+    xrd_file_settings start = defaults(), end = start;
+    end.proj = XRD_PROJ_FLAT;
+    xrd_filestate out;
+    xrd_filestate_collect(NULL, 0, &start, &end, &out);
+    assert_int_equal((int)out.set, XRD_SET_PROJ);
+    assert_int_equal(out.v.proj, XRD_PROJ_FLAT);
+}
+
+static void collect_flat_zoom_keeps_loaded_zoom(void **state)
+{
+    (void)state;
+    xrd_filestate loaded;
+    memset(&loaded, 0, sizeof loaded);
+    loaded.set = XRD_SET_ZOOM;
+    loaded.v.zoom = 0.56f;
+    xrd_file_settings start = defaults(), end = defaults();
+    start.zoom = end.zoom = 0.56f;
+    end.flat_zoom = start.flat_zoom + 0.3f;
+    xrd_filestate out;
+    xrd_filestate_collect(&loaded, 0, &start, &end, &out);
+    assert_int_equal((int)out.set, XRD_SET_ZOOM | XRD_SET_FLAT_ZOOM);
+    assert_float_equal(out.v.zoom, 0.56f, 1e-4);
+    assert_float_equal(out.v.flat_zoom, end.flat_zoom, 1e-4);
+}
+
+static void equal_new_field_tolerances(void **state)
+{
+    (void)state;
+    xrd_filestate a = make_state(XRD_SET_FLAT_ZOOM | XRD_SET_PROJ | XRD_SET_PACKING |
+                                 XRD_SET_ZOOM_MODE), b = a;
+    assert_true(xrd_filestate_equal(&a, &b));
+    b.v.flat_zoom += XRD_FS_TOL_ZOOM / 2;
+    assert_true(xrd_filestate_equal(&a, &b));
+    b.v.flat_zoom += XRD_FS_TOL_ZOOM * 2;
+    assert_false(xrd_filestate_equal(&a, &b));
+    b = a; b.v.proj = XRD_PROJ_HEQUIRECT;
+    assert_false(xrd_filestate_equal(&a, &b));
+    b = a; b.v.packing = XRD_PACKING_FULL;
+    assert_false(xrd_filestate_equal(&a, &b));
+    b = a; b.v.zoom_mode = XRD_ZOOM_SCREEN;
+    assert_false(xrd_filestate_equal(&a, &b));
+}
+
+static void describe_new_fields(void **state)
+{
+    (void)state;
+    xrd_filestate st = make_state(XRD_SET_ZOOM | XRD_SET_PROJ | XRD_SET_FLAT_ZOOM |
+                                  XRD_SET_PACKING | XRD_SET_ZOOM_MODE);
+    char buf[128];
+    int n = xrd_filestate_describe(&st, st.set, buf, sizeof buf);
+    assert_string_equal(buf, "zoom=0.75 proj=flat flat-zoom=1.65 packing=half zoom-mode=magnify");
+    assert_int_equal(n, (int)strlen(buf));
+}
+
 static void collect_values_from_end(void **state)
 {
     (void)state;
@@ -813,6 +976,16 @@ int main(void)
         cmocka_unit_test(collect_nothing),
         cmocka_unit_test(collect_values_from_end),
         cmocka_unit_test(equal_tolerances),
+        cmocka_unit_test(collect_proj_change_sets_only_proj),
+        cmocka_unit_test(collect_flat_zoom_keeps_loaded_zoom),
+        cmocka_unit_test(equal_new_field_tolerances),
+        cmocka_unit_test(describe_new_fields),
+        cmocka_unit_test(parse_proj_values),
+        cmocka_unit_test(parse_readme_example_gains_proj),
+        cmocka_unit_test(flat_record_round_trips),
+        cmocka_unit_test(flat_keys_reject_bad_values),
+        cmocka_unit_test(format_proj_line_follows_state),
+        cmocka_unit_test(format_only_zoom_has_no_flat_zoom_line),
         cmocka_unit_test(describe_formats),
         cmocka_unit_test(describe_too_small),
     };

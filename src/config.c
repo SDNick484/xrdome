@@ -74,7 +74,21 @@ static int set_string(const char *what, char *dst, size_t dstlen, const char *sr
 static int parse_layout(const char *s, xrd_layout *out, char *err, size_t errlen)
 {
     if (!xrd_value_layout(s, out)) {
-        set_err(err, errlen, "unknown layout '%s' (expected sbs-lr, sbs-rl or mono)", s);
+        set_err(err, errlen, "unknown layout '%s' (expected auto, sbs-lr, sbs-rl, tb-lr, tb-rl or mono)", s);
+        return -1;
+    }
+    return 0;
+}
+
+/* "fixed" or "locked" into *locked. what names the flag or key. */
+static int parse_screen(const char *what, const char *s, bool *locked, char *err, size_t errlen)
+{
+    if (!strcmp(s, "fixed"))
+        *locked = false;
+    else if (!strcmp(s, "locked"))
+        *locked = true;
+    else {
+        set_err(err, errlen, "%s: unknown value '%s' (expected fixed or locked)", what, s);
         return -1;
     }
     return 0;
@@ -114,6 +128,16 @@ void xrd_config_defaults(xrd_config *c)
     c->filter = XRD_FILTER_BICUBIC;
     c->fbo_format = XRD_FBO_RGB10;
     c->dither = true;
+    c->proj_auto = true;
+    c->proj = XRD_PROJ_HEQUIRECT;
+    c->layout_auto = true;
+    c->packing = XRD_PACKING_AUTO;
+    c->zoom_mode = XRD_ZOOM_SCREEN;
+    c->zoom_default = 1.0f;
+    c->flat_zoom = 1.5f;
+    c->screen_locked = false;
+    c->mipmap = true;
+    copy_str(c->ffprobe, sizeof c->ffprobe, "ffprobe");
 }
 
 int xrd_config_default_path(char *buf, size_t len)
@@ -213,6 +237,15 @@ static int ini_read(xrd_config *c, const char *path, bool *device_found, char *e
             rc = parse_ranged("fov_diag", val, FOV_MIN, FOV_MAX, &c->fov_diag, msg, sizeof msg);
         } else if (sec == SEC_DEVICE && !strcmp(key, "zoom")) {
             rc = parse_ranged("zoom", val, XRD_ZOOM_MIN, XRD_ZOOM_MAX, &c->zoom, msg, sizeof msg);
+            if (rc == 0)
+                c->zoom_default = c->zoom;
+        } else if (sec == SEC_DEVICE && !strcmp(key, "flat_zoom")) {
+            rc = parse_ranged("flat_zoom", val, XRD_ZOOM_MIN, XRD_ZOOM_MAX, &c->flat_zoom, msg,
+                              sizeof msg);
+        } else if (sec == SEC_GENERAL && !strcmp(key, "screen")) {
+            rc = parse_screen("screen", val, &c->screen_locked, msg, sizeof msg);
+        } else if (sec == SEC_GENERAL && !strcmp(key, "ffprobe")) {
+            rc = set_string("ffprobe", c->ffprobe, sizeof c->ffprobe, val, msg, sizeof msg);
         } else {
             snprintf(msg, sizeof msg, "unknown key '%s'", key);
             rc = -1;
@@ -239,7 +272,8 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
     enum { OPT_PROJ = 256, OPT_LAYOUT, OPT_POSE, OPT_OUTPUT, OPT_DEVICE, OPT_ZOOM,
            OPT_CONTENT_FOV, OPT_HWDEC, OPT_WINDOWED, OPT_TIMING, OPT_SYNC, OPT_FRAMES, OPT_DUMP,
            OPT_MPV_PROFILE, OPT_MPV_OPT, OPT_MPV_LOG, OPT_CONVERGENCE, OPT_FILTER,
-           OPT_FBO_FORMAT, OPT_DITHER, OPT_NO_MEMORY, OPT_FORGET };
+           OPT_FBO_FORMAT, OPT_DITHER, OPT_NO_MEMORY, OPT_FORGET,
+           OPT_PACKING, OPT_ZOOM_MODE, OPT_SCREEN, OPT_MIPMAP };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
         {"layout", required_argument, NULL, OPT_LAYOUT},
@@ -263,6 +297,10 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"dither", required_argument, NULL, OPT_DITHER},
         {"no-memory", no_argument, NULL, OPT_NO_MEMORY},
         {"forget", no_argument, NULL, OPT_FORGET},
+        {"packing", required_argument, NULL, OPT_PACKING},
+        {"zoom-mode", required_argument, NULL, OPT_ZOOM_MODE},
+        {"screen", required_argument, NULL, OPT_SCREEN},
+        {"mipmap", required_argument, NULL, OPT_MIPMAP},
         {NULL, 0, NULL, 0},
     };
 
@@ -275,15 +313,29 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         int rc = 0;
         switch (opt) {
         case OPT_PROJ:
-            if (strcmp(optarg, "hequirect")) {
-                set_err(err, errlen, "unsupported projection '%s' (supported: hequirect)", optarg);
+            if (!strcmp(optarg, "auto")) {
+                c->proj_auto = true;
+                c->explicit_flags &= ~XRD_SET_PROJ;
+            } else if (xrd_value_proj(optarg, &c->proj)) {
+                c->proj_auto = false;
+                c->explicit_flags |= XRD_SET_PROJ;
+            } else {
+                set_err(err, errlen, "--proj: unknown projection '%s' (expected auto, hequirect "
+                        "or flat)", optarg);
                 rc = -1;
             }
             break;
         case OPT_LAYOUT:
-            rc = parse_layout(optarg, &c->layout, err, errlen);
-            if (rc == 0)
-                c->explicit_flags |= XRD_SET_LAYOUT;
+            if (!strcmp(optarg, "auto")) {
+                c->layout_auto = true;
+                c->explicit_flags &= ~XRD_SET_LAYOUT;
+            } else {
+                rc = parse_layout(optarg, &c->layout, err, errlen);
+                if (rc == 0) {
+                    c->layout_auto = false;
+                    c->explicit_flags |= XRD_SET_LAYOUT;
+                }
+            }
             break;
         case OPT_POSE:
             rc = set_string("--pose", c->pose, sizeof c->pose, optarg, err, errlen);
@@ -406,6 +458,40 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
             break;
         case OPT_FORGET:
             c->forget = true;
+            break;
+        case OPT_PACKING:
+            if (!strcmp(optarg, "auto")) {
+                c->packing = XRD_PACKING_AUTO;
+                c->explicit_flags &= ~XRD_SET_PACKING;
+            } else if (xrd_value_packing(optarg, &c->packing)) {
+                c->explicit_flags |= XRD_SET_PACKING;
+            } else {
+                set_err(err, errlen, "--packing: unknown value '%s' (expected auto, half or full)",
+                        optarg);
+                rc = -1;
+            }
+            break;
+        case OPT_ZOOM_MODE:
+            if (xrd_value_zoom_mode(optarg, &c->zoom_mode))
+                c->explicit_flags |= XRD_SET_ZOOM_MODE;
+            else {
+                set_err(err, errlen, "--zoom-mode: unknown value '%s' (expected screen or magnify)",
+                        optarg);
+                rc = -1;
+            }
+            break;
+        case OPT_SCREEN:
+            rc = parse_screen("--screen", optarg, &c->screen_locked, err, errlen);
+            break;
+        case OPT_MIPMAP:
+            if (!strcmp(optarg, "on"))
+                c->mipmap = true;
+            else if (!strcmp(optarg, "off"))
+                c->mipmap = false;
+            else {
+                set_err(err, errlen, "--mipmap: unknown value '%s' (expected on or off)", optarg);
+                rc = -1;
+            }
             break;
         case ':':
             set_err(err, errlen, "option '%s' requires an argument", argv[optind - 1]);
