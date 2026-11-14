@@ -479,8 +479,14 @@ int main(int argc, char **argv)
             xrd_fov_tan_half(cfg.fov_diag, eye_aspect, ctl.zoom, &tan_h, &tan_v);
             xrd_renderer_set_convergence(r, ctl.convergence_deg);
             xrd_renderer_set_filter(r, ctl.filter);
-            xrd_renderer_draw(r, tex, rot, tan_h, tan_v, ctl.layout, ctl.swap_eyes,
-                              out_w, out_h);
+            const xrd_draw_params dp = {
+                .proj = XRD_PROJ_HEQUIRECT,
+                .layout = ctl.layout,
+                .swap_eyes = ctl.swap_eyes,
+                .geom = {.tan_h = tan_h, .tan_v = tan_v},
+                .trilinear = false,
+            };
+            xrd_renderer_draw(r, tex, rot, &dp, out_w, out_h);
         } else {
             glClearColor(0.f, 0.f, 0.f, 1.f);
             glClear(GL_COLOR_BUFFER_BIT);
