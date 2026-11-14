@@ -73,11 +73,15 @@ holds; restarting it prints `xrdome: pose resumed`.
 
 ### On the glasses
 
-Switch the glasses to SBS (3840x1080), start the driver (see [Driver](#driver)), then:
+Start the driver (see [Driver](#driver)), then:
 
 ```sh
 ./build/xrdome file.mp4
 ```
+
+Glasses in 1080p (mirror) mode are switched to SBS (3840x1080) through the driver and back
+at exit (see [Switching to SBS](#switching-to-sbs)); without the driver, switch them to SBS by hand
+first.
 
 The first pose received becomes "straight ahead" (the driver's absolute frame is arbitrary), so
 look straight ahead when starting, or press `R`. If head right does not move the image left, or
@@ -142,7 +146,7 @@ start gives a tilted picture, and `R` does not correct that. Hold your head leve
 `--device viture-pro|xreal-air2pro`, `--zoom F`, `--proj auto|hequirect|flat`,
 `--layout auto|sbs-lr|sbs-rl|tb-lr|tb-rl|mono`, `--packing auto|half|full`,
 `--zoom-mode screen|magnify`, `--screen fixed|locked`, `--screen-curve off|R`, `--mipmap on|off`,
-`--windowed`,
+`--windowed`, `--sbs-switch auto|off`,
 `--require-hwdec` (exit 1 unless mpv decodes with VA-API), `--timing-log PATH`,
 `--content-fov HxV`, `--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)),
 `--mpv-profile NAME`, `--mpv-opt KEY=VALUE` (repeatable, up to 16), `--mpv-log LEVEL`,
@@ -241,6 +245,11 @@ with the UDP backend, `pose: 0 malformed UDP packets dropped`. Targets: 0 missed
 stderr shows `hwdec: vaapi` when VA-API decoding is active; anything else prints one warning.
 If the glasses' display disconnects during playback, the player pauses and exits with status 0.
 
+`--sbs-switch auto|off` (default `auto`; ini key `sbs_switch`): with `auto`, when no 3840x1080
+output is found at start, xrdome asks XRLinuxDriver to switch the glasses to side-by-side, waits
+for the output, and switches them back at exit; see [Switching to SBS](#switching-to-sbs). `off`
+never asks and fails as before. `--windowed` never looks for the glasses' output, so never asks.
+
 ### Config file
 
 xrdome reads `$XDG_CONFIG_HOME/xrdome/config.ini`, or `~/.config/xrdome/config.ini` when
@@ -251,9 +260,9 @@ to highest: built-in defaults, built-in device values, the ini file, the command
 (same as `--output`, default `auto`), `screen` (`fixed` or `locked`, as `--screen`, default
 `fixed`), `resume` (`yes` or `no`, as `--resume`, default `no`; see
 [Resume](#resume-where-you-left-off)), `screen_curve` (`off` or a radius from 1 to 10, as
-`--screen-curve`, default `off`), `ffprobe` (the program run for format detection, default
-`ffprobe` looked up on `PATH`) and `deband` (`yes` or `no`, also `on` or `off`, as
-`--deband`, default `no`).
+`--screen-curve`, default `off`), `sbs_switch` (`auto` or `off`, as `--sbs-switch`, default
+`auto`), `ffprobe` (the program run for format detection, default `ffprobe` looked up on
+`PATH`) and `deband` (`yes` or `no`, also `on` or `off`, as `--deband`, default `no`).
 
 `[device.<name>]` keys, read for the device selected with `--device` (default `viture-pro`):
 `fov_diag` (diagonal FOV in degrees, 10 to 120), `zoom` (the VR180 zoom, 0.25 to 4, default 1)
@@ -269,6 +278,7 @@ output = auto
 screen = fixed
 resume = no
 screen_curve = off
+sbs_switch = auto
 ffprobe = /usr/bin/ffprobe
 deband = no
 
@@ -757,6 +767,54 @@ LD_LIBRARY_PATH=/path/to/xr_driver_lib /path/to/xr_driver/bin/xrDriver
 The log is `~/.local/state/xr_driver/driver.log`.
 
 Verify: `tcpdump -n -i lo udp port 4242 -c 20` shows `UDP, length 52`, and `tools/ot_dump.py` prints angles.
+
+### Switching to SBS
+
+The Viture Pro XR comes back in 1080p (mirror) mode after every reconnect. With
+`--sbs-switch auto` (the default), when no 3840x1080 output is found at start (or the output named
+with `--output` is 1920x1080), xrdome reads the driver's state file `/dev/shm/xr_driver_state`
+and asks for the switch only when all of these hold:
+
+- its `heartbeat=` is within 5 seconds of now (the driver rewrites the file every second; a
+  crashed driver leaves a stale one behind),
+- it lists glasses with `sbs_mode_supported=true`,
+- and `sbs_mode_enabled=false`.
+
+It then writes the one-line request `sbs_mode=enable` to `/dev/shm/xr_driver_control` (the
+driver reads that file when it is closed, acts on it and deletes it; `xr_driver_cli` writes its
+requests there the same way), and waits up to 8 seconds for a 3840x1080 output to appear,
+listing the outputs again every 0.2 seconds and whenever the display changes. On success stderr
+shows
+
+```
+display: switched the glasses to SBS in 1.3 s
+```
+
+and playback starts on that output. At exit, if xrdome switched the glasses itself, it writes
+`sbs_mode=disable` so the desktop mirror is usable again, and prints
+`display: asked XRLinuxDriver to switch the glasses back to 1080p`. It does not switch back
+glasses that disconnected during playback (they come back in 1080p anyway) or when the driver is
+no longer running.
+
+When it cannot switch, the usual error is followed by the reason, for example
+
+```
+xrdome: no 3840x1080 output was found; switch the glasses to SBS mode
+xrdome: automatic SBS switch: XRLinuxDriver is not running (the heartbeat in /dev/shm/xr_driver_state is 412 s old)
+xrdome: outputs: eDP-1 14" (1920x1200), VITURE 23" (1920x1080)
+```
+
+Other reasons: `XRLinuxDriver is not running (cannot read /dev/shm/xr_driver_state)`,
+`XRLinuxDriver reports no glasses connected`, `XRLinuxDriver reports that these glasses cannot
+switch to SBS`, `XRLinuxDriver reports the glasses already in SBS mode` (the driver has switched
+but X shows no 3840x1080 output), and `asked XRLinuxDriver to switch the glasses to SBS, but no
+3840x1080 output appeared within 8 s`. After a timeout xrdome does not ask to switch back: the
+glasses may still switch, and the next run then finds them in SBS. `--sbs-switch off` (or
+`sbs_switch = off`) restores the old behaviour exactly: no reading or writing of the driver's
+files, and only the first and last of those lines.
+
+The tests point xrdome at another directory with the environment variable
+`XRDOME_XR_DRIVER_DIR` (default `/dev/shm`), so no test run writes to a real driver.
 
 ## Performance notes
 

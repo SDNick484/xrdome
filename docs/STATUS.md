@@ -10,7 +10,7 @@ Plan: `docs/superpowers/plans/2026-11-11-xrdome.md` (Tasks 0-9 done, Task 10 ope
 - Head tracking from XRLinuxDriver over OpenTrack UDP (port 4242); recenter keys; seek; audio.
 - Frame timing: 0.6% late frames with defaults (mpv profile `fast`, bicubic, 10-bit FBO + dither).
 - Options and keys: see README.
-- CI (GitHub Actions, Ubuntu 24.04) builds with `-Dwerror=true` and runs the whole suite, failing if either Xvfb smoke test skips.
+- CI (GitHub Actions, Ubuntu 24.04) builds with `-Dwerror=true` and runs the whole suite, failing if any of the three Xvfb smoke tests (`smoke`, `smoke_tracking`, `smoke_sbs`) skips.
 
 ## Per-file settings memory (merged in PR #1, `main` at `3358de5`)
 
@@ -331,6 +331,86 @@ README says. Unverified until then: everything about comfort; the look of a curv
 (half SBS); frame timing with the curve on (the shader adds a square root and an arctangent per
 pixel; not measured).
 
+## Automatic SBS switch (issue #18)
+
+When no 3840x1080 output is found at start, xrdome asks XRLinuxDriver to switch the glasses to
+side-by-side, waits for the output and plays; at exit it switches them back. `--sbs-switch
+auto|off`, ini `[general] sbs_switch`, default `auto`. Code: `src/driver/xrdriver.c` (the driver's
+files: state parsing, request writing; nothing SBS-specific beyond the request text, so other
+requests can reuse it), `src/display/sbs.c` (the decision, the wait, switching back), wired in
+`src/main.c` before the window opens. README: Flags, Config file, Switching to SBS.
+
+Request format, from XRLinuxDriver's source at `da303d2` (2026-11-05), read, not copied:
+`sbs_mode=enable` or `sbs_mode=disable`, one `key=value` line, written to
+`/dev/shm/xr_driver_control` (file names `src/state.c` lines 31-33; parsing in
+`read_control_flags`, lines 73-107, the `sbs_mode` values `unset`, `enable` and `disable` at
+83-92). The driver reads the file on inotify `IN_CLOSE_WRITE` of that name, acts on
+it only while glasses are connected and only when the mode differs, then deletes it
+(`src/driver.c` `handle_control_flags_update` 561-590 and `monitor_control_flags_file_thread_func`
+593-649). State: `heartbeat=` (epoch seconds, rewritten every second by `manage_state_thread_func`,
+`src/driver.c` 541-559) and, only while glasses are connected, `sbs_mode_supported=` and
+`sbs_mode_enabled=` (`src/state.c` `write_state` 43-71).
+
+Decisions:
+- Ask only when the state file's heartbeat is within 5 s of now (either way), it lists glasses,
+  `sbs_mode_supported=true` and `sbs_mode_enabled=false`. A stale file (the driver crashed, as on
+  2026-11-13) never gets a request, which would otherwise wait in `/dev/shm` for the driver's next
+  start.
+- The request is written in place (`O_CREAT|O_TRUNC|O_NOFOLLOW`), not written to a temporary file
+  and renamed: the driver watches for the close of a write to that name, and a rename is a
+  different inotify event.
+- The wait lists the outputs again by re-initialising SDL's video subsystem (before any window
+  exists), at least every 0.2 s and at every SDL event, for up to 8 s. SDL 2 keeps a display's old
+  mode when an existing output changes mode ("FIXME" in its XRandR output-change handler), so
+  pumping events alone is not enough on hardware; there is no fixed sleep.
+- Success prints `display: switched the glasses to SBS in N.N s` (the time, to tune the 8 s on
+  hardware). Failure keeps the old error line, then `xrdome: automatic SBS switch: <reason>`, then
+  the `outputs:` line.
+- Switch back at exit only when xrdome switched the glasses itself, so the desktop mirror works
+  again; not after a disconnect during playback (the glasses come back in 1080p, and a request
+  the driver cannot act on would stay pending in it), not when the driver has stopped. The window
+  is destroyed first.
+- After a timeout (or quitting during the wait) xrdome does not ask to switch back: if the
+  glasses switch late, the next run finds them in SBS.
+- `--output NAME` also qualifies when the named output is 1920x1080; a named output of another
+  size (the laptop panel) does not.
+- `--sbs-switch off` neither reads nor writes the driver's files and prints exactly what xrdome
+  printed before. `--windowed` never asks.
+- Tests never reach `/dev/shm`: the directory comes from `XRDOME_XR_DRIVER_DIR` (default
+  `/dev/shm`), which the unit tests and all three smoke scripts set to a temporary directory.
+
+What the sandbox verified (owner's laptop, software GL, Xvfb, and CI's Ubuntu 24.04 runs the
+same): unit tests `test_xrdriver` (state parsing: connected, no glasses, enabled, unsupported,
+bad values, a long license line; heartbeat window; request text; the written file, its
+truncation, refusal of a symlink) and `test_sbs` (the decision for each state, the reasons, which
+selection failures qualify, and the wait with fake outputs and clock: found after a few polls,
+timeout exactly at the deadline, a failed listing retried, quit while waiting, nothing written in
+each refusing state; switching back only to a running driver). Smoke `smoke_sbs` (S1-S5), with
+`tests/fake_xr_driver.py` standing in for the driver and Xvfb started at 3840x1080 with its
+output turned off at 1920x1080 (`-noreset`; Xvfb's RandR allows growing back only up to the
+starting size): S1 the request is written, the fake grows the screen to 3840x1080, playback runs
+full screen there (the dumped frame is 3840x1080) and `sbs_mode=disable` is written at exit; S2
+`--sbs-switch off` writes nothing and prints only the old two lines; S3 a stale heartbeat writes
+nothing and says why; S4 a driver that never switches gives the 8 s timeout line and no switch
+back; S5 `--windowed` writes nothing. `smoke` case 3 (no driver at all) checks the reason line.
+
+Awaits the glasses (hardware check, after merge; all of the real switch is unverified):
+1. Reconnect the Viture Pro XR so it is in 1080p, start XRLinuxDriver, check
+   `/dev/shm/xr_driver_state` has a current `heartbeat=`, `sbs_mode_supported=true` and
+   `sbs_mode_enabled=false`.
+2. `./build/xrdome --no-memory --frames 600 file.mp4`: expect
+   `display: switched the glasses to SBS in N.N s` and normal playback; note N (is 8 s enough on
+   Xorg/MATE?), and whether the picture lands on the glasses (MATE may place the new 3840x1080
+   output elsewhere, or need a moment to settle).
+3. At exit: `display: asked XRLinuxDriver to switch the glasses back to 1080p`, and the desktop
+   mirror returns.
+4. Run again with the glasses already in SBS: no request, plays at once.
+5. Stop the driver and run with the glasses in 1080p: the old error, then
+   `automatic SBS switch: XRLinuxDriver is not running (...)`.
+6. `--sbs-switch off`: the old error only, nothing in `/dev/shm/xr_driver_control`.
+7. Unplug during playback: no switch-back request (`ls /dev/shm/xr_driver_control` stays empty
+   after exit).
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship
@@ -384,8 +464,8 @@ pixel; not measured).
   "level" key is optional now.
 - `no pose data` after a glasses reconnect: once (2026-11-13) it was XRLinuxDriver crashing at
   connect, and restarting the driver restored it; the earlier case was not checked.
-- The player does not switch the glasses to side-by-side mode itself; after a reconnect the
-  owner has to do it by hand.
+- Automatic SBS switch (issue #18): the hardware check in its section above; the real switch,
+  its timing and the switch back at exit are unverified on the glasses.
 - Flat projection and format detection, after the hardware run: shimmer with and without
   mipmaps on content with fine detail; a real half-SBS film, and `M` into half SBS from mono;
   subtitles on the glasses; top-bottom and full SBS if such files turn up.
