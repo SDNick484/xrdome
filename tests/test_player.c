@@ -199,6 +199,20 @@ static void texture_bits_name(void **state)
     assert_string_equal(xrd_texture_bits_name(0), "none");
 }
 
+static void reconfig_step(void **state)
+{
+    (void)state;
+    assert_int_equal(xrd_reconfig_step_for(true, 1), XRD_RECONFIG_RESIZE);
+    assert_int_equal(xrd_reconfig_step_for(true, 0), XRD_RECONFIG_RESIZE);
+    assert_int_equal(xrd_reconfig_step_for(true, -1), XRD_RECONFIG_RESIZE);
+    /* the output is not configured yet (start of playback, seen under load)
+     * or has gone away (end of file): wait for the next reconfig */
+    assert_int_equal(xrd_reconfig_step_for(false, 0), XRD_RECONFIG_WAIT);
+    /* configured, or unknown, but no size: fatal */
+    assert_int_equal(xrd_reconfig_step_for(false, 1), XRD_RECONFIG_FAIL);
+    assert_int_equal(xrd_reconfig_step_for(false, -1), XRD_RECONFIG_FAIL);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -219,6 +233,7 @@ int main(void)
         cmocka_unit_test(fbo_format_gl),
         cmocka_unit_test(fbo_format_zero_is_rgba8),
         cmocka_unit_test(texture_bits_name),
+        cmocka_unit_test(reconfig_step),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
