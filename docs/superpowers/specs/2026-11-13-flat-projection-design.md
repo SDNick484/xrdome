@@ -208,6 +208,7 @@ in the file as it is, with the screen plane at the glasses' own distance. **(own
 | P | Switch projection, flat or VR180; prints `proj: flat` or `proj: hequirect` |
 | Z | Zoom mode (5.2) |
 | L | Screen lock (5.4) |
+| Up / Down | Seek +60 s / -60 s, as in mpv **(owner)** |
 | ? | Print the key list to stderr |
 | I | Print playback information to stderr |
 
@@ -456,6 +457,7 @@ Runtime: `ffprobe` from `media-video/ffmpeg`, already a dependency of `media-vid
 - Records: round trip with the new keys; `proj = flat` loads; an old record still loads;
   `tb-lr` round trip. The existing test that expects `proj = flat` to be unsupported changes.
 - Config: each new flag and ini key, bad values, `auto` defaults.
+- Seek: Up and Down request +60 s and -60 s; Left and Right stay at 10 s.
 - Controls: `P` keeps a zoom per projection; `P` re-derives a guessed layout and keeps a
   chosen one; `M` cycles per projection; `Z`; `L`.
 - Records and `P`: a `hequirect` record with `zoom = 0.56`, opened and switched to flat,
@@ -504,14 +506,14 @@ change one thing between the two runs of a pair.
    VR180 record still restores.
 7. `ffprobe -show_streams` on a stereo-tagged and a spherical-tagged fixture file with the
    owner's FFmpeg 9.0.2, compared with the fixtures the parser was written against.
-8. `?` and `I` print.
+8. `?` and `I` print; Up and Down skip a minute forward and back.
 
 Not on the Viture in this run unless the owner has such files: top-bottom, full SBS, the
 XREAL Air 2 Pro.
 
 ## 9. Documentation
 
-- `README.md`: status paragraph; keys and flags; a "Flat video" section (what it is, zoom
+- `README.md`: status paragraph; keys (including Up / Down) and flags; a "Flat video" section (what it is, zoom
   modes, screen lock, sizes in degrees); a "Format detection" section (order, tables, the
   two known wrong guesses, the `detect:` line); per-file settings (new keys, `proj`
   pinning); sharpness (mipmaps); dependencies (`ffprobe` at run time).
