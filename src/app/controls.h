@@ -2,6 +2,7 @@
 #define XRD_APP_CONTROLS_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "math/quat.h"
 #include "render/projection.h"
@@ -73,5 +74,16 @@ void xrd_controls_recenter(xrd_controls *c);
 /* xrd_quat_from_ypr_deg(mouse_yaw, mouse_pitch, 0); multiply onto the
  * tracker's view: view = tracker_view * mouse_quat. */
 xrd_quat xrd_controls_mouse_quat(const xrd_controls *c);
+
+/* One line of the key list that ? prints: the key and what it does. */
+typedef struct {
+    const char *key;
+    const char *action;
+} xrd_key_help;
+
+/* The key list, in the order of the README's Keys table (test_controls
+ * checks the keys and the order against README.md). */
+extern const xrd_key_help xrd_key_list[];
+extern const size_t xrd_key_list_len;
 
 #endif

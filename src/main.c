@@ -244,30 +244,11 @@ static const char *src_text(xrd_detect_src s, const char *tok, bool keyed, char 
     return w;
 }
 
-/* The key list (?), in the order of the README's table. */
+/* The key list (?). */
 static void print_keys(void)
 {
-    static const char *const keys[][2] = {
-        {"Space", "pause / resume"},
-        {"Left / Right", "seek -10 s / +10 s"},
-        {"Up / Down", "seek +60 s / -60 s"},
-        {"R", "recenter, yaw only"},
-        {"Shift+R", "recenter, full"},
-        {"[ / ]", "zoom out / in"},
-        {"F", "bicubic / bilinear sampling"},
-        {"S", "swap eyes"},
-        {"M", "cycle layout (flat: 2D, half SBS, full SBS, half TB, full TB)"},
-        {"P", "projection: flat / VR180"},
-        {"Z", "zoom mode: screen / magnify (flat)"},
-        {"L", "screen: fixed / head-locked (flat)"},
-        {"C", "screen: flat / curved (flat, screen zoom mode)"},
-        {"?", "this list"},
-        {"B", "debanding on / off"},
-        {"I", "playback information"},
-        {"Q", "quit"},
-    };
-    for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++)
-        fprintf(stderr, "keys: %s  %s\n", keys[i][0], keys[i][1]);
+    for (size_t i = 0; i < xrd_key_list_len; i++)
+        fprintf(stderr, "keys: %s  %s\n", xrd_key_list[i].key, xrd_key_list[i].action);
 }
 
 /* "screen curve: off" or "screen curve: 1.00", and why magnify mode draws a
