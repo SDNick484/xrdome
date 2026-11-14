@@ -95,5 +95,12 @@ int xrd_fbo_format_gl(xrd_fbo_format f, int *depth);
 const char *xrd_texture_bits_name(int bits);
 /* True for an exactly 2:1 frame (two square eyes side by side). */
 bool xrd_video_is_sbs_2to1(int w, int h);
+/* What to do on MPV_EVENT_VIDEO_RECONFIG. have_size: the frame size could be
+ * read. vo_configured: mpv's "vo-configured", or -1 when it could not be read.
+ * With no size, an output that is not configured is waited for: mpv sends a
+ * reconfig before the output is up (start of playback) and after it has gone
+ * (end of file), and another follows once it is configured. */
+typedef enum { XRD_RECONFIG_RESIZE, XRD_RECONFIG_WAIT, XRD_RECONFIG_FAIL } xrd_reconfig_step;
+xrd_reconfig_step xrd_reconfig_step_for(bool have_size, int vo_configured);
 
 #endif

@@ -68,6 +68,13 @@ bool xrd_video_is_sbs_2to1(int w, int h)
     return w > 0 && h > 0 && w == 2 * h;
 }
 
+xrd_reconfig_step xrd_reconfig_step_for(bool have_size, int vo_configured)
+{
+    if (have_size)
+        return XRD_RECONFIG_RESIZE;
+    return vo_configured == 0 ? XRD_RECONFIG_WAIT : XRD_RECONFIG_FAIL;
+}
+
 int xrd_fbo_format_gl(xrd_fbo_format f, int *depth)
 {
     if (f == XRD_FBO_RGB10) {
@@ -367,13 +374,10 @@ static int handle_events(xrd_player *p)
             if (rc >= 0)
                 rc = mpv_get_property(p->mpv, "dheight", MPV_FORMAT_INT64, &h);
             if (rc < 0) {
-                /* mpv also sends a reconfig when the file has ended and the
-                 * video output went away: the player is idle then, and there
-                 * is nothing to resize. Any other failure is fatal. */
-                int configured = 1, idle = 0;
-                if (mpv_get_property(p->mpv, "vo-configured", MPV_FORMAT_FLAG, &configured) >= 0 &&
-                    !configured &&
-                    mpv_get_property(p->mpv, "idle-active", MPV_FORMAT_FLAG, &idle) >= 0 && idle)
+                int configured = -1;
+                if (mpv_get_property(p->mpv, "vo-configured", MPV_FORMAT_FLAG, &configured) < 0)
+                    configured = -1;
+                if (xrd_reconfig_step_for(false, configured) == XRD_RECONFIG_WAIT)
                     break;
                 set_err(p->err, sizeof p->err, "cannot read the video size of '%s': %s",
                         p->file, mpv_error_string(rc));
