@@ -1,7 +1,7 @@
 # xrdome: flat projection and format auto-detection (design spec)
 
 Date: 2026-11-13
-Status: approved 2026-11-13 (reviewed once by a fresh reader; three points settled as calls in 5.7, 5.8 and 5.9)
+Status: approved 2026-11-13 (reviewed once by a fresh reader; three points settled as calls in 5.7, 5.8 and 5.9); implemented in PRs #11, #12, #13, #15 and the PR that closes issue #8 (wiring, keys, docs). Not yet run on the glasses.
 Branch: `feature/flat-projection` (from `main` at `3358de5`)
 Builds on: `docs/superpowers/specs/2026-11-11-xrdome-design.md` and
 `docs/superpowers/specs/2026-11-12-per-file-settings-design.md`
@@ -538,13 +538,19 @@ XREAL Air 2 Pro.
 
 ## 11. Not verified
 
-- The text `ffprobe` prints for Spherical Mapping side data, on any version, and for
-  Stereo 3D on FFmpeg 9.0.2. Verified: Stereo 3D on FFmpeg 6.1 for Matroska and MP4.
+- The text `ffprobe` prints for Spherical Mapping side data, on any version. Verified:
+  Stereo 3D on FFmpeg 6.1 for Matroska and MP4; on FFmpeg 9.0.2 (the owner's laptop, in
+  the Xvfb smoke test) for a Matroska file tagged `stereo_mode=left_right`, read as
+  `layout=sbs-lr (metadata)`. MP4 stereo on 9.0.2 is not verified.
 - That mpv on the owner's laptop (libmpv 2.6.0) reports `dwidth`/`dheight` for
-  stereo-tagged Matroska the way mpv 0.37 does. 5.10 makes the answer irrelevant.
-- That libmpv draws subtitles into the render target with `osd-level=0`.
+  stereo-tagged Matroska the way mpv 0.37 does. 5.10 makes the answer irrelevant: the
+  coded-size texture check passes there with libmpv 2.6.0 (mpv 0.42) in Xvfb.
+- Subtitles with `osd-level=0`: verified in Xvfb with software GL and mpv's
+  `gpu-dumb-mode`, on the owner's laptop (libmpv 2.6.0); a flat 2D smoke case asserts the
+  subtitle pixels. Not seen on the Radeon with mpv's normal render path.
 - Mipmap generation cost on the owner's Radeon. Measured in the hardware run.
 - That FFmpeg does not decode both eyes of MVC. Not relied on; MVC is a non-goal.
 - Rotated video (phone footage with a rotation tag). Expected to work through mpv; not
   tested.
-- Nothing in this spec has been built. It is based on the code at `3358de5`.
+- Nothing in this spec has been run on the glasses (spec 8.4). It was written against the
+  code at `3358de5`.

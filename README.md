@@ -1,6 +1,7 @@
 # xrdome
 
-A Linux player for VR180 video on XR glasses (Viture Pro XR, XREAL Air 2 Pro) with head tracking.
+A Linux player for VR180 video and ordinary flat video on XR glasses (Viture Pro XR, XREAL Air 2
+Pro) with head tracking.
 
 Status: plays a side-by-side VR180 file on the glasses with head tracking from
 XRLinuxDriver (OpenTrack UDP), keyboard controls, a frame-timing log and per-file settings
@@ -11,12 +12,23 @@ and keeping it across a rename were seen to work; the other remembered settings 
 have only passed the unit and Xvfb smoke tests. The XREAL Air 2 Pro is untested. See `docs/STATUS.md`, `docs/superpowers/specs/2026-11-11-xrdome-design.md` and
 `docs/superpowers/plans/2026-11-11-xrdome.md`.
 
+Flat video and format detection (an ordinary film opens as a flat screen fixed in the room, a
+VR180 file opens as before, both without flags; see [Flat video](#flat-video) and
+[Format detection](#format-detection)) pass the unit tests and the Xvfb smoke tests only.
+**None of it has been run on the glasses yet**: not the flat screen, its zoom modes or screen
+lock, not detection on real files, not the new keys, not mipmaps or their cost, not subtitles,
+and not the VR180 regression check on the owner's files. `docs/STATUS.md` lists what the
+hardware run will cover.
+
 ## Build and run
 
 Dependencies: `media-video/mpv` (with `libmpv` and `vaapi` USE flags), `media-libs/libsdl2`
 (with `X` and `opengl`), `media-libs/libepoxy`, `media-libs/mesa` (EGL), `dev-util/cmocka` and
-`dev-build/meson`. The test pattern and the smoke test also need `media-video/ffmpeg`
-(`x264`/`x265`) and `x11-misc/xvfb-run`.
+`dev-build/meson`. At run time xrdome also runs the `ffprobe` program from `media-video/ffmpeg`
+(already a dependency of mpv) to detect the format; without it every file plays as VR180 side
+by side unless flags say otherwise (one `xrdome: note:` line). Nothing from FFmpeg is linked.
+The test patterns and the smoke tests also need `media-video/ffmpeg` (`x264`/`x265`) and
+`x11-misc/xvfb-run`.
 
 ```sh
 meson setup build
@@ -31,6 +43,11 @@ Make a test pattern (left eye red grid, right eye blue grid, yellow marks at the
 ```sh
 tools/make_pattern.sh            # pattern_sbs.mp4, 60 s, libx265
 ```
+
+`tools/make_pattern.sh --kind flat2d 60 flat.mp4` writes a flat 1920x1080 pattern instead (green,
+white border, yellow box above the centre, a block of 1-pixel lines in the middle for judging
+shimmer); `--kind flat-hsbs` a half side-by-side 3D one (left red, right blue) and
+`--kind flat-tb` a full top-bottom one (1920x2160, top red, bottom blue).
 
 Play it in a 1280x360 desktop window, without glasses or head tracking:
 
@@ -71,16 +88,41 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 |---|---|
 | Space | Pause / resume |
 | Left / Right | Seek -10 s / +10 s |
+| Up / Down | Seek +60 s / -60 s |
 | R | Recenter, yaw only (keeps the current pitch and roll reference) |
 | Shift+R | Recenter, full |
 | [ / ] | Zoom out / in (x1.1 per step, 0.25 to 4); prints `zoom: 1.10` |
 | F | Toggle bicubic / bilinear sampling; prints `filter: bicubic` or `filter: bilinear` |
 | S | Swap eyes |
-| M | Cycle layout: sbs-lr, sbs-rl, mono |
+| M | Cycle layout. Flat: 2D, half SBS, full SBS, half top-bottom, full top-bottom; prints e.g. `layout: sbs-lr half` or `layout: mono`. VR180: sbs-lr, sbs-rl, tb-lr, mono; prints e.g. `layout: sbs-rl` |
+| P | Switch projection, flat or VR180; prints `proj: flat` or `proj: hequirect` |
+| Z | Zoom mode, flat only; prints `zoom mode: screen` or `zoom mode: magnify` |
+| L | Screen lock, flat only; prints `screen: head-locked` or `screen: fixed` |
+| ? | Print the key list to stderr (`keys:` lines) |
+| I | Print playback information to stderr (`info:` lines) |
 | Q | Quit |
 
 The `zoom:` and `filter:` lines are printed only when the value changes (not for
-a press at a limit).
+a press at a limit). `P` also prints the other projection's zoom, since each projection keeps its
+own. In VR180, `Z` prints `zoom mode: magnify (VR180 has no screen mode)` and `L` prints
+`screen: fixed (VR180 cannot be head-locked)`, and neither changes anything. `?` is Shift+/ on a
+US keyboard. Key repeat is ignored except for zoom and seek.
+
+`I` prints, one item per line: the file name; codec, coded frame size and frame rate; `hwdec`;
+projection, layout and (flat 3D) packing, each with where it came from (the sources of the
+`detect:` line, or `key`); zoom, and for flat video the zoom mode and the screen size in degrees;
+screen fixed or head-locked; the filter in use (`trilinear` while mipmaps are used) and whether
+mipmaps are on; the video texture; frames presented and missed vsyncs so far. For example:
+
+```
+info: projection: flat (frame shape)
+info: layout: mono (frame shape)
+info: zoom: 1.50, zoom mode screen, screen 54.5 x 32.3 degrees
+info: screen: fixed
+info: filter: trilinear, mipmaps on
+```
+
+These go to the terminal only; the per-eye HUD planned next will show them on the glasses.
 
 The head pose at the first frame becomes the reference on all three axes, so a head tilted at
 start gives a tilted picture, and `R` does not correct that. Hold your head level and press
@@ -89,13 +131,33 @@ start gives a tilted picture, and `R` does not correct that. Hold your head leve
 ### Flags
 
 `--pose SPEC` (`null`, or `udp-opentrack` with `port`, `yaw`, `pitch`, `roll`), `--output NAME`,
-`--device viture-pro|xreal-air2pro`, `--zoom F`, `--layout sbs-lr|sbs-rl|mono`, `--windowed`,
+`--device viture-pro|xreal-air2pro`, `--zoom F`, `--proj auto|hequirect|flat`,
+`--layout auto|sbs-lr|sbs-rl|tb-lr|tb-rl|mono`, `--packing auto|half|full`,
+`--zoom-mode screen|magnify`, `--screen fixed|locked`, `--mipmap on|off`, `--windowed`,
 `--require-hwdec` (exit 1 unless mpv decodes with VA-API), `--timing-log PATH`,
-`--content-fov HxV`, `--proj hequirect` (the only projection so far, so optional),
-`--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)), `--mpv-profile NAME`,
-`--mpv-opt KEY=VALUE` (repeatable, up to 16), `--mpv-log LEVEL`, `--convergence DEG`,
-`--filter bilinear|bicubic`, `--fbo-format rgb10|rgba8`, `--dither on|off`, `--no-memory`,
-`--forget` (the last two are described under [Per-file settings](#per-file-settings)).
+`--content-fov HxV`, `--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)),
+`--mpv-profile NAME`, `--mpv-opt KEY=VALUE` (repeatable, up to 16), `--mpv-log LEVEL`,
+`--convergence DEG`, `--filter bilinear|bicubic`, `--fbo-format rgb10|rgba8`, `--dither on|off`,
+`--no-memory`, `--forget` (the last two are described under [Per-file settings](#per-file-settings)).
+
+`--proj auto|hequirect|flat` (default `auto`) chooses the projection: `hequirect` is VR180
+(half-equirectangular), `flat` an ordinary flat screen (see [Flat video](#flat-video)), `auto`
+detects it (see [Format detection](#format-detection)). `--layout` (default `auto`, detected)
+says how the eyes are packed into the frame: `sbs-lr` and `sbs-rl` side by side, `tb-lr` and
+`tb-rl` top and bottom (the first-named eye is the left half or the top half), `mono` one picture
+for both eyes. `--zoom F` applies to whichever projection the file opens in. Each of these, when
+given, wins over everything detection finds.
+
+`--packing auto|half|full` (default `auto`, flat 3D only): `full` means each eye's half of the
+frame already has the picture's shape, `half` that it was squeezed to half size along the split
+and is stretched back. `auto` takes side by side as full when the frame is at least 3:1 and top
+and bottom as full when it is narrower than 1.5:1, otherwise half (so 1920x1080 is half and
+3840x1080 full side by side; 1920x2160 is full top-bottom).
+
+`--zoom-mode screen|magnify` (default `screen`, flat only) chooses what zoom does to a flat
+picture; see [Flat video](#flat-video). `--screen fixed|locked` (default `fixed`, flat only)
+keeps the screen fixed in the room or locks it to the head. `--mipmap on|off` (default `on`) uses
+mipmaps while the picture is shrunk; see [Viewing comfort and sharpness](#viewing-comfort-and-sharpness).
 
 `--convergence DEG` (default 0, -5 to 5) turns each eye's view by half the angle in opposite
 directions; positive turns the eyes inwards. `--filter` chooses how the eye pass samples the
@@ -113,7 +175,8 @@ cannot render to `GL_RGB10_A2`, xrdome prints
 pass's final write: the window is 8-bit, so without it the extra precision is rounded away again
 at the very end. Black outside the video (behind you, or outside `--content-fov`) is never
 dithered. After the first frame stderr shows which texture was used, e.g.
-`video texture: rgb10_a2 dither=on`. Both are command-line flags only. To compare against the old
+`video texture: rgb10_a2 1920x1080 dither=on mipmap=off` (the size is the coded frame size, and
+`mipmap` says whether mipmaps were used for the first frame). Both are command-line flags only. To compare against the old
 output, run the same file twice, the second time with `--fbo-format rgba8 --dither off` (which
 reproduces the output from before these flags existed), and look at a sky or a slow gradient. 8-bit files
 gain little from either flag.
@@ -124,7 +187,7 @@ forwards mpv's own log messages at that level and above to stderr, one line each
 `mpv: [ao/alsa] Playback open error: Device or resource busy`. `no` turns them off. Use `info` or
 `v` when audio or decoding fails without an obvious reason.
 
-`--content-fov HxV` (also remembered per file) says how many degrees of longitude (H) and latitude (V) each eye of the file
+`--content-fov HxV` (also remembered per file; VR180 only) says how many degrees of longitude (H) and latitude (V) each eye of the file
 covers, centred straight ahead. The default is `180x180`; each value is 10 to 180. For a
 side-by-side file whose author gives 120 degrees horizontal by 90 vertical per eye:
 
@@ -132,8 +195,12 @@ side-by-side file whose author gives 120 degrees horizontal by 90 vertical per e
 xrdome --content-fov 120x90 clip.mp4
 ```
 
-Directions outside the covered area, and behind you, are black. The player warns once if the
-frame's aspect does not fit (per eye `H:V` for side-by-side, whole frame for mono). It assumes
+Directions outside the covered area, and behind you, are black. When playing as VR180 the player
+warns once if the frame's aspect does not fit (per eye `H:V` for side by side and top-bottom,
+whole frame for mono), for example
+`xrdome: warning: video is 1920x1080, which is not the aspect of a side-by-side VR video covering 180x180 degrees. If it is an ordinary flat video, press P or use --proj flat. If it is VR video covering less than 180 degrees, set --content-fov. Playing it as given.`
+Given for a file that opens flat, `--content-fov` is ignored with
+`xrdome: note: --content-fov applies to VR180 only; ignored for this flat video`. It assumes
 an equirectangular mapping within the stated field of view, which may not hold for action-camera
 footage (lens projections other than equirectangular will look distorted). It is a command-line
 flag only, not an ini key, because it describes the file and not the glasses.
@@ -168,11 +235,14 @@ xrdome reads `$XDG_CONFIG_HOME/xrdome/config.ini`, or `~/.config/xrdome/config.i
 `XDG_CONFIG_HOME` is unset, empty or not an absolute path. A missing file is fine. Precedence, lowest
 to highest: built-in defaults, built-in device values, the ini file, the command line.
 
-`[general]` keys: `pose` (same spec as `--pose`, default `udp-opentrack:port=4242`) and `output`
-(same as `--output`, default `auto`).
+`[general]` keys: `pose` (same spec as `--pose`, default `udp-opentrack:port=4242`), `output`
+(same as `--output`, default `auto`), `screen` (`fixed` or `locked`, as `--screen`, default
+`fixed`) and `ffprobe` (the program run for format detection, default `ffprobe` looked up on
+`PATH`).
 
 `[device.<name>]` keys, read for the device selected with `--device` (default `viture-pro`):
-`fov_diag` (diagonal FOV in degrees, 10 to 120) and `zoom` (0.25 to 4). Built-in devices are
+`fov_diag` (diagonal FOV in degrees, 10 to 120), `zoom` (the VR180 zoom, 0.25 to 4, default 1)
+and `flat_zoom` (the flat zoom, 0.25 to 4, default 1.5 for both built-in devices). Built-in devices are
 `viture-pro` (43) and `xreal-air2pro` (45); a section for any other name defines a new device and
 must set `fov_diag`. Sections for other devices are ignored. Lines starting with `#` are comments;
 unknown keys and bad values are errors that name the file and line.
@@ -181,23 +251,162 @@ unknown keys and bad values are errors that name the file and line.
 [general]
 pose = udp-opentrack:port=4242,yaw=-1
 output = auto
+screen = fixed
+ffprobe = /usr/bin/ffprobe
 
 [device.viture-pro]
 fov_diag = 43
 zoom = 1.0
+flat_zoom = 1.5
 
 [device.mydevice]
 fov_diag = 50
 ```
 
+## Flat video
+
+An ordinary film (2D, or 3D packed side by side or top and bottom) is shown as a flat
+rectangular screen in front of you, fixed in the room: turn your head and the screen stays where
+it is, so a screen larger than the glasses' view can be explored by looking around, "almost pan
+and scan". Straight lines in the video stay straight at every head angle. The screen sits at the
+glasses' own optical distance; there is no distance control. 3D films use the depth in the file
+as it is.
+
+At zoom 1 the whole picture just fits the display, as in plain mpv (a 2.39:1 film is
+letterboxed, a 4:3 picture pillarboxed). The default flat zoom is 1.5 (`flat_zoom` in
+`config.ini`, separate from the VR180 `zoom`), so the screen is larger than the view. `[` and `]`
+change it, x1.1 per step from 0.25 to 4. Each projection keeps its own zoom during a run, so `P`
+switches to the other projection's zoom rather than carrying the number over.
+
+Two zoom modes (`Z`, or `--zoom-mode`, remembered per file):
+
+- `screen` (default): zoom sets the size of the screen. The view keeps the display's true field
+  of view, so the picture moves exactly as much as your head turns.
+- `magnify`: the screen stays at the size of zoom 1 and zoom narrows the view instead, as zoom
+  does for VR180. The picture moves zoom times faster than your head.
+
+At the same zoom both modes show the same picture straight ahead, so switching does not jump.
+
+Screen size of a 16:9 picture on the Viture Pro XR (display 37.9 x 21.9 degrees), in screen mode,
+as `I` prints it:
+
+| Zoom | Screen (degrees) |
+|---|---|
+| 1.0 | 37.9 x 21.9 |
+| 1.5 (default) | 54.5 x 32.3 |
+| 2.0 | 69.0 x 42.2 |
+| 3.0 | 91.7 x 60.2 |
+
+Screen lock (`L`, `--screen fixed|locked`, `[general] screen`): locked, the screen follows your
+head like the glasses' own mode (head tracking and mouse look are ignored; convergence still
+applies). Turning the lock off recentres fully, so the screen reappears straight ahead; a tilted
+head at that moment gives a tilted screen, as with `Shift+R`. The lock is not saved per file,
+since it depends on where you sit, not on the film. It does nothing for VR180.
+
+Subtitles: for flat 2D, mpv's own subtitle rendering is left on, so a subtitle track (or an
+`.srt` next to the file) appears on the screen, at the bottom of the picture. In 3D layouts and in
+VR180 subtitles are turned off, because mpv would draw them once across the whole frame and split
+them between the eyes; `M` and `P` switch them with the layout. `--mpv-opt sub-visibility=no`
+turns them off for flat 2D too.
+
+## Format detection
+
+Each file is opened as flat or VR180, with its layout and packing, without flags. Before mpv
+opens the file, xrdome runs `ffprobe -v error -show_streams -i FILE` (no shell; killed after 3
+seconds; skipped when the argument is not a regular file). For each of projection, layout and
+packing, the first of these that has a value wins:
+
+1. A flag: `--proj`, `--layout`, `--packing`, when not `auto`.
+2. The file's saved record (see [Per-file settings](#per-file-settings)).
+3. Container metadata read by `ffprobe`.
+4. File name hints.
+5. The frame shape.
+6. Fallback: VR180 side by side, what xrdome did before detection.
+
+Container metadata:
+
+| ffprobe side data | Result |
+|---|---|
+| Stereo 3D `side by side` | layout `sbs-lr`; `sbs-rl` when inverted |
+| Stereo 3D `top and bottom` | layout `tb-lr`; `tb-rl` when inverted |
+| Stereo 3D `2D` | layout `mono` |
+| Any other Stereo 3D type | ignored, one note naming it |
+| Spherical Mapping, equirectangular | projection `hequirect` |
+| Spherical Mapping, any other kind | projection `hequirect`, one note that it is not supported and may look distorted |
+
+File name hints: the name is split into words at every character that is not a letter or digit;
+matching ignores case, except for the two-letter words marked "capitals only", which occur in
+ordinary titles.
+
+| Word | Result |
+|---|---|
+| `VR180`, `180`, `180x180`, `VR` | projection `hequirect` |
+| `SBS`, `3DH`, `LR` (capitals only) | layout `sbs-lr` |
+| `RL` (capitals only) | layout `sbs-rl` |
+| `HSBS` | layout `sbs-lr`, packing `half` |
+| `FSBS`, `FULLSBS` | layout `sbs-lr`, packing `full` |
+| `TB`, `OU` (capitals only), `3DV` | layout `tb-lr` |
+| `HTB`, `HOU` | layout `tb-lr`, packing `half` |
+| `MONO`, `2D` | layout `mono` |
+| `3D` with no layout word | layout `sbs-lr` |
+
+Frame shape, with `F` the frame's width over its height times the pixel aspect (taken as 1:1 when
+the file has stereo metadata). It fills only what is still open:
+
+| Still open | Shape | Result |
+|---|---|---|
+| projection and layout | `F` within 2% of 2.0 | VR180, `sbs-lr` |
+| projection and layout | `F` 3.0 or more | flat, `sbs-lr` (full) |
+| projection and layout | `F` within 3% of 0.889 (16:9 doubled in height) | flat, `tb-lr` (full) |
+| projection and layout | anything else | flat, `mono` |
+| projection only, layout side by side | `F` within 2% of 2.0 | VR180; otherwise flat |
+| projection only, layout top-bottom | `F` within 2% of 0.5 | VR180; otherwise flat |
+| projection only, layout mono | `F` within 2% of 1.0 | VR180; otherwise flat |
+| layout only, VR180 | `F` within 2% of 1.0 | `mono`; within 2% of 0.5 `tb-lr`; otherwise `sbs-lr` |
+| layout only, flat | as the flat rows of the first block | |
+
+One line at open says what was decided and why:
+
+```
+detect: proj=hequirect (frame shape) layout=sbs-lr (frame shape)
+detect: proj=flat (frame shape) layout=sbs-lr (file name "HSBS") packing=half (file name "HSBS")
+detect: proj=flat (flag) layout=tb-lr (metadata) packing=full (auto)
+```
+
+The sources are `flag`, `record`, `metadata`, `file name "<word>"`, `frame shape`, `auto`
+(packing only) and `fallback`; `packing=` is shown for flat 3D only. A failed or missing `ffprobe`
+prints one `xrdome: note:` line and detection goes on without it; it never stops a file from
+playing.
+
+Known wrong guesses, each fixed with one key:
+
+- A half side-by-side or half top-bottom 3D film with no tag and no name hint opens as flat 2D.
+  Press `M` (half SBS is the next step).
+- A flat video that is exactly 2:1 (some streaming series, phone cameras) opens as VR180. Press
+  `P`.
+- A side-by-side VR180 file that is not 2:1 (for example squeezed into 3840x2160), with no tag
+  and no name hint, opens as flat 2D. Press `P`.
+- A full top-bottom 3D film that is not 16:9 per eye opens as flat 2D. Press `M`.
+
+`P` keeps a layout that came from a flag, the record, metadata, a file name or an `M` or `S` press;
+a layout that was only a frame-shape or fallback guess is worked out again for the new projection
+(the "layout only" rows above), so a 2:1 flat video that opened as VR180 becomes flat 2D with the
+one press. `P` and `M` count as changes and are remembered for the file; a layout worked out again
+by `P` is not.
+
 ## Per-file settings
 
 xrdome remembers these settings for each video file and restores them the next time you open the
-same file: zoom, layout (`sbs-lr`, `sbs-rl`, `mono`), swap-eyes, content FOV and convergence.
+same file: the projection, the VR180 zoom and the flat zoom, layout (`sbs-lr`, `sbs-rl`, `tb-lr`,
+`tb-rl`, `mono`), packing, zoom mode, swap-eyes, content FOV and convergence. The screen lock is
+not remembered.
 
 Only settings you changed are stored. A setting counts as changed for a file when a key changed it
-during the run (`[`, `]`, `S`, `M`), when you gave its flag (`--zoom`, `--layout`, `--content-fov`,
-`--convergence`) on the command line, or when the file's record already held it. Settings you
+during the run (`[`, `]`, `S`, `M`, `P`, `Z`), when you gave its flag (`--zoom`, `--proj`,
+`--layout`, `--packing`, `--zoom-mode`, `--content-fov`, `--convergence`; `auto` is not a flag
+value that counts) on the command line, or when the file's record already held it. `--zoom` and
+`[` `]` count for the projection in effect: on a flat file they set the flat zoom, on a VR180 file
+the VR180 zoom. Settings you
 never touched are left out of the record and keep following the defaults, so if you later change
 `zoom` in `config.ini`, files whose zoom you never adjusted pick up the new value. A flag given
 once is therefore remembered. This is the only way content FOV is remembered, since it has no key.
@@ -230,9 +439,28 @@ content_fov = 120x90
 ```
 
 `path` and `saved` are labels for you (and for `grep`); xrdome never uses them to find or check a
-record. The settings keys are `zoom` (0.25 to 4), `layout`, `swap` (`yes` or `no`), `content_fov`
-(`HxV`, each 10 to 180) and `convergence` (-5 to 5); a missing key means "follow the defaults".
-`proj` is always `hequirect`.
+record. The settings keys are `zoom` (the VR180 zoom, 0.25 to 4), `flat_zoom` (the flat zoom, 0.25
+to 4), `layout`, `packing` (`half` or `full`), `zoom_mode` (`screen` or `magnify`), `swap` (`yes`
+or `no`), `content_fov` (`HxV`, each 10 to 180) and `convergence` (-5 to 5); a missing key means
+"follow the defaults" (or, for `layout` and `packing`, detection).
+
+`proj` (`hequirect` or `flat`) is written in every record: it is the projection in effect when
+the player quit, and on the next open it decides the projection (`detect: proj=flat (record)`).
+So once anything has been saved for a file, its projection is pinned to what you were looking
+at; `P` changes it, `--forget` removes it. A flat record looks like this:
+
+```ini
+# xrdome per-file settings
+version = 1
+path = /home/nick/films/coast.mkv
+saved = 2026-11-13
+proj = flat
+flat_zoom = 2.0000
+```
+
+Films saved under the old curved-screen workaround (`--layout mono --content-fov 60x34`, from
+before xrdome had a flat projection) have records with `proj = hequirect`, so they keep opening as
+VR180 with that layout. Press `P` once (it is saved), or run once with `--forget`.
 
 The record is saved once, when the player exits for any reason (`Q`, closing the window, end of
 file, the glasses being unplugged, an error), as long as at least one video frame was shown. A file
@@ -248,13 +476,15 @@ could not be removed is then neither restored nor overwritten in that run.
 stderr shows what happened, in lines that start with `settings:`:
 
 ```
-settings: restored zoom=0.75 content-fov=120x90
-settings: saved zoom=0.68 layout=sbs-rl
+settings: restored zoom=0.75 content-fov=120x90 proj=hequirect
+settings: saved zoom=0.68 layout=sbs-rl proj=hequirect
+settings: saved proj=flat flat-zoom=2.00
 settings: forgot 8123456789-9f3c0a1b22d4e6f7
 ```
 
-`restored` is printed at open and lists only the values actually applied (not ones a flag
-overrode). `saved` is printed at exit when a record was written. `forgot` is printed by `--forget`
+The words are `zoom`, `layout`, `swap`, `content-fov`, `convergence`, `proj`, `flat-zoom`,
+`packing` and `zoom-mode`, in that order. `restored` is printed at open, after the `detect:` line,
+and lists only the values actually applied (not ones a flag overrode). `saved` is printed at exit when a record was written. `forgot` is printed by `--forget`
 when it deleted a record. A file with no record prints nothing.
 
 - `--no-memory`: do not read or write the record for this run. Use it for timing runs and
@@ -276,12 +506,13 @@ The `path` label is the absolute path at the time of the last save, so after a r
 old file. Unknown keys are ignored. A record that has a malformed line, no `version` or a value out
 of range is not used: xrdome prints one `xrdome: warning: settings record PATH: ...` line, plays
 the file from the defaults and does not overwrite the record at exit. A record with a `version`
-above 1 or a `proj` other than `hequirect` (written by a newer xrdome) is treated the same way,
+above 1 or a `proj` other than `hequirect` or `flat` (written by a newer xrdome) is treated the same way,
 with an `xrdome: note:` line instead. Fix the line with `vim`, or run once with `--forget` to
 delete it. Records for deleted videos are not cleaned up; remove them by hand.
 
 Verification: the feature passes the unit tests and the Xvfb smoke tests, run in a sandbox (Ubuntu
-24.04, mpv 0.37, software GL). On the Viture Pro XR (2026-11-13) saving a zoom change at quit,
+24.04, mpv 0.37, software GL). The flat keys (`proj` other than `hequirect`, `flat_zoom`, `packing`,
+`zoom_mode`, `tb-lr` and `tb-rl`) have been run only there and in Xvfb, not on the glasses. On the Viture Pro XR (2026-11-13) saving a zoom change at quit,
 restoring it on reopen and keeping it across a rename were seen to work, and playing with the
 record in use missed no more vsyncs than playing with `--no-memory`. Layout, swap-eyes, content
 FOV and convergence records, `--forget` and the bad-record paths have not been run on the glasses.
@@ -324,6 +555,26 @@ no measurable difference (see "Performance notes"). To measure it yourself, make
 compare the logs; toggling `F` live mixes both filters in one log. `--mpv-log v` and
 `--mpv-log debug` are for diagnosis only: they print a lot and affect timing, so leave them off
 for measurements.
+
+**Shrinking: mipmaps.** Flat video often has more pixels than the area it is drawn into, and a
+picture drawn smaller than its source shimmers on fine detail and edges when the head moves.
+While the picture is shrunk (at the centre of the view, with the current zoom, one display pixel
+covers more than one source pixel), the video texture gets mipmaps (smaller copies, levels 0 to
+3, regenerated only when mpv delivers a new frame) and the eye pass samples them trilinearly
+instead of with Catmull-Rom or bilinear. While the picture is enlarged nothing changes: no
+mipmaps are made and `F` chooses the filter as before. This applies to both projections; VR180
+is almost always enlarged. `--mipmap off` turns it off (command line only). `I` shows the filter
+in use (`trilinear` while mipmaps are used) and the `video texture:` line shows `mipmap=on` or
+`mipmap=off` for the first frame. On the Viture Pro XR (1920x1080 per eye), flat 2D in screen
+mode:
+
+| Source | Zoom 0.5 | Zoom 1.0 | Zoom 1.5 (default) | Zoom 2.0 |
+|---|---|---|---|---|
+| 1920x1080 | shrunk 2x, mipmaps | 1:1, none | enlarged 1.5x, none | enlarged 2x, none |
+| 3840x2160 | shrunk 4x, mipmaps | shrunk 2x, mipmaps | shrunk 1.33x, mipmaps | 1:1, none |
+
+What mipmap generation costs on the owner's Radeon has not been measured; that is part of the
+hardware run.
 
 ## Diagnostics
 
