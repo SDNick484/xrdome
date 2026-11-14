@@ -64,3 +64,13 @@ void xrd_eye_u_transform(xrd_layout layout, int eye, bool swap, float *scale, fl
     *scale = 0.5f;
     *offset = right_half ? 0.5f : 0.0f;
 }
+
+bool xrd_layout_is_sbs(xrd_layout l)
+{
+    return l == XRD_LAYOUT_SBS_LR || l == XRD_LAYOUT_SBS_RL;
+}
+
+bool xrd_layout_is_tb(xrd_layout l)
+{
+    return l == XRD_LAYOUT_TB_LR || l == XRD_LAYOUT_TB_RL;
+}

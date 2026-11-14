@@ -6,7 +6,13 @@
 /* A content FOV at or above this counts as the full 180 degrees. */
 #define XRD_FULL_FOV_DEG 179.999f
 
-typedef enum { XRD_LAYOUT_SBS_LR, XRD_LAYOUT_SBS_RL, XRD_LAYOUT_MONO } xrd_layout;
+typedef enum { XRD_PROJ_HEQUIRECT, XRD_PROJ_FLAT } xrd_proj;
+typedef enum { XRD_LAYOUT_SBS_LR, XRD_LAYOUT_SBS_RL, XRD_LAYOUT_MONO,
+               XRD_LAYOUT_TB_LR, XRD_LAYOUT_TB_RL } xrd_layout;
+typedef enum { XRD_PACKING_AUTO, XRD_PACKING_HALF, XRD_PACKING_FULL } xrd_packing;
+
+bool xrd_layout_is_sbs(xrd_layout l);
+bool xrd_layout_is_tb(xrd_layout l);
 
 /* tan of half the horizontal and vertical FOV; zoom > 1 narrows the view.
  * diag_deg is the diagonal FOV. */
