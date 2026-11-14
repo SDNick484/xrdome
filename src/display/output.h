@@ -1,6 +1,7 @@
 #ifndef XRD_DISPLAY_OUTPUT_H
 #define XRD_DISPLAY_OUTPUT_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 typedef struct {
@@ -20,6 +21,12 @@ typedef struct {
  * immediately by a space (so "DP-2" matches `DP-2 14"` but "DP" does not).
  * The first match wins. *idx is written only on XRD_OUT_OK. */
 int xrd_output_select(const xrd_output_info *outs, int n, const char *want, int *idx);
+
+/* Whether a failed selection (sel from xrd_output_select) is one that
+ * switching the glasses to SBS can fix: want "auto" or NULL found no
+ * 3840x1080 output, or the first output named want is 1920x1080 (the
+ * glasses in 1080p mirror mode). */
+bool xrd_output_sbs_candidate(const xrd_output_info *outs, int n, const char *want, int sel);
 
 /* Writes "name (WxH), name (WxH)..." (or "none" when n == 0) into buf, always
  * NUL-terminated, truncating if len is too small. No SDL calls. */

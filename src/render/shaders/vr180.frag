@@ -6,6 +6,7 @@ uniform int   u_proj;       // 0: half-equirect, 1: flat screen
 uniform vec2  u_inv_fov;    // half-equirect: 1/hfov, 1/vfov of the video content, in 1/radians
 uniform vec2  u_reject;     // half-equirect: 1.0 on an axis whose content FOV is < 180: reject outside; 0.0: only clamp
 uniform vec2  u_flat_half;  // flat: the screen's half-extents on the plane z = -1
+uniform float u_flat_curve; // flat: 0 for the plane, else the curved screen's radius (--screen-curve)
 uniform vec2  u_eye_scale;  // eye sub-image transform per axis: tex = uv * scale + offset
 uniform vec2  u_eye_offset;
 uniform bool  u_bicubic;    // Catmull-Rom instead of the hardware bilinear filter
@@ -90,8 +91,29 @@ void main()
         // or beside (d.z >= 0), or no screen at all: black. Mirrors
         // xrd_flat_dir_to_uv. The guarded divisions keep uv finite for the
         // derivatives where the result is black anyway.
-        uv = d.xy / max(-d.z, 1e-4) / (2.0 * max(u_flat_half, vec2(1e-6))) + 0.5;
-        black = !(d.z < 0.0) || !(u_flat_half.x > 0.0) || !(u_flat_half.y > 0.0) ||
+        if (u_flat_curve == 0.0) {
+            uv = d.xy / max(-d.z, 1e-4) / (2.0 * max(u_flat_half, vec2(1e-6))) + 0.5;
+            black = false;
+        } else {
+            // Curved (--screen-curve): a vertical cylinder of radius R that
+            // touches the plane along the centre column, its axis R - 1
+            // behind the eye; u runs along the arc, v is the hit's height.
+            // Mirrors xrd_flat_curve_dir_to_uv. h is the horizontal unit
+            // direction, t the distance to the cylinder along it (the root
+            // that cannot cancel). hz is held <= 0 and hl away from 0 only so
+            // that uv stays finite where the result is black anyway (d.z >= 0,
+            // or straight up or down); atan's second argument is then >= 0
+            // and never 0 together with the first.
+            float R = u_flat_curve, a = R - 1.0, k = 2.0 * R - 1.0;
+            float hl = max(length(d.xz), 1e-6);
+            vec2 h = d.xz / hl;
+            float hz = min(h.y, 0.0);
+            float t = k / (sqrt(hz * hz * a * a + k) - hz * a);
+            float phi = atan(t * h.x, a - t * hz);
+            uv = vec2(R * phi, d.y * t / hl) / (2.0 * max(u_flat_half, vec2(1e-6))) + 0.5;
+            black = !(R >= 1.0 && R <= 10.0); // XRD_SCREEN_CURVE_MIN and _MAX
+        }
+        black = black || !(d.z < 0.0) || !(u_flat_half.x > 0.0) || !(u_flat_half.y > 0.0) ||
                 any(lessThan(uv, vec2(-1e-6))) || any(greaterThan(uv, vec2(1.0 + 1e-6)));
     } else {
         // atan(0,0) is undefined in GLSL; mirror xrd_dir_to_uv at the exact pole.

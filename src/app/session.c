@@ -93,5 +93,42 @@ void xrd_session_controls(const xrd_session *ss, const xrd_config *cfg, xrd_cont
     xrd_controls_init_display(c, s->convergence, cfg->filter);
     xrd_controls_init_format(c, s->proj, s->packing, flat ? s->zoom : s->flat_zoom, s->zoom_mode,
                              cfg->screen_locked);
+    xrd_controls_init_curve(c, cfg->screen_curve);
     c->swap_eyes = s->swap;
+}
+
+bool xrd_session_resume_enabled(const xrd_config *cfg)
+{
+    return cfg->resume && !cfg->no_memory;
+}
+
+bool xrd_session_has_explicit_start(const xrd_config *cfg)
+{
+    for (int i = 0; i < cfg->mpv_opt_count; i++) {
+        if (strncmp(cfg->mpv_opts[i], "start=", 6) == 0)
+            return true;
+    }
+    return false;
+}
+
+bool xrd_session_resume_start(const xrd_config *cfg, const xrd_filestate *rec, double *position)
+{
+    if (!rec || !(rec->set & XRD_SET_POSITION) || !xrd_session_resume_enabled(cfg) ||
+        xrd_session_has_explicit_start(cfg))
+        return false;
+    if (xrd_resume_check(rec->v.position, 0.0) != XRD_RESUME_OK)
+        return false;
+    *position = rec->v.position;
+    return true;
+}
+
+int xrd_session_resume_save(const xrd_config *cfg, double position, double duration,
+                            double *out)
+{
+    if (!xrd_session_resume_enabled(cfg) || !(position >= 0.0) || !(duration > 0.0))
+        return -1;
+    if (xrd_resume_check(position, duration) != XRD_RESUME_OK)
+        return 0;
+    *out = position;
+    return 1;
 }

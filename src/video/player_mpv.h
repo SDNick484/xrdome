@@ -37,6 +37,19 @@ typedef struct {
     int opt_count;
     const char *log_level;
     xrd_fbo_format fbo_format; /* video texture format; 0 = XRD_FBO_RGBA8 */
+    bool deband;               /* mpv "deband" at open; --mpv-opt deband=... still wins */
+    /* > 0: opts carries "start=<resume_at>" for a resume. When the file has
+     * loaded and its duration says the position is no longer usable (past the
+     * end, or in the last part), the player seeks back to 0 and, for a
+     * position past the end, prints one "xrdome: note:" line. */
+    double resume_at;
+    /* --mpv-scale: an mpv scaler name, set as mpv's scale, with keepaspect=no
+     * so mpv's picture fills a texture of any size (xrd_player_set_texture_size).
+     * NULL: neither is set (mpv draws into the coded size only). opts still win:
+     * keepaspect is set before them, and scale is not set when they set it.
+     * A name mpv rejects fails the open, err naming it, after mpv's own reason
+     * is logged. */
+    const char *scale;
 } xrd_player_options;
 
 /* As xrd_player_open; opt may be NULL (profile "fast", no extra options,
@@ -59,6 +72,9 @@ void        xrd_player_set_aspect_warning(xrd_player *p, bool on);
  * 2D) and mpv's own sub-visibility at open (default yes; --mpv-opt
  * sub-visibility=no) allows them. */
 void        xrd_player_set_sub_visible(xrd_player *p, bool on);
+/* mpv "time-pos" and "duration" in seconds; -1 when unknown. */
+double      xrd_player_position(xrd_player *p);
+double      xrd_player_duration(xrd_player *p);
 const char *xrd_player_codec(xrd_player *p);   /* mpv "video-codec", "" if unknown */
 double      xrd_player_fps(xrd_player *p);     /* mpv "container-fps", 0 if unknown */
 /* Call once per loop. Creates or resizes the FBO when video size is known, renders a new
@@ -71,10 +87,23 @@ unsigned    xrd_player_texture(const xrd_player *p);     /* 0 until the first fr
 /* Bits per colour channel of the video texture actually allocated: 10 for
  * GL_RGB10_A2, 8 for GL_RGBA8 (also after a fallback), 0 before the FBO exists. */
 int         xrd_player_texture_bits(const xrd_player *p);
-/* The video texture's size: the coded frame size after the rotation mpv
- * applies (xrd_video_texture_size), whatever display aspect the container
- * declares; mpv's picture fills the texture exactly. 0 x 0 before the FBO exists. */
+/* The coded frame size after the rotation mpv applies (xrd_video_texture_size),
+ * whatever display aspect the container declares. 0 x 0 until mpv reports it. */
 void        xrd_player_video_size(const xrd_player *p, int *w, int *h);
+/* The video texture's size: the coded size (xrd_player_video_size), or the
+ * size asked for with xrd_player_set_texture_size. mpv's picture fills the
+ * texture exactly. 0 x 0 before the FBO exists. */
+void        xrd_player_texture_size(const xrd_player *p, int *w, int *h);
+/* Asks for a w x h video texture, into which mpv scales each frame with its
+ * own scaler (only meaningful with xrd_player_options.scale set: without
+ * keepaspect=no mpv letterboxes a texture of another shape). 0 x 0 returns
+ * to the coded size, which is also the default. Before the video size is known
+ * the request waits for it; a later change of the coded size keeps a
+ * requested size. When the texture holds a frame, mpv draws the current frame
+ * again at the new size before this returns, so xrd_player_texture never
+ * shows a frame that is missing or half drawn. Returns <0 on failure (text
+ * via xrd_player_error). w and h must fit the GPU's maximum texture size. */
+int         xrd_player_set_texture_size(xrd_player *p, int w, int h);
 /* While want is true, the chain (levels 0..XRD_MIP_MAX_LEVEL) is regenerated
  * right after each video frame mpv renders, and the texture's min filter is
  * GL_LINEAR_MIPMAP_LINEAR. While false: GL_LINEAR and no generation. Turning
@@ -85,7 +114,15 @@ void        xrd_player_set_mipmaps(xrd_player *p, bool want);
  * frame now in the texture, at the current size). Only then may the eye pass
  * sample it with xrd_draw_params.trilinear. */
 bool        xrd_player_mipmapped(const xrd_player *p);
+/* mpv's "deband" property: set (true if mpv accepted it) and read (the live value,
+ * so --mpv-opt deband=yes shows). */
+bool        xrd_player_set_deband(xrd_player *p, bool on);
+bool        xrd_player_deband(xrd_player *p);
 const char *xrd_player_hwdec(xrd_player *p);             /* mpv "hwdec-current", "" if unknown */
+const char *xrd_player_scale(xrd_player *p);             /* mpv "scale", "" if unknown */
+/* mpv's gpu-dumb-mode is "yes" (software GL): mpv then ignores scale and
+ * enlarges bilinearly. */
+bool        xrd_player_dumb_mode(xrd_player *p);
 bool        xrd_player_finished(const xrd_player *p);    /* end of file or load failure */
 const char *xrd_player_error(const xrd_player *p);
 void        xrd_player_toggle_pause(xrd_player *p);

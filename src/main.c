@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "app/controls.h"
 #include "app/session.h"
@@ -16,6 +17,7 @@
 #include "detect/detect.h"
 #include "detect/probe.h"
 #include "display/output.h"
+#include "display/sbs.h"
 #include "math/quat.h"
 #include "pose/pose.h"
 #include "render/projection.h"
@@ -24,6 +26,7 @@
 #include "track/tracker.h"
 #include "util/timing.h"
 #include "values.h"
+#include "video/mpv_scale.h"
 #include "video/player_mpv.h"
 
 #define MAX_OUTPUTS 16
@@ -80,6 +83,8 @@ typedef struct {
     xrd_filestate loaded;
     xrd_file_settings start; /* the values playback starts with (xrd_session_start) */
     unsigned explicit_flags; /* xrd_session.explicit_flags */
+    bool resume;             /* open at resume_at (set by detect_and_start) */
+    double resume_at;        /* seconds */
 } xrd_memory;
 
 /* Everything the keys, the per-frame view and the I key read or change. */
@@ -100,6 +105,9 @@ typedef struct {
     xrd_view_geom geom;      /* of the last frame drawn */
     bool mip_want;           /* mipmaps requested from the player */
     bool trilinear;          /* the last draw sampled trilinearly */
+    int max_tex;             /* GL_MAX_TEXTURE_SIZE */
+    xrd_size_debounce scale_db; /* --mpv-scale: the texture size asked of the player */
+    const char *scale_why;   /* --mpv-scale: why mpv is not enlarging, NULL while it is */
     unsigned long frames;    /* video frames presented */
 } xrd_app;
 
@@ -146,9 +154,32 @@ static void apply_format(const xrd_app *a)
     xrd_player_set_aspect_warning(a->p, c->proj == XRD_PROJ_HEQUIRECT);
 }
 
+/* --mpv-scale: the texture size for this frame (0 x 0 = the coded size) and
+ * why mpv is not the one enlarging, or NULL when it is. mip_want: mipmaps
+ * are in use (the picture is shrunk, or --mipmap-force). */
+static const char *mpv_scale_target(const xrd_app *a, int vw, int vh, bool mip_want, int *w,
+                                    int *h)
+{
+    const xrd_controls *c = a->ctl;
+    *w = *h = 0;
+    if (c->proj != XRD_PROJ_FLAT)
+        return "VR180";
+    if (mip_want)
+        return a->cfg->mipmap_force ? "mipmaps forced" : "picture shrunk";
+    int fw, fh;
+    if (!xrd_mpv_scale_size(&a->geom, c->layout, vw, vh, a->out_eye_w, a->out_eye_h, a->max_tex,
+                            &fw, &fh))
+        return "picture not enlarged";
+    *w = fw;
+    *h = fh;
+    return NULL;
+}
+
 /* View geometry for the current state and the eye size, and the mipmap
- * decision of spec 5.6: mipmaps while the picture is shrunk at the centre. */
-static void update_view(xrd_app *a, int out_w, int out_h)
+ * decision of spec 5.6: mipmaps while the picture is shrunk at the centre.
+ * With --mpv-scale, the size of the texture mpv renders into. Returns <0 when
+ * the player fails to resize (text via xrd_player_error). */
+static int update_view(xrd_app *a, int out_w, int out_h)
 {
     const xrd_controls *c = a->ctl;
     int vw = 0, vh = 0;
@@ -168,7 +199,30 @@ static void update_view(xrd_app *a, int out_w, int out_h)
         xrd_player_set_mipmaps(a->p, want);
         a->mip_want = want;
     }
+    if (a->cfg->mpv_scale[0]) {
+        int tw, th;
+        const char *why = mpv_scale_target(a, vw, vh, want, &tw, &th);
+        if (xrd_size_debounce_step(&a->scale_db, tw, th, xrd_now_ns(), XRD_MPV_SCALE_SETTLE_NS) &&
+            xrd_player_set_texture_size(a->p, a->scale_db.w, a->scale_db.h) < 0)
+            return -1;
+        a->scale_why = a->scale_db.w > 0 ? NULL : why ? why : "settling";
+    }
     a->trilinear = want && xrd_player_mipmapped(a->p);
+    return 0;
+}
+
+/* The video texture: line, after the first frame and, with --mpv-scale, each
+ * time the texture's size changes. */
+static void print_texture(const xrd_app *a)
+{
+    int tw, th;
+    xrd_player_texture_size(a->p, &tw, &th);
+    fprintf(stderr, "video texture: %s %dx%d dither=%s mipmap=%s",
+            xrd_texture_bits_name(xrd_player_texture_bits(a->p)), tw, th,
+            a->cfg->dither ? "on" : "off", a->mip_want ? "on" : "off");
+    if (a->cfg->mpv_scale[0])
+        fprintf(stderr, " mpv-scale=%s", a->scale_db.w > 0 ? xrd_player_scale(a->p) : "unused");
+    fputc('\n', stderr);
 }
 
 /* The source words of the detect: line, or "key" for a value a key changed. */
@@ -206,12 +260,27 @@ static void print_keys(void)
         {"P", "projection: flat / VR180"},
         {"Z", "zoom mode: screen / magnify (flat)"},
         {"L", "screen: fixed / head-locked (flat)"},
+        {"C", "screen: flat / curved (flat, screen zoom mode)"},
         {"?", "this list"},
+        {"B", "debanding on / off"},
         {"I", "playback information"},
         {"Q", "quit"},
     };
     for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++)
         fprintf(stderr, "keys: %s  %s\n", keys[i][0], keys[i][1]);
+}
+
+/* "screen curve: off" or "screen curve: 1.00", and why magnify mode draws a
+ * curved screen flat. */
+static void print_curve(const xrd_controls *c, const char *prefix)
+{
+    if (!c->screen_curved)
+        fprintf(stderr, "%sscreen curve: off\n", prefix);
+    else if (c->zoom_mode != XRD_ZOOM_SCREEN)
+        fprintf(stderr, "%sscreen curve: %.2f (flat in magnify mode)\n", prefix,
+                (double)c->screen_curve);
+    else
+        fprintf(stderr, "%sscreen curve: %.2f\n", prefix, (double)c->screen_curve);
 }
 
 /* The I key (spec 5.7): one item per line. */
@@ -249,11 +318,13 @@ static void print_info(xrd_app *a)
                 xrd_value_zoom_mode_name(c->zoom_mode));
         if (a->frames > 0)
             fprintf(stderr, ", screen %.1f x %.1f degrees\n",
-                    2.0 * atan((double)a->geom.half_w) * 180.0 / XRD_PI_D,
+                    2.0 * xrd_flat_half_angle(a->geom.half_w, xrd_controls_screen_curve(c)) *
+                        180.0 / XRD_PI_D,
                     2.0 * atan((double)a->geom.half_h) * 180.0 / XRD_PI_D);
         else
             fputc('\n', stderr);
         fprintf(stderr, "info: screen: %s\n", c->screen_locked ? "head-locked" : "fixed");
+        print_curve(c, "info: ");
     } else {
         fprintf(stderr, "info: zoom: %.2f\n", (double)c->zoom);
         fprintf(stderr, "info: screen: fixed (VR180)\n");
@@ -261,9 +332,23 @@ static void print_info(xrd_app *a)
     fprintf(stderr, "info: filter: %s, mipmaps %s\n",
             a->trilinear ? "trilinear" : c->filter == XRD_FILTER_BICUBIC ? "bicubic" : "bilinear",
             a->mip_want ? "on" : "off");
+    int tw, th;
+    xrd_player_texture_size(a->p, &tw, &th);
+    if (!a->cfg->mpv_scale[0]) {
+        fprintf(stderr, "info: mpv scale: off\n");
+    } else {
+        const char *name = xrd_player_scale(a->p);
+        const char *dumb = xrd_player_dumb_mode(a->p) ? " (gpu-dumb-mode: mpv enlarges bilinearly)"
+                                                      : "";
+        if (a->scale_why)
+            fprintf(stderr, "info: mpv scale: %s, not in use (%s)\n", name, a->scale_why);
+        else
+            fprintf(stderr, "info: mpv scale: %s, %dx%d to %dx%d%s\n", name, vw, vh, tw, th, dumb);
+    }
     fprintf(stderr, "info: texture: %s %dx%d dither=%s\n",
-            xrd_texture_bits_name(xrd_player_texture_bits(a->p)), vw, vh,
+            xrd_texture_bits_name(xrd_player_texture_bits(a->p)), tw, th,
             a->cfg->dither ? "on" : "off");
+    fprintf(stderr, "info: deband: %s\n", xrd_player_deband(a->p) ? "on" : "off");
     fprintf(stderr, "info: frames: %lu presented, %u missed vsyncs\n", a->frames,
             xrd_timing_missed_vsyncs(a->timing));
 }
@@ -383,6 +468,14 @@ static bool handle_key_action(const SDL_KeyboardEvent *k, xrd_app *a)
             fprintf(stderr, "screen: fixed (VR180 cannot be head-locked)\n");
         }
         break;
+    case SDLK_c:
+        if (k->repeat)
+            break;
+        if (xrd_controls_toggle_curve(ctl))
+            print_curve(ctl, "");
+        else
+            fprintf(stderr, "screen curve: none (VR180 has no flat screen)\n");
+        break;
     case SDLK_SLASH: /* '?' is Shift+/ on a US layout */
         if (shift && !k->repeat)
             print_keys();
@@ -390,6 +483,15 @@ static bool handle_key_action(const SDL_KeyboardEvent *k, xrd_app *a)
     case SDLK_QUESTION:
         if (!k->repeat)
             print_keys();
+        break;
+    case SDLK_b:
+        if (!k->repeat) {
+            bool now = !xrd_player_deband(a->p);
+            if (!xrd_player_set_deband(a->p, now))
+                fprintf(stderr, "deband: mpv would not change it\n");
+            else
+                fprintf(stderr, "deband: %s\n", xrd_player_deband(a->p) ? "on" : "off");
+        }
         break;
     case SDLK_i:
         if (!k->repeat)
@@ -465,13 +567,24 @@ static void memory_load(xrd_memory *m, const xrd_config *cfg)
  * was loaded. Every record states the projection in effect at quit (spec
  * 5.9), so proj is always set in what is written and in the saved line.
  * Failure only warns; the exit status is not touched. */
-static void memory_save(const xrd_memory *m, const char *file, const xrd_controls *ctl)
+static void memory_save(const xrd_memory *m, const xrd_config *cfg, const char *file,
+                        const xrd_controls *ctl, double position, double duration)
 {
     xrd_file_settings end;
     xrd_session_settings(ctl, m->start.content_hfov, m->start.content_vfov, &end);
     xrd_filestate out; /* distinct from m->loaded: collect clears it first */
     xrd_filestate_collect(m->have_loaded ? &m->loaded : NULL, m->explicit_flags, &m->start,
                           &end, &out);
+    /* The position (--resume) is not a view setting: collect leaves it out.
+     * Written only while resume is on and the position at quit is inside the
+     * resumable part of the file; a position outside it removes the old one.
+     * With resume off, a record's position is kept as it was. */
+    double pos = 0.0;
+    int rs = xrd_session_resume_save(cfg, position, duration, &pos);
+    if (rs > 0 || (rs < 0 && m->have_loaded && (m->loaded.set & XRD_SET_POSITION))) {
+        out.set |= XRD_SET_POSITION;
+        out.v.position = rs > 0 ? pos : m->loaded.v.position;
+    }
     if (out.set == 0 && !m->have_loaded)
         return;
     out.set |= XRD_SET_PROJ;
@@ -520,8 +633,16 @@ static void detect_and_start(xrd_app *a, const xrd_config *cfg, xrd_memory *mem,
         fprintf(stderr, "detect: %s\n", line);
 
     xrd_session_start(cfg, rec, &a->det, ss);
+    /* --resume: the record's position, handed to mpv as its start option (main). */
+    double rpos = 0.0;
+    unsigned shown = ss->applied;
+    if (xrd_session_resume_start(cfg, rec, &rpos)) {
+        mem->resume = true;
+        mem->resume_at = rpos;
+        shown |= XRD_SET_POSITION;
+    }
     char text[200];
-    if (rec && ss->applied && xrd_filestate_describe(rec, ss->applied, text, sizeof text) > 0)
+    if (rec && shown && xrd_filestate_describe(rec, shown, text, sizeof text) > 0)
         fprintf(stderr, "settings: restored %s\n", text);
     if (a->det.proj == XRD_PROJ_FLAT && (cfg->explicit_flags & XRD_SET_CONTENT_FOV))
         fprintf(stderr, "xrdome: note: --content-fov applies to VR180 only; "
@@ -565,6 +686,8 @@ int main(int argc, char **argv)
     int presented = 0; /* frames swapped since the first video frame (--frames) */
     bool done = false; /* --frames reached, or the glasses went away */
     bool rendered = false; /* a video frame was drawn (gates saving the settings) */
+    bool sbs_switched = false; /* xrdome switched the glasses to SBS: switch back at exit */
+    bool glasses_gone = false; /* the glasses' output disconnected during playback */
     xrd_controls ctl;      /* valid once rendered is set */
 
     trk = xrd_tracker_new(pose);
@@ -599,8 +722,23 @@ int main(int argc, char **argv)
         }
         int idx = -1;
         int sel = xrd_output_select(outs, n, cfg.output, &idx);
+        xrd_sbs_result sbs = {.outcome = XRD_SBS_NOT_ASKED};
+        bool sbs_tried = false;
+        if (sel != XRD_OUT_OK && cfg.sbs_switch &&
+            xrd_output_sbs_candidate(outs, n, cfg.output, sel)) {
+            sbs_tried = true;
+            sel = xrd_sbs_switch(xrd_sbs_sdl_ops(), NULL, cfg.output, XRD_SBS_WAIT_MS, outs,
+                                 MAX_OUTPUTS, &n, &idx, &sbs);
+            if (sbs.outcome == XRD_SBS_SWITCHED) {
+                sbs_switched = true;
+                fprintf(stderr, "display: switched the glasses to SBS in %.1f s\n",
+                        (double)sbs.waited_ms / 1000.0);
+            }
+        }
         if (sel != XRD_OUT_OK) {
             fail("%s", xrd_output_strerror(sel, cfg.output));
+            if (sbs_tried)
+                fail("automatic SBS switch: %s", sbs.why);
             if (sel == XRD_OUT_NOT_FOUND) {
                 char list[1024];
                 xrd_output_list(outs, n, list, sizeof list);
@@ -660,12 +798,22 @@ int main(int argc, char **argv)
         fail("renderer: %s", err);
         goto out;
     }
-    const char *mpv_opts[sizeof cfg.mpv_opts / sizeof cfg.mpv_opts[0]];
+    /* One more than --mpv-opt allows: the resume position goes first, so any
+     * --mpv-opt (and an explicit start, which suppresses it) comes after. */
+    const char *mpv_opts[sizeof cfg.mpv_opts / sizeof cfg.mpv_opts[0] + 1];
+    int n_opts = 0;
+    char start_opt[64];
+    if (mem.resume) {
+        snprintf(start_opt, sizeof start_opt, "start=%.3f", mem.resume_at);
+        mpv_opts[n_opts++] = start_opt;
+    }
     for (int i = 0; i < cfg.mpv_opt_count; i++)
-        mpv_opts[i] = cfg.mpv_opts[i];
+        mpv_opts[n_opts++] = cfg.mpv_opts[i];
     xrd_player_options popt = {.profile = cfg.mpv_profile, .opts = mpv_opts,
-                               .opt_count = cfg.mpv_opt_count, .log_level = cfg.mpv_log,
-                               .fbo_format = cfg.fbo_format};
+                               .opt_count = n_opts, .log_level = cfg.mpv_log,
+                               .fbo_format = cfg.fbo_format, .deband = cfg.deband,
+                               .resume_at = mem.resume ? mem.resume_at : 0.0,
+                               .scale = cfg.mpv_scale[0] ? cfg.mpv_scale : NULL};
     p = xrd_player_open_ex(cfg.file, gl_get_proc, wm.info.x11.display, &popt, err, sizeof err);
     if (!p) {
         fail("%s", err);
@@ -676,6 +824,7 @@ int main(int argc, char **argv)
     app.trk = trk;
     app.p = p;
     app.timing = timing;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &app.max_tex);
     apply_format(&app); /* before the first xrd_player_update */
     xrd_renderer_set_content_fov(r, ss.s.content_hfov, ss.s.content_vfov);
     xrd_renderer_set_dither(r, cfg.dither);
@@ -684,6 +833,7 @@ int main(int argc, char **argv)
     int mip_draws = 0;      /* --mipmap-check: draws that wanted trilinear sampling */
     char mip_sizes[256] = ""; /* --mipmap-check: texture sizes drawn trilinearly, in order */
     int mip_w = 0, mip_h = 0;
+    int shown_w = 0, shown_h = 0; /* texture size of the last video texture: line */
 
     const bool mouse_look = strcmp(pose->name, "null") == 0;
     bool size_dirty = true; /* recompute the per-eye aspect and tans on the next frame */
@@ -720,7 +870,7 @@ int main(int argc, char **argv)
                 if ((int)ev.display.display == display) {
                     xrd_player_pause(p);
                     fprintf(stderr, "xrdome: warning: glasses disconnected, exiting\n");
-                    quit = done = true;
+                    quit = done = glasses_gone = true;
                 } else if ((int)ev.display.display < display) {
                     display--; /* SDL renumbers the displays after the removed one */
                 }
@@ -751,8 +901,11 @@ int main(int argc, char **argv)
                 out_h = 1;
             size_dirty = false;
         }
-        if (tex) /* geometry and the mipmap decision for this frame */
-            update_view(&app, out_w, out_h);
+        /* geometry, the mipmap decision and the texture size for this frame */
+        if (tex && update_view(&app, out_w, out_h) < 0) {
+            fail("%s", xrd_player_error(p));
+            goto out;
+        }
 
         if (tex && !hwdec_checked) {
             const char *hw = xrd_player_hwdec(p);
@@ -762,11 +915,8 @@ int main(int argc, char **argv)
             for (int i = 0; i < cfg.mpv_opt_count; i++)
                 fprintf(stderr, " %s", cfg.mpv_opts[i]);
             fputc('\n', stderr);
-            int vw, vh;
-            xrd_player_video_size(p, &vw, &vh);
-            fprintf(stderr, "video texture: %s %dx%d dither=%s mipmap=%s\n",
-                    xrd_texture_bits_name(xrd_player_texture_bits(p)), vw, vh,
-                    cfg.dither ? "on" : "off", app.mip_want ? "on" : "off");
+            print_texture(&app);
+            xrd_player_texture_size(p, &shown_w, &shown_h);
             if (strcmp(hw, "vaapi") != 0) {
                 snprintf(err, sizeof err, "hardware decoding is '%s', not vaapi",
                          hw[0] ? hw : "unknown");
@@ -775,6 +925,14 @@ int main(int argc, char **argv)
                     goto out;
                 }
                 fprintf(stderr, "xrdome: warning: %s; decoding in software\n", err);
+            }
+        } else if (tex && cfg.mpv_scale[0]) {
+            int tw, th;
+            xrd_player_texture_size(p, &tw, &th);
+            if (tw != shown_w || th != shown_h) {
+                print_texture(&app);
+                shown_w = tw;
+                shown_h = th;
             }
         }
 
@@ -800,6 +958,7 @@ int main(int argc, char **argv)
                 .swap_eyes = ctl.swap_eyes,
                 .geom = app.geom,
                 .trilinear = app.trilinear,
+                .screen_curve = xrd_controls_screen_curve(&ctl),
             };
             /* --mipmap-check: every draw that wants mipmaps must find a chain
              * generated for the frame in the texture. Without one the draw
@@ -807,7 +966,7 @@ int main(int argc, char **argv)
              * so this checks the player's decisions, not the fallback. */
             if (app.mip_want && cfg.mipmap_check) {
                 int vw, vh;
-                xrd_player_video_size(p, &vw, &vh);
+                xrd_player_texture_size(p, &vw, &vh);
                 if (!dp.trilinear) {
                     fprintf(stderr, "xrdome: --mipmap-check: trilinear draw %d samples a %dx%d "
                                     "texture whose mipmaps were not generated for its frame\n",
@@ -872,7 +1031,8 @@ int main(int argc, char **argv)
 
 out:
     if (mem.on && !mem.block_save && rendered)
-        memory_save(&mem, cfg.file, &ctl);
+        memory_save(&mem, &cfg, cfg.file, &ctl, p ? xrd_player_position(p) : -1.0,
+                    p ? xrd_player_duration(p) : -1.0);
     if (pose && strcmp(pose->name, "udp-opentrack") == 0)
         fprintf(stderr, "pose: %u malformed UDP packets dropped\n",
                 (unsigned)xrd_pose_udp_dropped(pose));
@@ -883,6 +1043,16 @@ out:
         SDL_GL_DeleteContext(gl);
     if (win)
         SDL_DestroyWindow(win);
+    /* Switch back only what xrdome switched. Glasses that went away come back
+     * in 1080p by themselves; xrd_sbs_restore also skips a driver that is no
+     * longer running, whose next start would read the request. */
+    if (sbs_switched && !glasses_gone) {
+        char why[512];
+        if (xrd_sbs_restore((long long)time(NULL), why, sizeof why))
+            fprintf(stderr, "display: asked XRLinuxDriver to switch the glasses back to 1080p\n");
+        else
+            fprintf(stderr, "xrdome: warning: the glasses stay in SBS: %s\n", why);
+    }
     SDL_Quit();
     xrd_tracker_free(trk);
     xrd_pose_source_destroy(pose);

@@ -26,6 +26,7 @@ static EGLContext g_ctx;
 static GLuint g_fbo, g_color, g_tex, g_quad_tex;
 static xrd_renderer *g_r;
 static float g_th, g_tv;
+static float g_curve; /* xrd_draw_params.screen_curve for draw_flat and draw_big */
 
 /* Colour of quadrant (eye, right half?, top half?) of the quadrant texture. */
 static const uint8_t *quad_colour(int eye, int right, int top)
@@ -407,6 +408,7 @@ static int reset_view(void **state)
     xrd_renderer_set_convergence(g_r, 0.f);
     xrd_renderer_set_content_fov(g_r, 180.f, 180.f);
     xrd_renderer_set_dither(g_r, false);
+    g_curve = 0.f;
     return 0;
 }
 
@@ -980,7 +982,7 @@ static void draw_dp(GLuint tex, xrd_quat q, const xrd_draw_params *dp)
 static void draw_flat(GLuint tex, xrd_quat q, xrd_layout layout, bool swap, const xrd_view_geom *g)
 {
     const xrd_draw_params dp = {.proj = XRD_PROJ_FLAT, .layout = layout, .swap_eyes = swap,
-                                .geom = *g, .trilinear = false};
+                                .geom = *g, .trilinear = false, .screen_curve = g_curve};
     draw_dp(tex, q, &dp);
 }
 
@@ -1183,7 +1185,8 @@ static void check_seam_at_size(int w, int h, bool tb)
     const double f = (double)w / h;
     xrd_view_geom g;
     flat_geom(XRD_ZOOM_MAGNIFY, 20.f, xrd_picture_aspect(layout, packing, f), &g);
-    const double to_edge_deg = atan(tb ? g.half_h : g.half_w) * 180.0 / 3.14159265358979323846;
+    const double to_edge_deg = (tb ? atan(g.half_h) : xrd_flat_half_angle(g.half_w, g_curve)) *
+                               180.0 / 3.14159265358979323846;
     const int n = tb ? h : w;
     const xrd_filter filters[] = {XRD_FILTER_BILINEAR, XRD_FILTER_BICUBIC};
 
@@ -1306,7 +1309,7 @@ static void draw_big(GLuint tex, const xrd_view_geom *g, xrd_layout layout, bool
     float rot[9];
     xrd_quat_to_mat3(XRD_QUAT_IDENTITY, rot);
     const xrd_draw_params dp = {.proj = XRD_PROJ_FLAT, .layout = layout, .swap_eyes = false,
-                                .geom = *g, .trilinear = trilinear};
+                                .geom = *g, .trilinear = trilinear, .screen_curve = g_curve};
     glBindFramebuffer(GL_FRAMEBUFFER, g_big_fbo);
     glViewport(0, 0, BIG_W, BIG_H);
     glClearColor(1.f, 0.f, 1.f, 1.f);
@@ -1622,6 +1625,142 @@ static void trilinear_enlarging_matches_bilinear(void **state)
 }
 
 /* Top-bottom is the same code path for VR180. */
+/* ---- curved flat screen (--screen-curve) ---- */
+
+/* A 256 x 256 texture that encodes its own coordinates: r = column, g = row
+ * (row 0 is v = 0), b = 255. Sampled bilinearly at uv it gives
+ * r = u * 256 - 0.5 and g = v * 256 - 0.5, each clamped to 0..255. */
+#define UVTEX 256
+
+static GLuint make_uv_tex(void)
+{
+    uint8_t *px = malloc((size_t)UVTEX * UVTEX * 4);
+    assert_non_null(px);
+    for (int y = 0; y < UVTEX; y++)
+        for (int x = 0; x < UVTEX; x++) {
+            uint8_t *p = &px[(y * UVTEX + x) * 4];
+            p[0] = (uint8_t)x;
+            p[1] = (uint8_t)y;
+            p[2] = 255;
+            p[3] = 255;
+        }
+    GLuint t = make_tex(UVTEX, UVTEX, px);
+    free(px);
+    return t;
+}
+
+static double uv_code(float c)
+{
+    double v = c * UVTEX - 0.5;
+    return v < 0.0 ? 0.0 : (v > UVTEX - 1 ? UVTEX - 1 : v);
+}
+
+/* The C mirror against the shader: every pixel of both eyes, its ray built
+ * as the eye pass builds it (pixel centre, tangents, the view rotation),
+ * mapped by xrd_flat_curve_dir_to_uv. A hit must show the uv the mirror
+ * gives (within 1.5 of 255 per axis, about 1/170 of the screen), a miss
+ * black. Pixels within half a percent of the screen's edge, where the two
+ * may round either way, are skipped. Counts the hits and misses checked. */
+static void check_curve_mirror(const xrd_view_geom *g, float curve, xrd_quat q, int *n_hit,
+                               int *n_miss)
+{
+    GLuint tex = make_uv_tex();
+    const xrd_draw_params dp = {.proj = XRD_PROJ_FLAT, .layout = XRD_LAYOUT_MONO,
+                                .swap_eyes = false, .geom = *g, .trilinear = false,
+                                .screen_curve = curve};
+    draw_dp(tex, q, &dp);
+    glDeleteTextures(1, &tex);
+    *n_hit = *n_miss = 0;
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++) {
+            int ex = x % (W / 2);
+            const float local[3] = {(((float)ex + 0.5f) / (W / 2) * 2.f - 1.f) * g->tan_h,
+                                    (((float)y + 0.5f) / H * 2.f - 1.f) * g->tan_v, -1.f};
+            float d[3], uv[2], big[2], small[2];
+            xrd_quat_rotate(q, local, d);
+            bool hit = xrd_flat_curve_dir_to_uv(d, g->half_w, g->half_h, curve, uv);
+            if (xrd_flat_curve_dir_to_uv(d, g->half_w * 1.005f, g->half_h * 1.005f, curve, big) !=
+                xrd_flat_curve_dir_to_uv(d, g->half_w * 0.995f, g->half_h * 0.995f, curve, small))
+                continue;
+            const uint8_t *p = px_at(x, y);
+            if (!hit) {
+                if (p[0] || p[1] || p[2])
+                    fail_msg("curve %.2f: pixel (%d,%d) = (%d,%d,%d), the mirror says black",
+                             (double)curve, x, y, p[0], p[1], p[2]);
+                (*n_miss)++;
+                continue;
+            }
+            double ru = uv_code(uv[0]), rv = uv_code(uv[1]);
+            if (p[2] < 250 || fabs(p[0] - ru) > 1.5 || fabs(p[1] - rv) > 1.5)
+                fail_msg("curve %.2f: pixel (%d,%d) = (%d,%d,%d), the mirror's uv (%.4f, %.4f) "
+                         "gives (%.1f,%.1f,255)", (double)curve, x, y, p[0], p[1], p[2],
+                         (double)uv[0], (double)uv[1], ru, rv);
+            (*n_hit)++;
+        }
+}
+
+static void curve_mirror_matches_shader(void **state)
+{
+    (void)state;
+    const float curves[] = {0.f, 1.f, 2.5f, 10.f};
+    const float zooms[] = {0.8f, 2.f};
+    const xrd_quat views[] = {XRD_QUAT_IDENTITY, xrd_quat_from_ypr_deg(20, 0, 0),
+                              xrd_quat_from_ypr_deg(0, -8, 0), xrd_quat_from_ypr_deg(-15, 5, 0)};
+    for (size_t c = 0; c < sizeof curves / sizeof curves[0]; c++)
+        for (size_t z = 0; z < 2; z++)
+            for (size_t v = 0; v < sizeof views / sizeof views[0]; v++) {
+                xrd_view_geom g;
+                flat_geom(XRD_ZOOM_SCREEN, zooms[z], 16.0 / 9.0, &g);
+                int n_hit, n_miss;
+                check_curve_mirror(&g, curves[c], views[v], &n_hit, &n_miss);
+                /* zoom 0.8 straight ahead: the screen and the black around it */
+                if (z == 0 && v == 0 && (n_hit < W * H / 2 || n_miss < W * H / 20))
+                    fail_msg("curve %.2f: %d hits and %d misses checked", (double)curves[c],
+                             n_hit, n_miss);
+                if (z == 1 && n_hit < W * H / 2)
+                    fail_msg("curve %.2f zoom 2: only %d hits checked", (double)curves[c],
+                             n_hit);
+            }
+}
+
+/* Nothing behind or beside the viewer, and a junk radius draws black. */
+static void curve_behind_and_junk_are_black(void **state)
+{
+    (void)state;
+    GLuint tex = make_flat_green_tex();
+    xrd_view_geom g;
+    flat_geom(XRD_ZOOM_SCREEN, 4.f, 16.0 / 9.0, &g);
+    g_curve = 1.f;
+    draw_flat(tex, xrd_quat_from_ypr_deg(180, 0, 0), XRD_LAYOUT_MONO, false, &g);
+    expect_all_black("curved, behind");
+    /* the arc reaches 78.6 degrees; looking 120 degrees right sees past it */
+    draw_flat(tex, xrd_quat_from_ypr_deg(-120, 0, 0), XRD_LAYOUT_MONO, false, &g);
+    expect_all_black("curved, beside");
+    const float junk[] = {0.5f, -1.f, 11.f, NAN, INFINITY};
+    for (size_t i = 0; i < sizeof junk / sizeof junk[0]; i++) {
+        g_curve = junk[i];
+        draw_flat(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_MONO, false, &g);
+        expect_all_black("junk radius");
+    }
+    glDeleteTextures(1, &tex);
+}
+
+/* Review Focus 4 on the curved screen: the eye-edge clamp margins act on uv
+ * after the mapping, so they hold for the cylinder as for the plane. */
+static void curve_seam_even_and_odd_sizes(void **state)
+{
+    g_curve = 1.f;
+    flat_seam_even_and_odd_sizes(state);
+    g_curve = 2.5f;
+    flat_odd_sizes_keep_eyes_apart(state);
+}
+
+static void curve_trilinear_keeps_eyes_apart_when_shrinking(void **state)
+{
+    g_curve = 1.f;
+    trilinear_keeps_eyes_apart_when_shrinking(state);
+}
+
 static void hequirect_tb_lr(void **state)
 {
     (void)state;
@@ -1695,6 +1834,10 @@ int main(void)
         cmocka_unit_test_teardown(trilinear_margin_covers_a_wide_mipmap_filter, reset_view),
         cmocka_unit_test_teardown(trilinear_averages_checkerboard_at_4x_shrink, reset_view),
         cmocka_unit_test_teardown(trilinear_enlarging_matches_bilinear, reset_view),
+        cmocka_unit_test_teardown(curve_mirror_matches_shader, reset_view),
+        cmocka_unit_test_teardown(curve_behind_and_junk_are_black, reset_view),
+        cmocka_unit_test_teardown(curve_seam_even_and_odd_sizes, reset_view),
+        cmocka_unit_test_teardown(curve_trilinear_keeps_eyes_apart_when_shrinking, reset_view),
         cmocka_unit_test(no_gl_error),
     };
     return cmocka_run_group_tests(tests, setup, teardown);

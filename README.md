@@ -9,7 +9,8 @@ memory. On the Viture Pro XR, with the default mpv profile, bicubic sampling and
 texture, 0.6% of swap intervals were late (see [Performance notes](#performance-notes)). Per-file
 settings memory was run on the Viture Pro XR on 2026-11-13: saving a zoom change, restoring it,
 and keeping it across a rename were seen to work; the other remembered settings and `--forget`
-have only passed the unit and Xvfb smoke tests. The XREAL Air 2 Pro is untested. See `docs/STATUS.md`, `docs/superpowers/specs/2026-11-11-xrdome-design.md` and
+have only passed the unit and Xvfb smoke tests. On the XREAL Air 2 Pro (2026-11-14) VR180 and flat
+files played with head tracking much as on the Viture, with and without `--device xreal-air2pro`. See `docs/STATUS.md`, `docs/superpowers/specs/2026-11-11-xrdome-design.md` and
 `docs/superpowers/plans/2026-11-11-xrdome.md`.
 
 Flat video and format detection (an ordinary film opens as a flat screen fixed in the room, a
@@ -73,11 +74,15 @@ holds; restarting it prints `xrdome: pose resumed`.
 
 ### On the glasses
 
-Switch the glasses to SBS (3840x1080), start the driver (see [Driver](#driver)), then:
+Start the driver (see [Driver](#driver)), then:
 
 ```sh
 ./build/xrdome file.mp4
 ```
+
+Glasses in 1080p (mirror) mode are switched to SBS (3840x1080) through the driver and back
+at exit (see [Switching to SBS](#switching-to-sbs)); without the driver, switch them to SBS by hand
+first.
 
 The first pose received becomes "straight ahead" (the driver's absolute frame is arbitrary), so
 look straight ahead when starting, or press `R`. If head right does not move the image left, or
@@ -100,28 +105,37 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 | P | Switch projection, flat or VR180; prints `proj: flat` or `proj: hequirect` |
 | Z | Zoom mode, flat only; prints `zoom mode: screen` or `zoom mode: magnify` |
 | L | Screen lock, flat only; prints `screen: head-locked` or `screen: fixed` |
+| B | Debanding on / off (mpv `deband`); prints `deband: on` or `deband: off`. Not remembered per file |
+| C | Curved screen on or off, flat only; prints `screen curve: 1.00` or `screen curve: off` |
 | ? | Print the key list to stderr (`keys:` lines) |
 | I | Print playback information to stderr (`info:` lines) |
 | Q | Quit |
 
 The `zoom:` and `filter:` lines are printed only when the value changes (not for
 a press at a limit). `P` also prints the other projection's zoom, since each projection keeps its
-own. In VR180, `Z` prints `zoom mode: magnify (VR180 has no screen mode)` and `L` prints
-`screen: fixed (VR180 cannot be head-locked)`, and neither changes anything. `?` is Shift+/ on a
+own. In VR180, `Z` prints `zoom mode: magnify (VR180 has no screen mode)`, `L` prints
+`screen: fixed (VR180 cannot be head-locked)` and `C` prints
+`screen curve: none (VR180 has no flat screen)`, and none of them changes anything. In magnify
+mode `C` still switches, and prints e.g. `screen curve: 1.00 (flat in magnify mode)`. `?` is Shift+/ on a
 US keyboard. Key repeat is ignored except for zoom and seek.
 
 `I` prints, one item per line: the file name; codec, coded frame size and frame rate; `hwdec`;
 projection, layout and (flat 3D) packing, each with where it came from (the sources of the
-`detect:` line, or `key`); zoom, and for flat video the zoom mode and the screen size in degrees;
-screen fixed or head-locked; the filter in use (`trilinear` while mipmaps are used) and whether
-mipmaps are on; the video texture; frames presented and missed vsyncs so far. For example:
+`detect:` line, or `key`); zoom, and for flat video the zoom mode and the screen size in degrees
+(for a curved screen, the angle between its ends as seen from the eye); screen fixed or
+head-locked and the screen curve; the filter in use (`trilinear` while mipmaps are used) and whether
+mipmaps are on; mpv's scaler (`--mpv-scale`: `off`, the scaler and the sizes it scales between, or
+why it is not in use); the video texture; `deband` on or off; frames presented and missed vsyncs
+so far. For example:
 
 ```
 info: projection: flat (frame shape)
 info: layout: mono (frame shape)
 info: zoom: 1.50, zoom mode screen, screen 54.5 x 32.3 degrees
 info: screen: fixed
+info: screen curve: off
 info: filter: trilinear, mipmaps on
+info: mpv scale: spline36, not in use (picture shrunk)
 ```
 
 These go to the terminal only; the per-eye HUD planned next will show them on the glasses.
@@ -135,12 +149,15 @@ start gives a tilted picture, and `R` does not correct that. Hold your head leve
 `--pose SPEC` (`null`, or `udp-opentrack` with `port`, `yaw`, `pitch`, `roll`), `--output NAME`,
 `--device viture-pro|xreal-air2pro`, `--zoom F`, `--proj auto|hequirect|flat`,
 `--layout auto|sbs-lr|sbs-rl|tb-lr|tb-rl|mono`, `--packing auto|half|full`,
-`--zoom-mode screen|magnify`, `--screen fixed|locked`, `--mipmap on|off`, `--windowed`,
+`--zoom-mode screen|magnify`, `--screen fixed|locked`, `--screen-curve off|R`, `--mipmap on|off`,
+`--windowed`, `--sbs-switch auto|off`,
 `--require-hwdec` (exit 1 unless mpv decodes with VA-API), `--timing-log PATH`,
 `--content-fov HxV`, `--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)),
 `--mpv-profile NAME`, `--mpv-opt KEY=VALUE` (repeatable, up to 16), `--mpv-log LEVEL`,
-`--convergence DEG`, `--filter bilinear|bicubic`, `--fbo-format rgb10|rgba8`, `--dither on|off`,
-`--no-memory`, `--forget` (the last two are described under [Per-file settings](#per-file-settings)).
+`--mpv-scale off|NAME`, `--convergence DEG`, `--filter bilinear|bicubic`,
+`--fbo-format rgb10|rgba8`, `--dither on|off`, `--deband on|off`, `--no-memory`, `--forget`,
+`--resume`, `--no-resume` (the last four are described under
+[Per-file settings](#per-file-settings)).
 
 `--proj auto|hequirect|flat` (default `auto`) chooses the projection: `hequirect` is VR180
 (half-equirectangular), `flat` an ordinary flat screen (see [Flat video](#flat-video)), `auto`
@@ -158,7 +175,9 @@ and bottom as full when it is narrower than 1.5:1, otherwise half (so 1920x1080 
 
 `--zoom-mode screen|magnify` (default `screen`, flat only) chooses what zoom does to a flat
 picture; see [Flat video](#flat-video). `--screen fixed|locked` (default `fixed`, flat only)
-keeps the screen fixed in the room or locks it to the head. `--mipmap on|off` (default `on`) uses
+keeps the screen fixed in the room or locks it to the head. `--screen-curve off|R` (default `off`,
+flat only; R from 1 to 10) bends the screen into part of a cylinder; see
+[Flat video](#flat-video). `--mipmap on|off` (default `on`) uses
 mipmaps while the picture is shrunk; see [Viewing comfort and sharpness](#viewing-comfort-and-sharpness).
 
 `--convergence DEG` (default 0, -5 to 5) turns each eye's view by half the angle in opposite
@@ -178,7 +197,9 @@ pass's final write: the window is 8-bit, so without it the extra precision is ro
 at the very end. Black outside the video (behind you, or outside `--content-fov`) is never
 dithered. After the first frame stderr shows which texture was used, e.g.
 `video texture: rgb10_a2 1920x1080 dither=on mipmap=off` (the size is the coded frame size, and
-`mipmap` says whether mipmaps were used for the first frame). Both are command-line flags only. To compare against the old
+`mipmap` says whether mipmaps were used for the first frame). With `--mpv-scale` the line ends in
+`mpv-scale=NAME` while mpv enlarges into the texture (the size is then the enlarged size) or
+`mpv-scale=unused`, and it is printed again whenever the texture's size changes. Both are command-line flags only. To compare against the old
 output, run the same file twice, the second time with `--fbo-format rgba8 --dither off` (which
 reproduces the output from before these flags existed), and look at a sky or a slow gradient. 8-bit files
 gain little from either flag.
@@ -207,9 +228,17 @@ an equirectangular mapping within the stated field of view, which may not hold f
 footage (lens projections other than equirectangular will look distorted). It is a command-line
 flag only, not an ini key, because it describes the file and not the glasses.
 
+`--mpv-scale off|NAME` (default `off`; ini key `mpv_scale`) lets mpv enlarge a flat picture
+with its own scaler `NAME` (mpv's `scale` option, e.g. `spline36` or `ewa_lanczossharp`; mpv's
+chroma scaler follows it unless `--mpv-opt cscale=...` sets one). See
+[Viewing comfort and sharpness](#viewing-comfort-and-sharpness). A name mpv does not know exits 1
+with mpv's own reason (its wording depends on the mpv version; libmpv 2.6 prints
+`mpv: [cplayer] Invalid value for option scale: bogus`) followed by
+`xrdome: --mpv-scale bogus: mpv rejects it as a scaler (mpv --scale=help lists them)`. `--mpv-opt scale=...` wins over it.
+
 `--mpv-profile NAME` selects the mpv profile applied before mpv starts. The default is `fast`.
-xrdome has mpv render the video at its native size into an offscreen buffer, with no scaling, so
-mpv's default quality settings (high-quality chroma scaling, float intermediate buffers,
+xrdome has mpv render the video at its native size into an offscreen buffer, with no scaling
+(unless `--mpv-scale` is on), so mpv's default quality settings (high-quality chroma scaling, float intermediate buffers,
 dithering) cost GPU time without a visible benefit; on a 7680x2880 file they saturated an
 integrated GPU. `--mpv-profile default` applies no profile. `--mpv-opt KEY=VALUE` sets any mpv
 option after the profile and xrdome's own fixed options (`vo`, `hwdec`, `osd-level`), so it can
@@ -231,6 +260,11 @@ with the UDP backend, `pose: 0 malformed UDP packets dropped`. Targets: 0 missed
 stderr shows `hwdec: vaapi` when VA-API decoding is active; anything else prints one warning.
 If the glasses' display disconnects during playback, the player pauses and exits with status 0.
 
+`--sbs-switch auto|off` (default `auto`; ini key `sbs_switch`): with `auto`, when no 3840x1080
+output is found at start, xrdome asks XRLinuxDriver to switch the glasses to side-by-side, waits
+for the output, and switches them back at exit; see [Switching to SBS](#switching-to-sbs). `off`
+never asks and fails as before. `--windowed` never looks for the glasses' output, so never asks.
+
 ### Config file
 
 xrdome reads `$XDG_CONFIG_HOME/xrdome/config.ini`, or `~/.config/xrdome/config.ini` when
@@ -239,8 +273,12 @@ to highest: built-in defaults, built-in device values, the ini file, the command
 
 `[general]` keys: `pose` (same spec as `--pose`, default `udp-opentrack:port=4242`), `output`
 (same as `--output`, default `auto`), `screen` (`fixed` or `locked`, as `--screen`, default
-`fixed`) and `ffprobe` (the program run for format detection, default `ffprobe` looked up on
-`PATH`).
+`fixed`), `resume` (`yes` or `no`, as `--resume`, default `no`; see
+[Resume](#resume-where-you-left-off)), `screen_curve` (`off` or a radius from 1 to 10, as
+`--screen-curve`, default `off`), `sbs_switch` (`auto` or `off`, as `--sbs-switch`, default
+`auto`), `ffprobe` (the program run for format detection, default `ffprobe` looked up on
+`PATH`), `deband` (`yes` or `no`, also `on` or `off`, as `--deband`, default `no`) and
+`mpv_scale` (`off` or an mpv scaler name, as `--mpv-scale`, default `off`).
 
 `[device.<name>]` keys, read for the device selected with `--device` (default `viture-pro`):
 `fov_diag` (diagonal FOV in degrees, 10 to 120), `zoom` (the VR180 zoom, 0.25 to 4, default 1)
@@ -254,7 +292,12 @@ unknown keys and bad values are errors that name the file and line.
 pose = udp-opentrack:port=4242,yaw=-1
 output = auto
 screen = fixed
+resume = no
+screen_curve = off
+sbs_switch = auto
 ffprobe = /usr/bin/ffprobe
+deband = no
+mpv_scale = off
 
 [device.viture-pro]
 fov_diag = 43
@@ -287,7 +330,8 @@ Two zoom modes (`Z`, or `--zoom-mode`, remembered per file):
 - `magnify`: the screen stays at the size of zoom 1 and zoom narrows the view instead, as zoom
   does for VR180. The picture moves zoom times faster than your head.
 
-At the same zoom both modes show the same picture straight ahead, so switching does not jump.
+At the same zoom both modes show the same flat picture straight ahead, so switching does not jump
+(a curved screen is flat in magnify mode; see below).
 
 Screen size of a 16:9 picture on the Viture Pro XR (display 37.9 x 21.9 degrees), in screen mode,
 as `I` prints it:
@@ -304,6 +348,25 @@ head like the glasses' own mode (head tracking and mouse look are ignored; conve
 applies). Turning the lock off recentres fully, so the screen reappears straight ahead; a tilted
 head at that moment gives a tilted screen, as with `Shift+R`. The lock is not saved per file,
 since it depends on where you sit, not on the film. It does nothing for VR180.
+
+Curved screen (`C`, `--screen-curve off|R`, `[general] screen_curve`, default `off`): the screen
+is bent into part of an upright cylinder, so the edges of a large screen are as far from you as
+its centre and face you instead of being seen at a slant. R is the cylinder's radius in screen
+distances, from 1 to 10. The screen's centre stays where the flat screen's is and the cylinder
+touches the flat screen there, so R = 1 puts the cylinder's axis through your head and every
+column of the screen at the same distance; a larger R bends it less and approaches the flat
+screen. The screen keeps its width measured along the curve, and its height, so a curved screen
+at a given zoom covers the same picture as a flat one but its ends come round towards you: at
+zoom 1 with R = 1, a 16:9 screen's left and right edges sit just outside the view (39.3 degrees
+apart instead of 37.9). Columns stay straight and upright; the top and bottom edges bow outwards
+towards the sides, as the top and bottom of a cinema's curved screen do from its centre. `C`
+switches between flat and curved; if `--screen-curve` was `off`, `C` curves with R = 1. Like the
+lock, the curve is not saved per file. It applies only in screen zoom mode: magnify keeps the
+zoom-1 screen, which fits the display, and narrows the view onto it, so there is no large screen
+to bend and the screen stays flat (with a curve on, `Z` therefore also switches between curved
+and flat). A head-locked screen curves the same way. Nothing beside or behind you is drawn, so an
+arc that would reach past 90 degrees to either side stops there (at zoom 4 with R = 1 a 16:9
+screen reaches 79 degrees).
 
 Subtitles: for flat 2D, mpv's own subtitle rendering is left on, so a subtitle track (or an
 `.srt` next to the file) appears on the screen, at the bottom of the picture. In 3D layouts and in
@@ -401,7 +464,8 @@ by `P` is not.
 xrdome remembers these settings for each video file and restores them the next time you open the
 same file: the projection, the VR180 zoom and the flat zoom, layout (`sbs-lr`, `sbs-rl`, `tb-lr`,
 `tb-rl`, `mono`), packing, zoom mode, swap-eyes, content FOV and convergence. The screen lock is
-not remembered.
+not remembered. The playback position is remembered only when you ask for it with `--resume`
+(see [Resume](#resume-where-you-left-off)).
 
 Only settings you changed are stored. A setting counts as changed for a file when a key changed it
 during the run (`[`, `]`, `S`, `M`, `P`, `Z`), when you gave its flag (`--zoom`, `--proj`,
@@ -444,7 +508,8 @@ content_fov = 120x90
 record. The settings keys are `zoom` (the VR180 zoom, 0.25 to 4), `flat_zoom` (the flat zoom, 0.25
 to 4), `layout`, `packing` (`half` or `full`), `zoom_mode` (`screen` or `magnify`), `swap` (`yes`
 or `no`), `content_fov` (`HxV`, each 10 to 180) and `convergence` (-5 to 5); a missing key means
-"follow the defaults" (or, for `layout` and `packing`, detection).
+"follow the defaults" (or, for `layout` and `packing`, detection). `position` (seconds, three
+decimals) is only written with `--resume`.
 
 `proj` (`hequirect` or `flat`) is written in every record: it is the projection in effect when
 the player quit, and on the next open it decides the projection (`detect: proj=flat (record)`).
@@ -485,7 +550,8 @@ settings: forgot 8123456789-9f3c0a1b22d4e6f7
 ```
 
 The words are `zoom`, `layout`, `swap`, `content-fov`, `convergence`, `proj`, `flat-zoom`,
-`packing` and `zoom-mode`, in that order. `restored` is printed at open, after the `detect:` line,
+`packing`, `zoom-mode` and `position` (`H:MM:SS`, only with `--resume`), in that order. `restored`
+is printed at open, after the `detect:` line,
 and lists only the values actually applied (not ones a flag overrode). `saved` is printed at exit when a record was written. `forgot` is printed by `--forget`
 when it deleted a record. A file with no record prints nothing.
 
@@ -496,6 +562,40 @@ when it deleted a record. A file with no record prints nothing.
   record is still deleted and then nothing is read or written.
 
 Both are command-line only.
+
+### Resume (where you left off)
+
+Off by default. With `--resume` (or `resume = yes` under `[general]` in `config.ini`) a file
+reopens where it was left; `--no-resume` turns it off again for one run. If both flags are given,
+the last one wins, and either flag beats the ini file.
+
+While resume is on, the record gets a `position = SECONDS` line (three decimals, for example
+`position = 3723.457`) when the player exits, and the next `--resume` run opens the file there
+through mpv's `start` option. The restored line shows it, for example
+`settings: restored zoom=0.75 proj=hequirect position=1:02:03`, and the saved line shows the
+new one. The position is mpv's playback position at the moment of exit.
+
+A position is saved and resumed only inside this part of the file: not in the first 30 seconds,
+and not in the last 5% of the file or the last 60 seconds, whichever is shorter. So a position t
+in a file of length d is used when `t >= 30` and `t < d - min(0.05 * d, 60)`. A finished film
+therefore starts from the beginning next time. Quitting outside that range removes the record's
+`position` line. A file of 30 seconds or less never resumes.
+
+- Without `--resume` a record is exactly what it was before this feature, and a `position` line
+  already in it is kept as it is, neither used nor changed.
+- `--no-memory` turns resume off as well: nothing is read or written.
+- `--no-resume` (or no `--resume`) reads and writes the other settings as usual and leaves the
+  `position` line alone.
+- An explicit start, `--mpv-opt start=TIME`, wins over the record: the file opens at TIME, the
+  record's position is not printed as restored, and the position at exit is saved as usual.
+- A position past the end of the file (the file was replaced by a shorter one with the same key) is
+  ignored: one `xrdome: note: saved position H:MM:SS is past the end of this file (H:MM:SS); starting
+  from the beginning` line is printed and the file plays from the start. The `restored` line has
+  already been printed by then, and shows the position. The duration is only known once mpv has
+  opened the file, so xrdome gives mpv the start option first and seeks back to 0 when the
+  position turns out to be unusable.
+- A `position` that is not a number from 0 to 10000000 makes the record unusable, like any other bad
+  value (see below).
 
 To find the record for a video, search the `path` labels, then open it in an editor:
 
@@ -538,7 +638,7 @@ every layout, and does not change
 what the camera recorded. Positive values move everything in the scene further away, so your eyes
 must diverge more for distant content; negative values bring the scene nearer. On the Viture Pro
 XR (tested 2026-11-12), values up to 2 degrees made no significant difference, and 5 degrees put
-the scene out of focus until zoomed far out. It is untested on the XREAL Air 2 Pro. There are no
+the scene out of focus until zoomed far out. Convergence was not tried on the XREAL Air 2 Pro. There are no
 keys for it; it can be given on the command line and is remembered per file like the other
 settings.
 
@@ -560,6 +660,21 @@ compare the logs; toggling `F` live mixes both filters in one log. `--mpv-log v`
 `--mpv-log debug` are for diagnosis only: they print a lot and affect timing, so leave them off
 for measurements.
 
+**Banding: debanding.** Dark gradients and skies in a low-bitrate file (a 2.5 Mbit/s AV1 file
+looked far worse than 20 Mbit/s H.264) show visible steps that the 10-bit texture and dithering
+cannot remove, because the steps are in the decoded picture. mpv's `deband` filter smooths them
+inside its render pass, before xrdome's texture and dithering. It is off by default: `--deband on`
+(or `deband = yes` in `[general]`) turns it on at start, and `B` switches it during playback so
+you can compare on the glasses; the key prints `deband: on` or `deband: off` and `I` shows it.
+It is a viewing preference, not a property of the file, so it is not saved in the per-file record.
+It costs GPU time in mpv's render pass (not measured on the glasses yet; see `docs/STATUS.md`).
+The strength is left to mpv: `--mpv-opt deband-iterations=N` (mpv default 1),
+`--mpv-opt deband-threshold=N` (32), `--mpv-opt deband-range=N` (16) and
+`--mpv-opt deband-grain=N` (48), for example `--deband on --mpv-opt deband-iterations=2`.
+`--mpv-opt deband=yes` does the same as `--deband on`; an explicit `--mpv-opt deband=...` wins
+over `--deband`, and the key then toggles whatever mpv currently has. mpv's `gpu-dumb-mode`
+(which xrdome uses only on software GL) ignores it.
+
 **Shrinking: mipmaps.** Flat video often has more pixels than the area it is drawn into, and a
 picture drawn smaller than its source shimmers on fine detail and edges when the head moves.
 While the picture is shrunk (at the centre of the view, with the current zoom, one display pixel
@@ -580,6 +695,39 @@ mode:
 On the owner's Radeon (2026-11-14, AC power) a 4K film at zoom 1.0 missed 8 of 3600 vsyncs with
 `--mipmap off` and 13 with `on`; whether mipmaps visibly reduce shimmer was not settled (no clear
 difference seen on one film at zoom 0.5).
+
+**Enlarging flat video: mpv's scalers (`--mpv-scale`).** Normally mpv draws each frame into a
+texture of the coded size and the eye pass enlarges it (Catmull-Rom or bilinear). With
+`--mpv-scale NAME`, while a flat picture is enlarged (the opposite of the mipmap case above: at
+the centre of the view one source pixel covers more than one display pixel), mpv draws each
+frame into a texture of the size the picture has on the glasses, enlarging it with its own scaler
+(`spline36`, `ewa_lanczossharp`, ...), and the eye pass samples that texture at about 1:1 with
+the `F` filter. Side-by-side and top-bottom frames keep their layout, each eye at its display
+size. On the Viture Pro XR a 1080p film at the default zoom 1.5 is drawn into 2880x1620 instead
+of 1920x1080. Because mpv then draws at the display's size, mpv shader options
+(`--mpv-opt glsl-shaders=...`, e.g. FSRCNNX) act at that size too. Subtitles are drawn at the
+larger size as well.
+
+- Only flat video, and only while enlarged. A shrunk picture keeps the coded texture and
+  mipmaps; VR180 always keeps the coded texture (to be 1:1 at the centre a VR180 texture would
+  need about 17600x8800 texels for any file, 150 million). `I` says which applies:
+  `info: mpv scale: spline36, 1920x1080 to 2880x1620` or
+  `info: mpv scale: spline36, not in use (picture shrunk)`.
+- The texture holds at most 3840x2160 texels (both eyes together), the frame size mpv already
+  draws for a 4K film, and fits the GPU's largest texture; beyond that it is scaled down with
+  its shape kept, and the eye pass enlarges the rest. 1080p mono reaches the cap only above zoom
+  2; a 1080p half side-by-side film at zoom 1.5 (two 2880x1620 eyes) is capped to two
+  2715x1527 eyes.
+- Zooming resizes the texture once the zoom has stayed the same for a quarter of a second, so a
+  held `[` or `]` does not reallocate on every step; until then the old texture is drawn larger
+  or smaller. Each resize has mpv draw the current frame again at once (also while paused), so
+  no black or half-drawn frame is shown.
+- In side-by-side and top-bottom frames mpv's scaler sees both eyes as one picture, so within
+  2.5 source pixels of the eyes' shared edge (for `spline36`) its kernel mixes in a little of the
+  other eye's edge (4:2:0 chroma is already shared there without `--mpv-scale`). For ordinary 3D
+  films both edges show the same part of the scene.
+- Cost: mpv scales into more pixels with a heavier kernel every frame; see
+  [Performance notes](#performance-notes). It is off by default until measured.
 
 ## Diagnostics
 
@@ -670,6 +818,54 @@ The log is `~/.local/state/xr_driver/driver.log`.
 
 Verify: `tcpdump -n -i lo udp port 4242 -c 20` shows `UDP, length 52`, and `tools/ot_dump.py` prints angles.
 
+### Switching to SBS
+
+The Viture Pro XR comes back in 1080p (mirror) mode after every reconnect. With
+`--sbs-switch auto` (the default), when no 3840x1080 output is found at start (or the output named
+with `--output` is 1920x1080), xrdome reads the driver's state file `/dev/shm/xr_driver_state`
+and asks for the switch only when all of these hold:
+
+- its `heartbeat=` is within 5 seconds of now (the driver rewrites the file every second; a
+  crashed driver leaves a stale one behind),
+- it lists glasses with `sbs_mode_supported=true`,
+- and `sbs_mode_enabled=false`.
+
+It then writes the one-line request `sbs_mode=enable` to `/dev/shm/xr_driver_control` (the
+driver reads that file when it is closed, acts on it and deletes it; `xr_driver_cli` writes its
+requests there the same way), and waits up to 8 seconds for a 3840x1080 output to appear,
+listing the outputs again every 0.2 seconds and whenever the display changes. On success stderr
+shows
+
+```
+display: switched the glasses to SBS in 1.3 s
+```
+
+and playback starts on that output. At exit, if xrdome switched the glasses itself, it writes
+`sbs_mode=disable` so the desktop mirror is usable again, and prints
+`display: asked XRLinuxDriver to switch the glasses back to 1080p`. It does not switch back
+glasses that disconnected during playback (they come back in 1080p anyway) or when the driver is
+no longer running.
+
+When it cannot switch, the usual error is followed by the reason, for example
+
+```
+xrdome: no 3840x1080 output was found; switch the glasses to SBS mode
+xrdome: automatic SBS switch: XRLinuxDriver is not running (the heartbeat in /dev/shm/xr_driver_state is 412 s old)
+xrdome: outputs: eDP-1 14" (1920x1200), VITURE 23" (1920x1080)
+```
+
+Other reasons: `XRLinuxDriver is not running (cannot read /dev/shm/xr_driver_state)`,
+`XRLinuxDriver reports no glasses connected`, `XRLinuxDriver reports that these glasses cannot
+switch to SBS`, `XRLinuxDriver reports the glasses already in SBS mode` (the driver has switched
+but X shows no 3840x1080 output), and `asked XRLinuxDriver to switch the glasses to SBS, but no
+3840x1080 output appeared within 8 s`. After a timeout xrdome does not ask to switch back: the
+glasses may still switch, and the next run then finds them in SBS. `--sbs-switch off` (or
+`sbs_switch = off`) restores the old behaviour exactly: no reading or writing of the driver's
+files, and only the first and last of those lines.
+
+The tests point xrdome at another directory with the environment variable
+`XRDOME_XR_DRIVER_DIR` (default `/dev/shm`), so no test run writes to a real driver.
+
 ## Performance notes
 
 Measured 2026-11-12 on a ThinkPad P14s Gen 6 AMD (integrated Radeon, Mesa, Xorg/MATE) driving
@@ -703,6 +899,14 @@ Viture Pro XR glasses at 3840x1080 60 Hz, with a 4320x2160 10-bit AV1 60 fps fil
   AV1 VR180 file at `--zoom 0.5` missed 113 (3.1%) without mipmaps and 85 (2.4%) with
   `--mipmap-force`, which makes the chain every frame. One pair each; the differences are within
   run-to-run noise. A flat 1080p AV1 film missed 0 of 10754.
+
+- `--mpv-scale` (not measured yet): mpv then draws every frame of an enlarged flat film at the
+  display's size with the named scaler, so the cost grows with the texture's size and the
+  scaler. To measure it, play the same 1080p film at the same zoom with the same `--frames 3600`
+  and a separate `--timing-log` per run: `--mpv-scale off`, `--mpv-scale spline36` and
+  `--mpv-scale ewa_lanczossharp` (an EWA scaler is much heavier than a separable one), and
+  compare the missed vsyncs in the `timing:` summaries; `I` and the `video texture:` line show the
+  texture's size. Repeat at zoom 2.0 for a larger texture.
 
 ## Tracking notes
 

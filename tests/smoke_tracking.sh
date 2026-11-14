@@ -29,6 +29,9 @@ cleanup() {
 }
 trap cleanup EXIT
 export LIBGL_ALWAYS_SOFTWARE=1
+# Never the real XRLinuxDriver: runs without --windowed would otherwise read
+# /dev/shm/xr_driver_state and could ask live glasses to switch to SBS.
+export XRDOME_XR_DRIVER_DIR="$work/no-xr-driver"
 export XDG_STATE_HOME="$work/state"
 
 # xvfb-run merges the program's stderr into its stdout, so callers capture both.

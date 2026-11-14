@@ -67,6 +67,7 @@ static void defaults_match_spec(void **state)
     assert_int_equal(c.explicit_flags, 0);
     assert_false(c.no_memory);
     assert_false(c.forget);
+    assert_false(c.resume);
 }
 
 static void ini_absent_is_ok(void **state)
@@ -271,9 +272,61 @@ static void flat_defaults(void **state)
     assert_float_equal(c.flat_zoom, 1.5f, TOL);
     assert_float_equal(c.zoom_default, 1.0f, TOL);
     assert_false(c.screen_locked);
+    assert_true(c.screen_curve == 0.f);
     assert_true(c.mipmap);
+    assert_false(c.deband);
     assert_string_equal(c.ffprobe, "ffprobe");
     assert_int_equal((int)c.explicit_flags, 0);
+}
+
+static void sbs_switch_flag(void **state)
+{
+    (void)state;
+    xrd_config c;
+    char err[256] = "";
+    xrd_config_defaults(&c);
+    assert_true(c.sbs_switch); /* default auto */
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--sbs-switch", "off"), 0);
+    assert_false(c.sbs_switch);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--sbs-switch", "auto"), 0);
+    assert_true(c.sbs_switch);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--sbs-switch", "on"), -1);
+    assert_non_null(strstr(err, "--sbs-switch"));
+    assert_non_null(strstr(err, "expected auto or off"));
+    assert_int_equal((int)c.explicit_flags, 0); /* not a per-file setting */
+}
+
+static void sbs_switch_ini(void **state)
+{
+    (void)state;
+    char path[64], err[256] = "";
+    write_tmp(path, "[general]\nsbs_switch = off\n");
+    char *argv[] = {"xrdome", "movie.mp4", NULL};
+    xrd_config c;
+    int rc = xrd_config_load(&c, path, 2, argv, err, sizeof err);
+    assert_int_equal(rc, 0);
+    assert_false(c.sbs_switch);
+    /* The flag wins over the ini. */
+    char *argv2[] = {"xrdome", "--sbs-switch", "auto", "movie.mp4", NULL};
+    rc = xrd_config_load(&c, path, 4, argv2, err, sizeof err);
+    unlink(path);
+    assert_int_equal(rc, 0);
+    assert_true(c.sbs_switch);
+
+    write_tmp(path, "[general]\nsbs_switch = sometimes\n");
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), -1);
+    char want[80];
+    snprintf(want, sizeof want, "%s:2:", path);
+    assert_non_null(strstr(err, want));
+    assert_non_null(strstr(err, "sbs_switch"));
+    unlink(path);
+    /* Only in [general]. */
+    write_tmp(path, "[device.viture-pro]\nsbs_switch = off\n");
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), -1);
+    assert_non_null(strstr(err, "unknown key"));
+    unlink(path);
 }
 
 static void flat_flag_proj(void **state)
@@ -360,6 +413,136 @@ static void flat_flag_zoom_mode_screen_mipmap(void **state)
     assert_non_null(strstr(err, "--mipmap"));
 }
 
+static void deband_flag_ini_and_precedence(void **state)
+{
+    (void)state;
+    xrd_config c;
+    char err[256] = "";
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--deband", "on"), 0);
+    assert_true(c.deband);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--deband", "off"), 0);
+    assert_false(c.deband);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--deband", "yes"), -1); /* ini only */
+    assert_non_null(strstr(err, "--deband"));
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--deband", ""), -1);
+
+    const char *ini_on[] = {"yes", "on"}, *ini_off[] = {"no", "off"};
+    for (int i = 0; i < 2; i++) {
+        char path[64], text[64];
+        snprintf(text, sizeof text, "[general]\ndeband = %s\n", ini_on[i]);
+        write_tmp(path, text);
+        xrd_config_defaults(&c);
+        assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), 0);
+        assert_true(c.deband);
+        unlink(path);
+        snprintf(text, sizeof text, "[general]\ndeband = %s\n", ini_off[i]);
+        write_tmp(path, text);
+        c.deband = true;
+        assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), 0);
+        assert_false(c.deband);
+        unlink(path);
+    }
+
+    /* flags win over the ini, in both directions */
+    char path[64];
+    write_tmp(path, "[general]\ndeband = yes\n");
+    char *off[] = {"xrdome", "--deband", "off", "movie.mp4", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 4, off, err, sizeof err), 0);
+    assert_false(c.deband);
+    char *none[] = {"xrdome", "movie.mp4", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 2, none, err, sizeof err), 0);
+    assert_true(c.deband);
+    write_tmp(path, "[general]\ndeband = no\n");
+    char *on[] = {"xrdome", "--deband", "on", "movie.mp4", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 4, on, err, sizeof err), 0);
+    assert_true(c.deband);
+    unlink(path);
+
+    /* a bad ini value names the file, line and key */
+    write_tmp(path, "[general]\ndeband = maybe\n");
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), -1);
+    assert_non_null(strstr(err, ":2:"));
+    assert_non_null(strstr(err, "deband"));
+    unlink(path);
+}
+
+static void flag_screen_curve(void **state)
+{
+    (void)state;
+    xrd_config c;
+    char err[256] = "";
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--screen-curve", "1.0"), 0);
+    assert_float_equal(c.screen_curve, 1.0f, TOL);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--screen-curve", "2.5"), 0);
+    assert_float_equal(c.screen_curve, 2.5f, TOL);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--screen-curve", "10"), 0);
+    assert_float_equal(c.screen_curve, 10.0f, TOL);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--screen-curve", "off"), 0);
+    assert_true(c.screen_curve == 0.f);
+    /* not part of the per-file record */
+    assert_int_equal((int)c.explicit_flags, 0);
+
+    const char *bad[] = {"0.99", "0", "-1", "10.5", "nan", "inf"};
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        err[0] = '\0';
+        assert_int_equal(parse_flags(&c, err, sizeof err, "--screen-curve", bad[i]), -1);
+        assert_non_null(strstr(err, "--screen-curve"));
+        assert_non_null(strstr(err, "out of range") ? strstr(err, "1 to 10") : strstr(err, "neither"));
+    }
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--screen-curve", "on"), -1);
+    assert_non_null(strstr(err, "neither off nor a number"));
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--screen-curve", "OFF"), -1);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--screen-curve", ""), -1);
+
+    /* the last one wins, and a failed one leaves the value alone */
+    char *argv[] = {"xrdome", "--screen-curve", "3", "--screen-curve", "1.5", "a.mp4", NULL};
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_parse_args(&c, 6, argv, err, sizeof err), 0);
+    assert_float_equal(c.screen_curve, 1.5f, TOL);
+    char *argv2[] = {"xrdome", "--screen-curve", "x", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, argv2, err, sizeof err), -1);
+    assert_float_equal(c.screen_curve, 1.5f, TOL);
+}
+
+static void ini_screen_curve(void **state)
+{
+    (void)state;
+    char path[64], err[256] = "";
+    write_tmp(path, "[general]\nscreen_curve = 1.25\n");
+    char *argv[] = {"xrdome", "movie.mp4", NULL};
+    xrd_config c;
+    int rc = xrd_config_load(&c, path, 2, argv, err, sizeof err);
+    assert_int_equal(rc, 0);
+    assert_float_equal(c.screen_curve, 1.25f, TOL);
+    /* the flag wins over the ini */
+    char *argv2[] = {"xrdome", "--screen-curve", "off", "movie.mp4", NULL};
+    rc = xrd_config_load(&c, path, 4, argv2, err, sizeof err);
+    unlink(path);
+    assert_int_equal(rc, 0);
+    assert_true(c.screen_curve == 0.f);
+
+    /* only in [general]; a bad value names the file, line and key */
+    const char *texts[] = {"[general]\nscreen_curve = 0.5\n", "[general]\nscreen_curve = yes\n",
+                           "[device.viture-pro]\nscreen_curve = 1\n"};
+    for (int i = 0; i < 3; i++) {
+        char want[80];
+        write_tmp(path, texts[i]);
+        xrd_config_defaults(&c);
+        assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), -1);
+        snprintf(want, sizeof want, "%s:2:", path);
+        assert_non_null(strstr(err, want));
+        assert_non_null(strstr(err, "screen_curve"));
+        unlink(path);
+    }
+    write_tmp(path, "[general]\nscreen_curve = off\n");
+    xrd_config_defaults(&c);
+    c.screen_curve = 2.f;
+    assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), 0);
+    unlink(path);
+    assert_true(c.screen_curve == 0.f);
+}
+
 static void flat_ini_keys(void **state)
 {
     (void)state;
@@ -408,6 +591,76 @@ static void flat_ini_bad_values_name_file_and_line(void **state)
         snprintf(want, sizeof want, "%s:2:", path);
         assert_non_null(strstr(err, want));
         assert_non_null(strstr(err, keys[i]));
+        unlink(path);
+    }
+}
+
+static void mpv_scale_flag(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    xrd_config c;
+    xrd_config_defaults(&c);
+    assert_string_equal(c.mpv_scale, ""); /* off by default */
+
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--mpv-scale", "spline36"), 0);
+    assert_string_equal(c.mpv_scale, "spline36");
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--mpv-scale", "ewa_lanczossharp"), 0);
+    assert_string_equal(c.mpv_scale, "ewa_lanczossharp");
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--mpv-scale", "off"), 0);
+    assert_string_equal(c.mpv_scale, "");
+
+    /* the last one wins, and off turns an earlier one off */
+    char *a[] = {"xrdome", "--mpv-scale", "spline36", "--mpv-scale", "off", "a.mp4", NULL};
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_parse_args(&c, 6, a, err, sizeof err), 0);
+    assert_string_equal(c.mpv_scale, "");
+
+    /* names are mpv's to check; xrdome only refuses empty and too long ones */
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--mpv-scale", ""), -1);
+    assert_non_null(strstr(err, "--mpv-scale"));
+    char long_name[64];
+    memset(long_name, 's', sizeof long_name - 1);
+    long_name[sizeof long_name - 1] = '\0';
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--mpv-scale", long_name), -1);
+    assert_non_null(strstr(err, "--mpv-scale"));
+    assert_string_equal(c.mpv_scale, "");
+}
+
+static void mpv_scale_ini_key_and_flag(void **state)
+{
+    (void)state;
+    char path[64], err[256] = "";
+    write_tmp(path, "[general]\nmpv_scale = ewa_lanczossharp\n");
+    char *argv[] = {"xrdome", "movie.mp4", NULL};
+    xrd_config c;
+    assert_int_equal(xrd_config_load(&c, path, 2, argv, err, sizeof err), 0);
+    assert_string_equal(c.mpv_scale, "ewa_lanczossharp");
+    /* the flag wins, off included */
+    char *off[] = {"xrdome", "--mpv-scale", "off", "movie.mp4", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 4, off, err, sizeof err), 0);
+    assert_string_equal(c.mpv_scale, "");
+    char *spl[] = {"xrdome", "--mpv-scale", "spline36", "movie.mp4", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 4, spl, err, sizeof err), 0);
+    assert_string_equal(c.mpv_scale, "spline36");
+    unlink(path);
+
+    write_tmp(path, "[general]\nmpv_scale = off\n");
+    assert_int_equal(xrd_config_load(&c, path, 2, argv, err, sizeof err), 0);
+    assert_string_equal(c.mpv_scale, "");
+    unlink(path);
+
+    /* an empty value is an error naming the file, line and key; so is the key
+     * in a device section */
+    const char *bad[] = {"[general]\nmpv_scale =\n", "[device.viture-pro]\nmpv_scale = spline36\n"};
+    for (int i = 0; i < 2; i++) {
+        char want[80];
+        write_tmp(path, bad[i]);
+        xrd_config_defaults(&c);
+        assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), -1);
+        snprintf(want, sizeof want, "%s:2:", path);
+        assert_non_null(strstr(err, want));
+        assert_non_null(strstr(err, "mpv_scale"));
         unlink(path);
     }
 }
@@ -1102,6 +1355,51 @@ static void ini_zoom_is_not_explicit(void **state)
     assert_int_equal(c.explicit_flags, 0);
 }
 
+static void resume_flags_and_ini(void **state)
+{
+    (void)state;
+    char err[256] = "", path[64];
+    xrd_config c;
+    /* off by default */
+    char *a0[] = {"xrdome", "a.mp4", NULL};
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_parse_args(&c, 2, a0, err, sizeof err), 0);
+    assert_false(c.resume);
+    char *a1[] = {"xrdome", "--resume", "a.mp4", NULL};
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_parse_args(&c, 3, a1, err, sizeof err), 0);
+    assert_true(c.resume);
+    /* the last of the two wins */
+    char *a2[] = {"xrdome", "--resume", "--no-resume", "a.mp4", NULL};
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_parse_args(&c, 4, a2, err, sizeof err), 0);
+    assert_false(c.resume);
+    char *a3[] = {"xrdome", "--no-resume", "--resume", "a.mp4", NULL};
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_parse_args(&c, 4, a3, err, sizeof err), 0);
+    assert_true(c.resume);
+
+    /* ini: resume = yes, and a flag beats it */
+    write_tmp(path, "[general]\nresume = yes\n");
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), 0);
+    assert_true(c.resume);
+    char *b1[] = {"xrdome", "--windowed", "a.mp4", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 3, b1, err, sizeof err), 0);
+    assert_true(c.resume);
+    char *b2[] = {"xrdome", "--no-resume", "a.mp4", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 3, b2, err, sizeof err), 0);
+    assert_false(c.resume);
+    write_tmp(path, "[general]\nresume = no\n");
+    char *b3[] = {"xrdome", "--resume", "a.mp4", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 3, b3, err, sizeof err), 0);
+    assert_true(c.resume);
+    write_tmp(path, "[general]\nresume = maybe\n");
+    assert_int_equal(xrd_config_load(&c, path, 3, b3, err, sizeof err), -1);
+    assert_non_null(strstr(err, "resume"));
+    unlink(path);
+}
+
 static void args_memory_flags(void **state)
 {
     (void)state;
@@ -1180,9 +1478,14 @@ int main(void)
         cmocka_unit_test(flat_flag_layout_auto_and_tb),
         cmocka_unit_test(flat_flag_packing),
         cmocka_unit_test(flat_flag_zoom_mode_screen_mipmap),
+        cmocka_unit_test(deband_flag_ini_and_precedence),
+        cmocka_unit_test(flag_screen_curve),
+        cmocka_unit_test(ini_screen_curve),
         cmocka_unit_test(flat_ini_keys),
         cmocka_unit_test(flat_zoom_default_survives_zoom_flag),
         cmocka_unit_test(flat_ini_bad_values_name_file_and_line),
+        cmocka_unit_test(mpv_scale_flag),
+        cmocka_unit_test(mpv_scale_ini_key_and_flag),
         cmocka_unit_test(ini_content_fov_is_not_a_key),
         cmocka_unit_test(load_unknown_device_names_it),
         cmocka_unit_test(load_ini_defined_device_ok),
@@ -1202,7 +1505,10 @@ int main(void)
         cmocka_unit_test(explicit_default_value_counts),
         cmocka_unit_test(ini_zoom_is_not_explicit),
         cmocka_unit_test(args_memory_flags),
+        cmocka_unit_test(resume_flags_and_ini),
         cmocka_unit_test(ini_rejects_new_keys),
+        cmocka_unit_test(sbs_switch_flag),
+        cmocka_unit_test(sbs_switch_ini),
     };
     save_env(NULL);
     int failed = cmocka_run_group_tests(tests, NULL, NULL);

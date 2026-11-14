@@ -90,7 +90,7 @@ int xrd_filestate_dir(char *buf, size_t len)
 /* ---- record parse and format ------------------------------------------ */
 
 typedef enum { KEY_ZOOM, KEY_LAYOUT, KEY_SWAP, KEY_CONTENT_FOV, KEY_CONVERGENCE,
-               KEY_PROJ, KEY_FLAT_ZOOM, KEY_PACKING, KEY_ZOOM_MODE } setting_key;
+               KEY_PROJ, KEY_FLAT_ZOOM, KEY_PACKING, KEY_ZOOM_MODE, KEY_POSITION } setting_key;
 
 /* One table of key names, shared by parse and format. */
 static const struct { const char *name; unsigned bit; } k_settings[] = {
@@ -103,8 +103,12 @@ static const struct { const char *name; unsigned bit; } k_settings[] = {
     [KEY_FLAT_ZOOM] = { "flat_zoom", XRD_SET_FLAT_ZOOM },
     [KEY_PACKING] = { "packing", XRD_SET_PACKING },
     [KEY_ZOOM_MODE] = { "zoom_mode", XRD_SET_ZOOM_MODE },
+    [KEY_POSITION] = { "position", XRD_SET_POSITION },
 };
-#define N_SETTINGS (sizeof k_settings / sizeof k_settings[0])
+/* Parse and format walk the whole table. apply, collect and equal walk the view
+ * settings only: the position is last in the table and is handled by hand. */
+#define N_KEYS (sizeof k_settings / sizeof k_settings[0])
+#define N_SETTINGS ((size_t)KEY_POSITION)
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
@@ -160,6 +164,16 @@ static bool apply_setting(setting_key k, const char *val, xrd_filestate *st)
         if (!xrd_value_zoom_mode(val, &st->v.zoom_mode))
             return false;
         break;
+    case KEY_POSITION: {
+        char *end;
+        errno = 0;
+        double v = strtod(val, &end);
+        if (end == val || *end != '\0' || errno != 0 || !isfinite(v) || v < 0.0 ||
+            v > XRD_POSITION_MAX)
+            return false;
+        st->v.position = v;
+        break;
+    }
     }
     st->set |= k_settings[k].bit;
     return true;
@@ -250,7 +264,7 @@ xrd_fs_status xrd_filestate_parse(const char *text, xrd_filestate *out, char *er
         } else if (span_is(kb, ke, "path") || span_is(kb, ke, "saved")) {
             /* labels for people; never used */
         } else {
-            for (size_t k = 0; k < N_SETTINGS; k++) {
+            for (size_t k = 0; k < N_KEYS; k++) {
                 if (!span_is(kb, ke, k_settings[k].name))
                     continue;
                 if (!(val_fits && apply_setting((setting_key)k, val, &st)) && !bad_line) {
@@ -323,10 +337,40 @@ int xrd_filestate_format(const xrd_filestate *st, const char *path_label, const 
     if ((st->set & k_settings[KEY_ZOOM_MODE].bit) && xrd_value_zoom_mode_name(st->v.zoom_mode))
         put(&s, "%s = %s\n", k_settings[KEY_ZOOM_MODE].name,
             xrd_value_zoom_mode_name(st->v.zoom_mode));
+    if ((st->set & XRD_SET_POSITION) && isfinite(st->v.position) && st->v.position >= 0.0 &&
+        st->v.position <= XRD_POSITION_MAX)
+        put(&s, "%s = %.3f\n", k_settings[KEY_POSITION].name, st->v.position);
 
     if (s.pos >= len || s.pos > (size_t)INT_MAX)
         return -1;
     return (int)s.pos;
+}
+
+/* ---- resume ------------------------------------------------------------- */
+
+xrd_resume_verdict xrd_resume_check(double position, double duration)
+{
+    if (duration > 0.0 && position > duration)
+        return XRD_RESUME_PAST_END;
+    if (!(position >= XRD_RESUME_MIN_SECONDS))
+        return XRD_RESUME_TOO_EARLY;
+    if (duration > 0.0) {
+        double zone = duration * XRD_RESUME_END_FRACTION;
+        if (zone > XRD_RESUME_END_MAX_SECONDS)
+            zone = XRD_RESUME_END_MAX_SECONDS;
+        if (position >= duration - zone)
+            return XRD_RESUME_TOO_LATE;
+    }
+    return XRD_RESUME_OK;
+}
+
+int xrd_format_position(double seconds, char *buf, size_t len)
+{
+    if (!(seconds >= 0.0) || seconds > XRD_POSITION_MAX)
+        seconds = 0.0;
+    long long t = (long long)seconds;
+    int n = snprintf(buf, len, "%lld:%02lld:%02lld", t / 3600, t / 60 % 60, t % 60);
+    return (n < 0 || (size_t)n >= len) ? -1 : n;
 }
 
 /* ---- files -------------------------------------------------------------- */
@@ -557,6 +601,8 @@ bool xrd_filestate_equal(const xrd_filestate *a, const xrd_filestate *b)
         if ((a->set & bit) && field_differs(bit, &a->v, &b->v))
             return false;
     }
+    if ((a->set & XRD_SET_POSITION) && fabs(a->v.position - b->v.position) > 0.0005)
+        return false;
     return true;
 }
 
@@ -607,6 +653,12 @@ int xrd_filestate_describe(const xrd_filestate *st, unsigned mask, char *buf, si
     if (want & XRD_SET_ZOOM_MODE) {
         const char *name = xrd_value_zoom_mode_name(st->v.zoom_mode);
         put(&s, "%szoom-mode=%s", sep, name ? name : "?");
+        sep = " ";
+    }
+    if (want & XRD_SET_POSITION) {
+        char pos[32];
+        xrd_format_position(st->v.position, pos, sizeof pos);
+        put(&s, "%sposition=%s", sep, pos);
     }
 
     if (s.pos >= len || s.pos > (size_t)INT_MAX) {

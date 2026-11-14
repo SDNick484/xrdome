@@ -10,7 +10,8 @@
 enum { XRD_SET_ZOOM = 1u << 0, XRD_SET_LAYOUT = 1u << 1, XRD_SET_SWAP = 1u << 2,
        XRD_SET_CONTENT_FOV = 1u << 3, XRD_SET_CONVERGENCE = 1u << 4,
        XRD_SET_PROJ = 1u << 5, XRD_SET_FLAT_ZOOM = 1u << 6, XRD_SET_PACKING = 1u << 7,
-       XRD_SET_ZOOM_MODE = 1u << 8 };
+       XRD_SET_ZOOM_MODE = 1u << 8,
+       XRD_SET_POSITION = 1u << 9 /* playback position: not a view setting, see below */ };
 
 typedef struct {
     float zoom;
@@ -22,6 +23,8 @@ typedef struct {
     float flat_zoom;
     xrd_packing packing;
     xrd_zoom_mode zoom_mode;
+    double position;     /* seconds into the file (XRD_SET_POSITION), kept apart from the
+                            view settings: apply, collect and equal's field loop skip it */
 } xrd_file_settings;
 
 typedef struct {
@@ -55,6 +58,23 @@ xrd_fs_status xrd_filestate_parse(const char *text, xrd_filestate *out, char *er
 int xrd_filestate_format(const xrd_filestate *st, const char *path_label, const char *date,
                          char *buf, size_t len);
 
+/* Resume (--resume): where a position may be saved and resumed. Not in the
+ * first XRD_RESUME_MIN_SECONDS, and not in the last XRD_RESUME_END_FRACTION of
+ * the file or the last XRD_RESUME_END_MAX_SECONDS, whichever is shorter. */
+/* Largest position a record may hold (about 115 days). */
+#define XRD_POSITION_MAX 1e7
+#define XRD_RESUME_MIN_SECONDS 30.0
+#define XRD_RESUME_END_FRACTION 0.05
+#define XRD_RESUME_END_MAX_SECONDS 60.0
+typedef enum { XRD_RESUME_OK, XRD_RESUME_TOO_EARLY, XRD_RESUME_TOO_LATE,
+               XRD_RESUME_PAST_END } xrd_resume_verdict;
+/* duration <= 0 means unknown: only the start rule applies. Checked in this
+ * order: position > duration is PAST_END; position < 30 is TOO_EARLY;
+ * position >= duration - min(0.05 * duration, 60) is TOO_LATE. */
+xrd_resume_verdict xrd_resume_check(double position, double duration);
+/* "H:MM:SS" (seconds truncated; hours not padded, so 3723.9 is "1:02:03"). */
+int xrd_format_position(double seconds, char *buf, size_t len);
+
 /* "<dir>/<key>.ini"; -1 if it does not fit. */
 int xrd_filestate_record_path(const char *dir, const char *key, char *buf, size_t len);
 
@@ -87,12 +107,13 @@ unsigned xrd_filestate_apply(const xrd_filestate *rec, unsigned explicit_flags,
 void xrd_filestate_collect(const xrd_filestate *loaded, unsigned explicit_flags,
                            const xrd_file_settings *start, const xrd_file_settings *end,
                            xrd_filestate *out);
-/* Same set bits, and set fields equal within the tolerances. */
+/* Same set bits, and set fields equal within the tolerances (position within
+ * 0.0005 s, what the record's three decimals hold). */
 bool xrd_filestate_equal(const xrd_filestate *a, const xrd_filestate *b);
 /* "zoom=0.75 layout=sbs-rl swap=yes content-fov=120x90 convergence=1.5 proj=flat
  * flat-zoom=1.65 packing=half zoom-mode=magnify" for the fields in
  * (st->set & mask), in that order, space separated. Returns length, 0 for
- * none, -1 if it does not fit. Formats: zoom and flat-zoom %.2f, fov %gx%g,
+ * none, -1 if it does not fit. The position, last, is "position=H:MM:SS". Formats: zoom and flat-zoom %.2f, fov %gx%g,
  * convergence %.1f. */
 int xrd_filestate_describe(const xrd_filestate *st, unsigned mask, char *buf, size_t len);
 

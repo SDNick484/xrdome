@@ -646,7 +646,7 @@ static void load_directory_is_bad(void **state)
 static xrd_file_settings defaults(void)
 {
     xrd_file_settings s = { 1.0f, XRD_LAYOUT_SBS_LR, false, 180.0f, 180.0f, 0.0f,
-                           XRD_PROJ_HEQUIRECT, 1.5f, XRD_PACKING_AUTO, XRD_ZOOM_SCREEN };
+                           XRD_PROJ_HEQUIRECT, 1.5f, XRD_PACKING_AUTO, XRD_ZOOM_SCREEN, 0.0 };
     return s;
 }
 
@@ -934,6 +934,138 @@ static void describe_too_small(void **state)
     assert_int_equal(xrd_filestate_describe(&st, st.set, buf, sizeof buf), -1);
 }
 
+/* ---- position (--resume) ------------------------------------------------ */
+
+static void position_round_trips(void **state)
+{
+    (void)state;
+    xrd_filestate st = make_state(XRD_SET_ZOOM | XRD_SET_POSITION);
+    st.v.position = 3723.4567;
+    char buf[512], err[128];
+    assert_true(xrd_filestate_format(&st, "/v/a.mp4", "2026-11-12", buf, sizeof buf) > 0);
+    assert_non_null(strstr(buf, "\nposition = 3723.457\n"));
+    xrd_filestate out;
+    memset(&out, 0, sizeof out);
+    assert_int_equal(xrd_filestate_parse(buf, &out, err, sizeof err), XRD_FS_OK);
+    assert_true((out.set & XRD_SET_POSITION) != 0);
+    assert_true(fabs(out.v.position - 3723.457) < 1e-9);
+}
+
+static void position_absent_leaves_record_unchanged(void **state)
+{
+    (void)state;
+    xrd_filestate st = make_state(XRD_SET_ZOOM);
+    st.v.position = 99.0; /* not set: must not be written */
+    char buf[512];
+    assert_true(xrd_filestate_format(&st, "/v/a.mp4", "2026-11-12", buf, sizeof buf) > 0);
+    assert_null(strstr(buf, "position"));
+}
+
+static void position_parse_bad(void **state)
+{
+    (void)state;
+    static const char *const cases[] = {
+        "version = 1\nposition = abc\n", "version = 1\nposition = -1\n",
+        "version = 1\nposition = 1e9\n", "version = 1\nposition = nan\n",
+        "version = 1\nposition = 12 s\n", "version = 1\nposition =\n",
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        xrd_filestate out = make_state(XRD_SET_ZOOM);
+        char err[128] = "";
+        assert_int_equal(xrd_filestate_parse(cases[i], &out, err, sizeof err), XRD_FS_BAD);
+        assert_non_null(strstr(err, "line 2"));
+    }
+}
+
+static void position_is_not_a_view_setting(void **state)
+{
+    (void)state;
+    xrd_filestate rec = make_state(XRD_SET_ZOOM | XRD_SET_POSITION);
+    rec.v.position = 100.0;
+    xrd_file_settings s = defaults();
+    /* apply never copies it, so "restored" cannot mention it by accident */
+    assert_int_equal((int)xrd_filestate_apply(&rec, 0, &s), (int)XRD_SET_ZOOM);
+    assert_true(s.position == 0.0);
+    /* collect leaves it out; the caller adds it */
+    xrd_file_settings start = defaults(), end = defaults();
+    xrd_filestate out;
+    xrd_filestate_collect(&rec, 0, &start, &end, &out);
+    assert_int_equal((int)(out.set & XRD_SET_POSITION), 0);
+}
+
+static void position_equal_and_describe(void **state)
+{
+    (void)state;
+    xrd_filestate a = make_state(XRD_SET_POSITION), b = make_state(XRD_SET_POSITION);
+    a.v.position = 62.0;
+    b.v.position = 62.0002;
+    assert_true(xrd_filestate_equal(&a, &b));
+    b.v.position = 62.01;
+    assert_false(xrd_filestate_equal(&a, &b));
+    b.set = 0;
+    assert_false(xrd_filestate_equal(&a, &b));
+
+    a.v.position = 3723.9;
+    a.set = XRD_SET_POSITION | XRD_SET_ZOOM_MODE;
+    char buf[200];
+    assert_true(xrd_filestate_describe(&a, ~0u, buf, sizeof buf) > 0);
+    assert_string_equal(buf, "zoom-mode=magnify position=1:02:03");
+    assert_true(xrd_filestate_describe(&a, XRD_SET_POSITION, buf, sizeof buf) > 0);
+    assert_string_equal(buf, "position=1:02:03");
+    assert_true(xrd_filestate_describe(&a, (unsigned)~XRD_SET_POSITION, buf, sizeof buf) > 0);
+    assert_string_equal(buf, "zoom-mode=magnify");
+}
+
+static void format_position_text(void **state)
+{
+    (void)state;
+    char buf[32];
+    xrd_format_position(0.0, buf, sizeof buf);
+    assert_string_equal(buf, "0:00:00");
+    xrd_format_position(65.9, buf, sizeof buf);
+    assert_string_equal(buf, "0:01:05");
+    xrd_format_position(36000.0, buf, sizeof buf);
+    assert_string_equal(buf, "10:00:00");
+    assert_int_equal(xrd_format_position(3723.0, buf, 4), -1);
+}
+
+static void resume_near_start_rule(void **state)
+{
+    (void)state;
+    /* first 30 s: not resumed (duration known or not) */
+    assert_int_equal(xrd_resume_check(0.0, 0.0), XRD_RESUME_TOO_EARLY);
+    assert_int_equal(xrd_resume_check(29.999, 3600.0), XRD_RESUME_TOO_EARLY);
+    assert_int_equal(xrd_resume_check(30.0, 3600.0), XRD_RESUME_OK);
+    assert_int_equal(xrd_resume_check(30.0, 0.0), XRD_RESUME_OK);
+    assert_int_equal(xrd_resume_check(-1.0, 3600.0), XRD_RESUME_TOO_EARLY);
+}
+
+static void resume_near_end_rule(void **state)
+{
+    (void)state;
+    /* 2 h film: the last 60 s (5% would be 360 s, so 60 s is the shorter) */
+    assert_int_equal(xrd_resume_check(7139.9, 7200.0), XRD_RESUME_OK);
+    assert_int_equal(xrd_resume_check(7140.0, 7200.0), XRD_RESUME_TOO_LATE);
+    assert_int_equal(xrd_resume_check(7200.0, 7200.0), XRD_RESUME_TOO_LATE);
+    /* 10 min file: 5% is 30 s, shorter than 60 s */
+    assert_int_equal(xrd_resume_check(569.9, 600.0), XRD_RESUME_OK);
+    assert_int_equal(xrd_resume_check(570.0, 600.0), XRD_RESUME_TOO_LATE);
+    /* 40 s file: 5% is 2 s; [30, 38) resumes */
+    assert_int_equal(xrd_resume_check(37.9, 40.0), XRD_RESUME_OK);
+    assert_int_equal(xrd_resume_check(38.0, 40.0), XRD_RESUME_TOO_LATE);
+    /* a file no longer than 30 s never resumes */
+    assert_int_equal(xrd_resume_check(30.0, 30.0), XRD_RESUME_TOO_LATE);
+    assert_int_equal(xrd_resume_check(10.0, 20.0), XRD_RESUME_TOO_EARLY);
+}
+
+static void resume_past_end(void **state)
+{
+    (void)state;
+    assert_int_equal(xrd_resume_check(7201.0, 7200.0), XRD_RESUME_PAST_END);
+    assert_int_equal(xrd_resume_check(5.0, 4.0), XRD_RESUME_PAST_END); /* before the start rule */
+    assert_int_equal(xrd_resume_check(9999.0, 0.0), XRD_RESUME_OK);    /* duration unknown */
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -988,6 +1120,15 @@ int main(void)
         cmocka_unit_test(format_only_zoom_has_no_flat_zoom_line),
         cmocka_unit_test(describe_formats),
         cmocka_unit_test(describe_too_small),
+        cmocka_unit_test(position_round_trips),
+        cmocka_unit_test(position_absent_leaves_record_unchanged),
+        cmocka_unit_test(position_parse_bad),
+        cmocka_unit_test(position_is_not_a_view_setting),
+        cmocka_unit_test(position_equal_and_describe),
+        cmocka_unit_test(format_position_text),
+        cmocka_unit_test(resume_near_start_rule),
+        cmocka_unit_test(resume_near_end_rule),
+        cmocka_unit_test(resume_past_end),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

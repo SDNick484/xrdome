@@ -171,6 +171,47 @@ static void mode_and_lock_toggles_are_flat_only(void **state)
     assert_false(c.screen_locked);
 }
 
+static void curve_init_toggle_and_magnify(void **state)
+{
+    (void)state;
+    xrd_controls c;
+    xrd_controls_init(&c, 1.5f, XRD_LAYOUT_MONO);
+    assert_false(c.screen_curved);
+    assert_true(xrd_controls_screen_curve(&c) == 0.f);
+    /* hequirect: C does nothing, and nothing is curved */
+    xrd_controls_init_curve(&c, 2.f);
+    assert_false(xrd_controls_toggle_curve(&c));
+    assert_true(c.screen_curved);
+    assert_true(xrd_controls_screen_curve(&c) == 0.f);
+
+    xrd_controls_init_format(&c, XRD_PROJ_FLAT, XRD_PACKING_AUTO, 1.0f, XRD_ZOOM_SCREEN, false);
+    assert_float_equal(xrd_controls_screen_curve(&c), 2.f, 0.f);
+    /* magnify keeps the zoom-1 screen: flat, and curved again in screen mode */
+    assert_true(xrd_controls_toggle_zoom_mode(&c));
+    assert_true(xrd_controls_screen_curve(&c) == 0.f);
+    assert_true(xrd_controls_toggle_zoom_mode(&c));
+    assert_float_equal(xrd_controls_screen_curve(&c), 2.f, 0.f);
+    /* C flips it and keeps the radius */
+    assert_true(xrd_controls_toggle_curve(&c));
+    assert_false(c.screen_curved);
+    assert_true(xrd_controls_screen_curve(&c) == 0.f);
+    assert_true(xrd_controls_toggle_curve(&c));
+    assert_float_equal(xrd_controls_screen_curve(&c), 2.f, 0.f);
+
+    /* off: C curves with radius 1; junk counts as off */
+    const float offs[] = {0.f, 0.5f, -1.f, 11.f, NAN};
+    for (size_t i = 0; i < sizeof offs / sizeof offs[0]; i++) {
+        xrd_controls_init_curve(&c, offs[i]);
+        assert_false(c.screen_curved);
+        assert_true(xrd_controls_screen_curve(&c) == 0.f);
+        assert_true(xrd_controls_toggle_curve(&c));
+        assert_float_equal(xrd_controls_screen_curve(&c), 1.f, 0.f);
+    }
+    /* a head-locked screen curves too */
+    assert_true(xrd_controls_toggle_lock(&c));
+    assert_float_equal(xrd_controls_screen_curve(&c), 1.f, 0.f);
+}
+
 static void layout_chosen_follows_cycle_and_swap(void **state)
 {
     (void)state;
@@ -311,6 +352,7 @@ int main(void)
         cmocka_unit_test(toggle_proj_exchanges_zooms),
         cmocka_unit_test(zoom_keys_change_only_active_zoom),
         cmocka_unit_test(mode_and_lock_toggles_are_flat_only),
+        cmocka_unit_test(curve_init_toggle_and_magnify),
         cmocka_unit_test(layout_chosen_follows_cycle_and_swap),
         cmocka_unit_test(init_format_defaults),
         cmocka_unit_test(swap_toggles),

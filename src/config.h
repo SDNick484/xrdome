@@ -21,19 +21,25 @@ typedef struct {
     float content_vfov;    /* default 180 */
     bool require_hwdec;
     bool windowed;         /* development: skip the 3840x1080 check, 1280x360 window */
+    bool sbs_switch;       /* --sbs-switch auto|off, [general] sbs_switch; default auto (true):
+                              ask XRLinuxDriver to switch 1080p glasses to SBS at start */
     char timing_log[4096]; /* empty = off */
     bool sync_after_swap;  /* diagnostic: glFinish() right after the swap */
     char mpv_profile[32];  /* --mpv-profile; default "fast"; "default" = apply no profile */
     char mpv_opts[16][256]; /* --mpv-opt KEY=VALUE, in order */
     int mpv_opt_count;
     char mpv_log[8];       /* --mpv-log LEVEL; default "warn"; "no" = none */
+    char mpv_scale[32];    /* --mpv-scale NAME, [general] mpv_scale: mpv's scaler for an
+                              enlarged flat picture; "" = off (default) */
     float convergence;     /* --convergence DEG, -5 .. 5, default 0 */
     xrd_filter filter;     /* --filter bilinear|bicubic, default bicubic */
     xrd_fbo_format fbo_format; /* --fbo-format rgb10|rgba8, default rgb10 */
     bool dither;           /* --dither on|off, default on */
+    bool deband;           /* --deband on|off, [general] deband; default off; set on mpv at open */
     unsigned explicit_flags; /* XRD_SET_ZOOM|LAYOUT|CONTENT_FOV|CONVERGENCE|PROJ|PACKING|ZOOM_MODE given on the command line */
     bool no_memory;        /* --no-memory */
     bool forget;           /* --forget */
+    bool resume;           /* --resume / --no-resume, [general] resume; default false */
     bool proj_auto;        /* --proj auto (default true) */
     xrd_proj proj;         /* valid when !proj_auto */
     bool layout_auto;      /* --layout auto (default true); layout valid when false */
@@ -42,6 +48,8 @@ typedef struct {
     float zoom_default;    /* VR180 zoom from device and ini, before --zoom */
     float flat_zoom;       /* [device.X] flat_zoom, default 1.5 */
     bool screen_locked;    /* --screen fixed|locked, [general] screen */
+    float screen_curve;    /* --screen-curve off|R, [general] screen_curve: 0 = off (default),
+                              else the radius, XRD_SCREEN_CURVE_MIN..MAX */
     bool mipmap;           /* --mipmap on|off, default on */
     char ffprobe[256];     /* [general] ffprobe, default "ffprobe" */
     /* development only (smoke test), not documented: */

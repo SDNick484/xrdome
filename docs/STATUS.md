@@ -10,7 +10,7 @@ Plan: `docs/superpowers/plans/2026-11-11-xrdome.md` (Tasks 0-9 done, Task 10 ope
 - Head tracking from XRLinuxDriver over OpenTrack UDP (port 4242); recenter keys; seek; audio.
 - Frame timing: 0.6% late frames with defaults (mpv profile `fast`, bicubic, 10-bit FBO + dither).
 - Options and keys: see README.
-- CI (GitHub Actions, Ubuntu 24.04) builds with `-Dwerror=true` and runs the whole suite, failing if either Xvfb smoke test skips.
+- CI (GitHub Actions, Ubuntu 24.04) builds with `-Dwerror=true` and runs the whole suite, failing if any of the three Xvfb smoke tests (`smoke`, `smoke_tracking`, `smoke_sbs`) skips.
 
 ## Per-file settings memory (merged in PR #1, `main` at `3358de5`)
 
@@ -164,15 +164,356 @@ Still unverified (spec section 11):
 - Not verified: an actual `emerge` build (needs root), `pkgcheck scan` (not installed). The owner
   runs the install commands from the README.
 
+## Debanding (`--deband`, `B`)
+- `--deband on|off` and `[general] deband = yes|no` (default off) set mpv's `deband` at open; `B`
+  toggles it through `mpv_set_property` and prints `deband: on|off`; `I` prints
+  `info: deband: on|off`, read back from mpv.
+- Decisions: not remembered per file (a viewing preference, like `F` and the sharpness choices,
+  not a property of the file); strength is left to `--mpv-opt deband-*`; `--mpv-opt deband=...`
+  is applied after `--deband` and wins; the key reads mpv's live value, so it follows it. The ini
+  also takes `on|off` and the flag only `on|off` (the issue writes `deband = yes`).
+- Verified in the sandbox: unit tests for flag, ini, precedence and errors; smoke B1 to B4 on
+  Mesa llvmpipe: a banded 8-bit gradient (32 bands, 4 levels apart) shows about 90 distinct
+  levels across a row with `--deband on` against 32 with `off` (mpv's deband adds its grain; the
+  smoothing of the steps is small at this size). llvmpipe only honours `deband` outside
+  `gpu-dumb-mode`, so B1 to B3 pass `--mpv-opt gpu-dumb-mode=no`; with xrdome's usual
+  `gpu-dumb-mode` on llvmpipe the frames with deband on and off are identical.
+- Not verified: the `B` key itself and the `I` line (the smoke test has no way to send keys); any
+  effect on the glasses; GPU cost.
+- Awaits the glasses: a timing pair, `--timing-log` each, `--deband off` against `on`, on the 4K
+  film and on the 8K VR180 file (missed vsyncs; the integrated GPU is the constraint, and
+  `fast` is the default profile for that reason); and the owner's judgement on a dark,
+  low-bitrate file, toggling `B` on a still frame.
+
+## Resume from the last position (`--resume`, issue #19)
+
+Opt-in: `--resume` / `--no-resume` and `[general] resume = yes|no` (default no). New record key
+`position` (seconds, three decimals), written at quit only while resume is on; without resume a
+record is what it was before (and a `position` already in it is kept, not used).
+
+Decisions:
+- Not saved or resumed in the first 30 s, nor in the last `min(5% of the file, 60 s)`
+  (`t >= 30 and t < d - min(0.05 d, 60)`, `xrd_resume_check`). Quitting outside that range removes
+  the record's `position`, so a finished film starts over.
+- Precedence: `--no-memory` beats everything (nothing read or written); `--no-resume` beats an ini
+  `resume = yes`; of `--resume` and `--no-resume` the last wins; an explicit
+  `--mpv-opt start=...` wins over the record's position (which is then not printed as restored),
+  and the position at exit is still saved.
+- `position` is not in the table that `apply`, `collect` and `equal` walk, so `settings: restored`
+  cannot mention it unless resume used it; `main.c` adds it by hand.
+- The start is mpv's `start` option, put before the user's `--mpv-opt`s. mpv only knows the duration
+  after the file loads, so for the past-the-end case the player checks on `FILE_LOADED`, prints one
+  `xrdome: note:` and seeks to 0. The `restored` line is printed before that, so it still shows
+  the position.
+- Duration or position unknown at quit (mpv returns none): the record's position is left as loaded.
+
+Verified in the sandbox (Ubuntu 24.04-like, mpv, software GL, Xvfb): unit tests for the record's
+parse and format, the near-start and near-end rule, and the precedence; smoke cases M13 to M19
+(no position without `--resume`; saved and restored with it, and playback begins at the saved
+position; `--no-resume` and `--no-memory` leave the record byte-identical; an explicit start wins;
+quitting in the first 30 s drops the position; a position past the end gives one note and starts at
+0).
+
+Awaits the glasses: resuming a real long film (hardware decode, seeking with `start` on a large
+file, how long mpv takes to reach the position on an 8K file), and a real quit with `Q` or the
+window close in the middle of a film (the sandbox quits by `--frames`).
+
+## Dimming and brightness on the Viture Pro XR (issue #22, research only, 2026-11-14)
+Question: can xrdome set the electrochromic dimming and the display brightness while XRLinuxDriver
+runs? Answer: not today, and not safely from a second process. Decision (b): the controls belong in
+the driver; an upstream feature request is drafted in the description of the PR that closes
+issue #22, for the owner to file. Nothing was sent to the glasses or the driver; all of this is
+from reading source, headers, docs and the installed binaries.
+
+Findings (XRLinuxDriver at `da303d2`, 2026-11-05, the commit the spec was checked against; the
+Viture SDK 2.4.0 headers it bundles, `include/sdks/viture_version.h`, brought in by its PR #138):
+- The SDK has both controls. `viture_protocol_public.h`: `xr_device_provider_set_film_mode(handle,
+  float voltage)` is the electrochromic film ("controls the tint level of the glasses lenses"),
+  binary on Gen1 (0.0 off, any non-zero on; One and Pro: range [0, 1]; Pro 2 has no film; Beast
+  [0, 8]). `xr_device_provider_set_brightness_level(handle, int level)` is display brightness,
+  [0, 8] on the Pro ([0, 6] on the One). `set_duty_cycle` (0 to 100) is a lower-level brightness
+  that Viture's page says most applications should not use. Viture's SDK page
+  (https://www.viture.com/developer/glasses-sdk/glasses) gives the same ranges. That the Pro XR
+  is the "Pro" row is an inference from the driver's market names, not checked on the glasses.
+- The driver uses neither. `src/devices/viture.c` calls no brightness, film or duty-cycle
+  function, and the installed `~/xr_driver/bin/xrDriver` imports none of them (`strings`).
+  `read_control_flags` in `src/state.c` knows `recenter_screen`, `recalibrate`, `sbs_mode`,
+  `force_quit` and `request_features`; plugins add `refresh_device_license` and the smooth-follow
+  keys. `device_driver_type` (`include/devices.h`) has SBS get/set only. So option (a), a control
+  file request the driver already supports, does not exist. The SDK's state-change callback
+  (which reports brightness and film changes) is not registered: the call is commented out
+  (`viture.c`, `// viture_register_state_callback_locked();`).
+- `libGlassSDK.so` is Rokid's SDK, not Viture's (`CMakeLists.txt` pairs it with
+  `src/devices/rokid.c`; `include/sdks/rokid.h` declares its `SetBrightness(handle, channel,
+  level)`). Its brightness calls do not apply to the Viture.
+- Controls and the IMU share one connection. `libglasses.so` (installed copy) has a statically
+  built libusb and opens the glasses' "MCU" and "IMU" USB interfaces through usbfs (its strings:
+  `No MCU device found`, `No IMU device found`, `libusb_claim_interface`). Viture's page says one
+  pair of glasses exposes several USB interfaces (IMU, MCU, audio, camera) and that a handle
+  "represents one open connection to one physical device". Display mode, brightness and film are
+  MCU commands sent through the provider the driver already holds.
+- A second process cannot get those interfaces. While one process has claimed an interface
+  through usbfs, another's `libusb_claim_interface` gets `LIBUSB_ERROR_BUSY`, and libusb refuses
+  to detach an interface whose driver is `usbfs` (libusb `libusb/os/linux_usbfs.c`,
+  `claim_interface` and `op_detach_kernel_driver`, master `d3937ff`). What `create` and
+  `initialize` do on the device before that fails is not documented (`initialize` can fail with
+  `VITURE_GLASSES_ERROR_SERIAL_FETCH`, so it talks to the glasses), and the SDK documents no
+  shared access. So a `dlopen` backend in xrdome (option c) would at best fail with BUSY and at
+  worst disturb the driver's IMU stream. This confirms the spec's note (section 4.1) that only
+  one process can own the glasses.
+- The driver's SBS switch is the model for an upstream change: `handle_control_flags_update`
+  (`src/driver.c`) calls `device_set_sbs_mode_func`, which takes `viture_connection_mutex` and
+  calls the SDK on the driver's own provider. It stops the IMU stream first because
+  `switch_dimension` "fails if we're still streaming IMU data"; whether brightness and film
+  commands need the same is not documented.
+- No request for this exists upstream: searching wheaney/XRLinuxDriver issues and PRs for
+  brightness, dimming, dim, film mode and electrochromic found nothing relevant (2026-11-14).
+
+Why (b), not (c) or (d): the safe path is one owner of the USB connection, and the driver is that
+owner. The change upstream is small and follows an existing pattern (the SBS request). Option (d)
+would leave a reachable fix unasked. If the request lands, xrdome's side is a few one-shot control
+file writes through issue #18's writer: `D` toggles dimming, `Shift+[` / `Shift+]` step brightness
+(keys reserved, not bound), stepping from the level the driver reports in its state file.
+
+Not checked, and needs the glasses or the maintainer: which SDK device type the Pro XR reports
+(Gen1 is assumed from the market name); whether film and brightness commands work while the IMU
+streams; whether the glasses keep the levels across a reconnect.
+
+## Curved screen (issue #20)
+
+`--screen-curve off|R`, `[general] screen_curve` and the `C` key bend the flat screen into part
+of an upright cylinder, so the edges of a large screen are as far away as its centre (like
+XRLinuxDriver's `--curved-display`). Default `off`, which draws exactly the plane as before.
+
+Decisions:
+- R is the cylinder's radius in screen distances, 1 to 10. The cylinder touches the flat screen
+  along its centre column, so its axis is on the line through the eye and the screen's centre,
+  R - 1 behind the eye: R = 1 puts the axis through the eye and every column at the same
+  distance, and a larger R bends less, towards the plane. A radius rather than an arc angle
+  because the arc's angle then follows from the zoom (the arc keeps the flat width), and one
+  number keeps the same shape at every zoom; radii under 1 (the eye outside the cylinder) are
+  refused.
+- The arc is as long as the flat screen is wide, and the height is unchanged: the same picture
+  at the same zoom, with u along the arc and v by height. Columns stay straight; the top and
+  bottom edges bow outwards. Seen from the eye a curved screen is a little wider than the flat
+  one: at zoom 1 and R = 1 a 16:9 screen spans 39.3 degrees, not 37.9, so its sides sit just
+  outside the view (`I` prints the angle between the arc's ends).
+- Magnify mode draws the screen flat: there the screen stays at its zoom-1 size, which fits the
+  display, and zoom narrows the view, so there is no large screen to bend. With a curve on, `Z`
+  therefore also switches between curved and flat, and the two modes no longer show the same
+  picture away from the centre.
+- Head-locked screens curve the same way (the mapping is in head space when locked).
+- Nothing beside or behind the viewer is drawn, as for the plane: an arc reaching past 90 degrees
+  stops there (the widest, zoom 4 with R = 1, reaches 79 degrees).
+- `xrd_minify_ratio` is unchanged: the cylinder touches the plane at the centre, where u and v
+  change at the plane's rates (a unit test measures them on the curved mapping), and they only
+  fall away from the centre, so the centre stays the worst case for the mipmap decision.
+- The eye-edge and mipmap clamp margins act on uv after the mapping, so the curved mapping needs
+  none of its own; the seam and trilinear eye-separation render tests run again on a curved
+  screen and pass.
+- `C` is not remembered per file, like the screen lock: it depends on the viewer, not the film.
+  With `--screen-curve off`, `C` curves with R = 1.
+
+What the sandbox verified (unit tests and both Xvfb smoke tests, software GL, this worktree):
+- `xrd_flat_curve_dir_to_uv` (the C mirror): centre, the arc's ends, top and bottom, beside and
+  behind, junk input; `off` gives the plane's result bit for bit.
+- The shader against the C mirror on every pixel of both eyes, for radii 0, 1, 2.5 and 10 at two
+  zooms and four head poses (a texture that encodes its own uv).
+- A dumped flat2d frame at `--zoom 0.9 --screen-curve 1.0`: the side borders each in one column,
+  the top and bottom borders 6 rows nearer the frame's edge at the sides than at the centre;
+  `off` and magnify mode give straight borders and the frame of a run without the flag.
+
+Hardware check (not done; the owner, Viture Pro XR): play a flat film at zoom 1.5 and 2.5 and
+press `C` to compare curved and flat: whether the curved screen is more comfortable to look
+around, whether the bowed top and bottom edges look natural or distracting, whether R = 1 suits
+or a larger `--screen-curve` (say 2) is better, and that `C`, `Z` and `L` print and act as the
+README says. Unverified until then: everything about comfort; the look of a curved screen in 3D
+(half SBS); frame timing with the curve on (the shader adds a square root and an arctangent per
+pixel; not measured).
+
+## Automatic SBS switch (issue #18)
+
+When no 3840x1080 output is found at start, xrdome asks XRLinuxDriver to switch the glasses to
+side-by-side, waits for the output and plays; at exit it switches them back. `--sbs-switch
+auto|off`, ini `[general] sbs_switch`, default `auto`. Code: `src/driver/xrdriver.c` (the driver's
+files: state parsing, request writing; nothing SBS-specific beyond the request text, so other
+requests can reuse it), `src/display/sbs.c` (the decision, the wait, switching back), wired in
+`src/main.c` before the window opens. README: Flags, Config file, Switching to SBS.
+
+Request format, from XRLinuxDriver's source at `da303d2` (2026-11-05), read, not copied:
+`sbs_mode=enable` or `sbs_mode=disable`, one `key=value` line, written to
+`/dev/shm/xr_driver_control` (file names `src/state.c` lines 31-33; parsing in
+`read_control_flags`, lines 73-107, the `sbs_mode` values `unset`, `enable` and `disable` at
+83-92). The driver reads the file on inotify `IN_CLOSE_WRITE` of that name, acts on
+it only while glasses are connected and only when the mode differs, then deletes it
+(`src/driver.c` `handle_control_flags_update` 561-590 and `monitor_control_flags_file_thread_func`
+593-649). State: `heartbeat=` (epoch seconds, rewritten every second by `manage_state_thread_func`,
+`src/driver.c` 541-559) and, only while glasses are connected, `sbs_mode_supported=` and
+`sbs_mode_enabled=` (`src/state.c` `write_state` 43-71).
+
+Decisions:
+- Ask only when the state file's heartbeat is within 5 s of now (either way), it lists glasses,
+  `sbs_mode_supported=true` and `sbs_mode_enabled=false`. A stale file (the driver crashed, as on
+  2026-11-13) never gets a request, which would otherwise wait in `/dev/shm` for the driver's next
+  start.
+- The request is written in place (`O_CREAT|O_TRUNC|O_NOFOLLOW`), not written to a temporary file
+  and renamed: the driver watches for the close of a write to that name, and a rename is a
+  different inotify event.
+- The wait lists the outputs again by re-initialising SDL's video subsystem (before any window
+  exists), at least every 0.2 s and at every SDL event, for up to 8 s. SDL 2 keeps a display's old
+  mode when an existing output changes mode ("FIXME" in its XRandR output-change handler), so
+  pumping events alone is not enough on hardware; there is no fixed sleep.
+- Success prints `display: switched the glasses to SBS in N.N s` (the time, to tune the 8 s on
+  hardware). Failure keeps the old error line, then `xrdome: automatic SBS switch: <reason>`, then
+  the `outputs:` line.
+- Switch back at exit only when xrdome switched the glasses itself, so the desktop mirror works
+  again; not after a disconnect during playback (the glasses come back in 1080p, and a request
+  the driver cannot act on would stay pending in it), not when the driver has stopped. The window
+  is destroyed first.
+- After a timeout (or quitting during the wait) xrdome does not ask to switch back: if the
+  glasses switch late, the next run finds them in SBS.
+- `--output NAME` also qualifies when the named output is 1920x1080; a named output of another
+  size (the laptop panel) does not.
+- `--sbs-switch off` neither reads nor writes the driver's files and prints exactly what xrdome
+  printed before. `--windowed` never asks.
+- Tests never reach `/dev/shm`: the directory comes from `XRDOME_XR_DRIVER_DIR` (default
+  `/dev/shm`), which the unit tests and all three smoke scripts set to a temporary directory.
+
+What the sandbox verified (owner's laptop, software GL, Xvfb, and CI's Ubuntu 24.04 runs the
+same): unit tests `test_xrdriver` (state parsing: connected, no glasses, enabled, unsupported,
+bad values, a long license line; heartbeat window; request text; the written file, its
+truncation, refusal of a symlink) and `test_sbs` (the decision for each state, the reasons, which
+selection failures qualify, and the wait with fake outputs and clock: found after a few polls,
+timeout exactly at the deadline, a failed listing retried, quit while waiting, nothing written in
+each refusing state; switching back only to a running driver). Smoke `smoke_sbs` (S1-S5), with
+`tests/fake_xr_driver.py` standing in for the driver and Xvfb started at 3840x1080 with its
+output turned off at 1920x1080 (`-noreset`; Xvfb's RandR allows growing back only up to the
+starting size): S1 the request is written, the fake grows the screen to 3840x1080, playback runs
+full screen there (the dumped frame is 3840x1080) and `sbs_mode=disable` is written at exit; S2
+`--sbs-switch off` writes nothing and prints only the old two lines; S3 a stale heartbeat writes
+nothing and says why; S4 a driver that never switches gives the 8 s timeout line and no switch
+back; S5 `--windowed` writes nothing. `smoke` case 3 (no driver at all) checks the reason line.
+
+Awaits the glasses (hardware check, after merge; all of the real switch is unverified):
+1. Reconnect the Viture Pro XR so it is in 1080p, start XRLinuxDriver, check
+   `/dev/shm/xr_driver_state` has a current `heartbeat=`, `sbs_mode_supported=true` and
+   `sbs_mode_enabled=false`.
+2. `./build/xrdome --no-memory --frames 600 file.mp4`: expect
+   `display: switched the glasses to SBS in N.N s` and normal playback; note N (is 8 s enough on
+   Xorg/MATE?), and whether the picture lands on the glasses (MATE may place the new 3840x1080
+   output elsewhere, or need a moment to settle).
+3. At exit: `display: asked XRLinuxDriver to switch the glasses back to 1080p`, and the desktop
+   mirror returns.
+4. Run again with the glasses already in SBS: no request, plays at once.
+5. Stop the driver and run with the glasses in 1080p: the old error, then
+   `automatic SBS switch: XRLinuxDriver is not running (...)`.
+6. `--sbs-switch off`: the old error only, nothing in `/dev/shm/xr_driver_control`.
+7. Unplug during playback: no switch-back request (`ls /dev/shm/xr_driver_control` stays empty
+   after exit).
+
+## mpv scaling of enlarged flat video (`--mpv-scale`, issue #23)
+
+`--mpv-scale off|NAME` (ini `mpv_scale`, default `off`, which keeps the previous behaviour): while a
+flat picture is enlarged (`xrd_minify_ratio` < 1) and mipmaps are not in use, mpv draws each frame
+into a texture of the picture's size on the display, with its own scaler `NAME` and
+`keepaspect=no`, and the eye pass samples it at about 1:1. Shrunk pictures (mipmaps) and VR180 keep
+the coded texture. `I` prints `info: mpv scale: ...`; the `video texture:` line ends in
+`mpv-scale=NAME` or `mpv-scale=unused` and is printed again on each resize.
+
+Decisions:
+- Texture size (`xrd_mpv_scale_size`, `src/video/mpv_scale.c`, a pure function of the flat
+  geometry, the layout, the coded size and the eye's viewport): each eye gets the screen's size in
+  display pixels at the view centre, `half_w / tan_h * eye_w` by `half_h / tan_v * eye_h`, rounded;
+  side by side and top-bottom keep two such eyes on the split axis (so even there). Used only
+  when that is larger than the coded eye on both axes. Cap: at most 3840x2160 texels for the whole
+  texture (what mpv already draws for a 4K film) and the GPU's largest texture, scaling both axes
+  by the same factor; if the cap leaves an axis at or below the coded size, the coded texture is
+  kept. There is no cap on the enlargement factor itself: the texel count is what costs.
+- Debounce (`xrd_size_debounce`): the first size applies at once (so the first frame and the
+  `video texture:` line already have it); after that a new size takes effect once it has been
+  asked for unchanged for 250 ms, so a held `]` reallocates once.
+- No black or half-drawn frame on a resize: the player reallocates the texture in place and has
+  mpv draw the current frame again (`mpv_render_context_render` with no new frame redraws the
+  current one, also on mpv 0.37 per its `vo_libmpv.c`) before the eye pass reads it; a coded-size
+  change keeps a requested size, since mpv scales into any size.
+- Eye pass at about 1:1: the `F` filter as before (Catmull-Rom by default). At 1:1 with the
+  picture off the texel grid by a fraction of a pixel, which head motion makes the normal case,
+  bilinear keeps 0.71 of the contrast of a 4-pixel period at half a pixel's offset and 0.50 of a
+  3-pixel period; Catmull-Rom keeps 0.88 and 0.69 (computed from the kernels, not seen on the
+  glasses). It costs no more than today since the eye pass runs per display pixel.
+- `scale` is set after `mpv_initialize` with `mpv_set_property_string`: before it, mpv rejects a
+  bad name without logging why. `cscale` is left unset, so it follows `scale` (mpv 0.37's default,
+  checked in its `video.c`; the `fast` profile sets `scale` and `dscale` only). An `--mpv-opt
+  scale=` wins and the flag's scale is then not set.
+- VR180 is left alone. With the Viture Pro's 1920x1080 eyes over 37.9 x 21.9 degrees, any VR180
+  file would need about 17600x8800 texels (154 million) to be 1:1 at the centre: 2.3x the coded
+  size for 7680x3840, 4.1x for 4320x2160, 6.1x for 2880x1440. The 3840x2160 cap allows 0.53x,
+  0.94x and 1.41x of the coded size, so a fixed oversize would buy nothing for 4K and 8K files and
+  little for smaller ones, while the visible area is about 2.6% of each eye. Not worth a
+  follow-up; a better eye-pass filter (#25) is the way for VR180.
+- Side by side and top-bottom go through mpv as one picture, so mpv's kernel reaches across
+  the eyes' shared edge by its radius less half a pixel (2.5 source pixels for `spline36`,
+  0.5 for the bilinear of `gpu-dumb-mode`). The eye pass's clamp keeps its own filter on its
+  side, but not mpv's. Today's path already shares the 4:2:0 chroma at that edge (the encode
+  and mpv's chroma upsampling): a 480x270 half-SBS pattern with a 1-pixel white border shows
+  the other eye in its last two columns without `--mpv-scale` and three with it. The smoke
+  patterns of a given size therefore get a 4-pixel white border (`tools/make_pattern.sh`; the
+  default patterns are byte for byte as before), as F4's 960-wide halves already have. Not
+  guarded further: in a 3D film both edges show the same part of the scene. If the owner sees a
+  seam, the eye pass can clamp each eye that many texels (times the enlargement) away from it.
+- What xrdome's own filter still enlarges once this lands: all of VR180 (about 2 to 6x); flat video
+  with `--mpv-scale off` (the default); flat video beyond the cap (the part above it, e.g. 1080p
+  half SBS at zoom 1.5); pictures enlarged on one axis and shrunk on the other (mipmaps); and the
+  250 ms after a zoom change before the new size settles. These are what #25 and #26 still act on.
+
+Verified in the sandbox (llvmpipe, mpv in `gpu-dumb-mode`, which ignores the scaler's name and
+enlarges bilinearly, so the look of `spline36` was not seen): unit tests for the size (mono, half
+and full SBS, top-bottom, odd sizes, both caps, VR180 and bad input, agreement with
+`xrd_minify_ratio`) and the debounce; smoke cases V1 to V7 (a 480x270 picture at zoom 1.5 gets a
+960x540 texture and the same picture as without the flag; zoom 1.0 from the ini key fills the eye
+exactly; zoom 0.5 keeps the coded texture with every trilinear draw checked; half SBS gets
+1280x360 and each viewport shows only its own eye; subtitles appear where F6 has them; an unknown name exits 1
+with mpv's reason; VR180 keeps the coded texture). By hand with XTest key presses under Xvfb
+(not in the suite): `]` three times gave one resize to 1278x719 after the presses, zoom changes
+while paused resized with the frame redrawn, zooming out to 0.58 went back to the coded texture
+with trilinear filtering, zoom 4 gave 2560x1440 (the 640x360 window's eye), `P` to VR180 went
+back to the coded texture, and a probe of every drawn frame found no black one. mpv's message
+for an unknown name was seen on libmpv 2.6 only; on 0.37 its source logs `No scaler named
+'...' found!` on the same path.
+
+Hardware check (owner, after merge):
+1. Timing on the 1080p AV1 film at the default zoom 1.5, AC power, `--no-memory --frames 3600`,
+   a `--timing-log` each, no keys: `--mpv-scale off`, `--mpv-scale spline36`,
+   `--mpv-scale ewa_lanczossharp`; the missed vsyncs of each from the `timing:` line. If cheap,
+   the same at `--zoom 2.0` (a 3840x2160 texture).
+2. The owner's judgement of the look on a still frame and in motion: `off` (Catmull-Rom from
+   1920x1080) against `spline36` against `ewa_lanczossharp`, and `F` with each.
+3. Subtitles on a flat 2D film with `--mpv-scale spline36`: in the same place and size as
+   without it, and sharper or not.
+4. `I` shows `info: mpv scale: spline36, 1920x1080 to 2880x1620` at zoom 1.5, and `[` `]`
+   change the `video texture:` line once per burst with no black flash.
+
+## XREAL Air 2 Pro (owner, 2026-11-14, `main` at `bb95090`)
+- VR180 and flat files played on the XREAL Air 2 Pro with head tracking, "pretty much the same" as
+  on the Viture Pro XR, both with `--device xreal-air2pro` and without it.
+- Without `--device` xrdome uses the Viture's diagonal FOV (43 degrees) on the XREAL's 45, so the
+  picture is drawn about 4% smaller than intended and moves slightly less than the head turns;
+  nothing was reported about that difference. `--device xreal-air2pro` is the correct setting.
+- Not covered by this run: yaw drift over 5 minutes, EDID/`xrandr --props` capture, convergence,
+  per-file settings, and the features in the open PRs #28-#34 (this was `main`).
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship
   `libglasses.so` or XRLinuxDriver source. A Viture SDK backend, if added, uses dlopen.
+- No second process opens the glasses while XRLinuxDriver runs (it holds their USB interfaces).
+  Device controls such as dimming and brightness go through the driver (issue #22).
 - mpv default profile is `fast`; the default mpv render path saturated the integrated GPU.
 - Convergence is demoted to the `--convergence` flag (still remembered per file); the `,` `.` and
   `/` keys are removed. Reason: on the Viture Pro XR up to 2 deg made no significant difference
   and 5 deg put the scene out of focus, while zooming out is what fuses close subjects. The flag
-  stays because the finding is one viewer on one pair of glasses and the XREAL Air 2 Pro is untested.
+  stays because the finding is one viewer on one pair of glasses and convergence was not tried on
+  the XREAL Air 2 Pro.
 - Source bitrate dominates picture quality (20 Mbit/s H.264 looked far better than 2.5 Mbit/s AV1).
 
 ## Findings from hardware testing
@@ -205,20 +546,24 @@ Still unverified (spec section 11):
   calibrated (see README, Tracking notes).
 
 ## Open
-- Task 10: XREAL Air 2 Pro check (`--device xreal-air2pro`), yaw drift over 5 minutes on both
-  glasses, EDID/`xrandr --props` capture, README hardware notes.
+- Task 10: the XREAL Air 2 Pro plays (2026-11-14, see its section); still open: yaw drift over
+  5 minutes on both glasses, EDID/`xrandr --props` capture, README hardware notes.
 - Untested: unplug behaviour during playback (a disconnect between runs happened on 2026-11-13,
   see Findings), automatic 8-bit FBO fallback.
 - Unanalysed: the remaining 0.6-1.3% late frames.
-- Per-file settings: the items listed as not covered above.
+- Per-file settings: the items listed as not covered above, and resume (see its section).
 - Recenter: `Shift+R` levels a tilted picture (2026-11-14). A gravity-level start or a
   "level" key is optional now.
 - `no pose data` after a glasses reconnect: once (2026-11-13) it was XRLinuxDriver crashing at
   connect, and restarting the driver restored it; the earlier case was not checked.
-- The player does not switch the glasses to side-by-side mode itself; after a reconnect the
-  owner has to do it by hand.
+- Automatic SBS switch (issue #18): the hardware check in its section above; the real switch,
+  its timing and the switch back at exit are unverified on the glasses.
 - Flat projection and format detection, after the hardware run: shimmer with and without
   mipmaps on content with fine detail; a real half-SBS film, and `M` into half SBS from mono;
   subtitles on the glasses; top-bottom and full SBS if such files turn up.
+- Dimming and brightness keys wait on an XRLinuxDriver feature (control-file requests for
+  brightness and the electrochromic film); the request is drafted in issue #22's PR for the owner
+  to file. Keys `D` and `Shift+[` / `Shift+]` are reserved for it.
 - Candidate next features, in suggested order: per-eye HUD (takes over `?` and `I`, which print
-  to the terminal for now), Viture SDK backend, GTK launcher.
+  to the terminal for now), Viture SDK backend (only in place of XRLinuxDriver, not beside it:
+  see the dimming findings), GTK launcher.

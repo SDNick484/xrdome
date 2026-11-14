@@ -1,6 +1,7 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <setjmp.h>
+#include <stdio.h>
 #include <string.h>
 #include <cmocka.h>
 
@@ -197,6 +198,10 @@ static void settings_take_zooms_by_projection(void **state)
     xrd_session_controls(&ss, &cfg, &c);
     assert_float_equal(c.zoom, 1.5f, TOL);
     assert_float_equal(c.zoom_other, cfg.zoom_default, TOL);
+    assert_true(xrd_controls_screen_curve(&c) == 0.f); /* --screen-curve off by default */
+    cfg.screen_curve = 1.5f;
+    xrd_session_controls(&ss, &cfg, &c);
+    assert_float_equal(xrd_controls_screen_curve(&c), 1.5f, TOL);
     xrd_file_settings s;
     xrd_session_settings(&c, 180.0f, 180.0f, &s);
     assert_float_equal(s.flat_zoom, 1.5f, TOL);
@@ -265,6 +270,105 @@ static void given_from_record(void **state)
     assert_int_equal(rec.packing, XRD_PACKING_HALF);
 }
 
+static xrd_config resume_cfg(bool resume)
+{
+    xrd_config c;
+    xrd_config_defaults(&c);
+    c.resume = resume;
+    return c;
+}
+
+static void resume_start_needs_resume_and_a_position(void **state)
+{
+    (void)state;
+    xrd_filestate rec = record(XRD_SET_POSITION);
+    rec.v.position = 3723.0;
+    double pos = 0.0;
+    xrd_config c = resume_cfg(true);
+    assert_true(xrd_session_resume_start(&c, &rec, &pos));
+    assert_float_equal(pos, 3723.0, 1e-9);
+    c = resume_cfg(false); /* off by default */
+    assert_false(xrd_session_resume_start(&c, &rec, &pos));
+    c = resume_cfg(true);
+    assert_false(xrd_session_resume_start(&c, NULL, &pos));
+    xrd_filestate none = record(XRD_SET_ZOOM);
+    assert_false(xrd_session_resume_start(&c, &none, &pos));
+}
+
+static void resume_start_near_start_is_ignored(void **state)
+{
+    (void)state;
+    xrd_config c = resume_cfg(true);
+    xrd_filestate rec = record(XRD_SET_POSITION);
+    double pos = 0.0;
+    rec.v.position = 29.9;
+    assert_false(xrd_session_resume_start(&c, &rec, &pos));
+    rec.v.position = 30.0;
+    assert_true(xrd_session_resume_start(&c, &rec, &pos));
+}
+
+static void resume_no_memory_beats_resume(void **state)
+{
+    (void)state;
+    xrd_config c = resume_cfg(true);
+    c.no_memory = true;
+    xrd_filestate rec = record(XRD_SET_POSITION);
+    rec.v.position = 100.0;
+    double pos = 0.0;
+    assert_false(xrd_session_resume_enabled(&c));
+    assert_false(xrd_session_resume_start(&c, &rec, &pos));
+    assert_int_equal(xrd_session_resume_save(&c, 100.0, 3600.0, &pos), -1);
+}
+
+static void resume_no_resume_beats_ini_resume(void **state)
+{
+    (void)state;
+    /* xrd_config.resume is the merged ini and flags: --no-resume leaves false */
+    xrd_config c = resume_cfg(false);
+    xrd_filestate rec = record(XRD_SET_POSITION);
+    rec.v.position = 100.0;
+    double pos = 0.0;
+    assert_false(xrd_session_resume_start(&c, &rec, &pos));
+    assert_int_equal(xrd_session_resume_save(&c, 100.0, 3600.0, &pos), -1);
+}
+
+static void resume_explicit_start_wins(void **state)
+{
+    (void)state;
+    xrd_config c = resume_cfg(true);
+    xrd_filestate rec = record(XRD_SET_POSITION);
+    rec.v.position = 100.0;
+    double pos = 0.0;
+    snprintf(c.mpv_opts[0], sizeof c.mpv_opts[0], "hwdec=no");
+    c.mpv_opt_count = 1;
+    assert_false(xrd_session_has_explicit_start(&c));
+    assert_true(xrd_session_resume_start(&c, &rec, &pos));
+    snprintf(c.mpv_opts[1], sizeof c.mpv_opts[1], "start=5");
+    c.mpv_opt_count = 2;
+    assert_true(xrd_session_has_explicit_start(&c));
+    assert_false(xrd_session_resume_start(&c, &rec, &pos));
+    /* a similar key is not an explicit start */
+    snprintf(c.mpv_opts[1], sizeof c.mpv_opts[1], "start-time=5");
+    assert_false(xrd_session_has_explicit_start(&c));
+    /* an explicit start still lets the position at quit be saved */
+    snprintf(c.mpv_opts[1], sizeof c.mpv_opts[1], "start=5");
+    assert_int_equal(xrd_session_resume_save(&c, 100.0, 3600.0, &pos), 1);
+}
+
+static void resume_save_rules(void **state)
+{
+    (void)state;
+    xrd_config c = resume_cfg(true);
+    double pos = -1.0;
+    assert_int_equal(xrd_session_resume_save(&c, 100.5, 3600.0, &pos), 1);
+    assert_float_equal(pos, 100.5, 1e-9);
+    assert_int_equal(xrd_session_resume_save(&c, 10.0, 3600.0, &pos), 0);   /* first 30 s */
+    assert_int_equal(xrd_session_resume_save(&c, 3560.0, 3600.0, &pos), 0); /* last 60 s */
+    assert_int_equal(xrd_session_resume_save(&c, 3539.0, 3600.0, &pos), 1);
+    assert_int_equal(xrd_session_resume_save(&c, 100.0, -1.0, &pos), -1);   /* unknown duration */
+    assert_int_equal(xrd_session_resume_save(&c, -1.0, 3600.0, &pos), -1);  /* unknown position */
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -279,6 +383,12 @@ int main(void)
         cmocka_unit_test(settings_take_zooms_by_projection),
         cmocka_unit_test(given_from_flags),
         cmocka_unit_test(given_from_record),
+        cmocka_unit_test(resume_start_needs_resume_and_a_position),
+        cmocka_unit_test(resume_start_near_start_is_ignored),
+        cmocka_unit_test(resume_no_memory_beats_resume),
+        cmocka_unit_test(resume_no_resume_beats_ini_resume),
+        cmocka_unit_test(resume_explicit_start_wins),
+        cmocka_unit_test(resume_save_rules),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

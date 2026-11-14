@@ -71,6 +71,22 @@ static int set_string(const char *what, char *dst, size_t dstlen, const char *sr
     return 0;
 }
 
+/* --mpv-scale and mpv_scale: off, or an mpv scaler name (mpv checks the name
+ * when it starts). */
+static int parse_mpv_scale(const char *what, const char *s, char *dst, size_t dstlen,
+                           char *err, size_t errlen)
+{
+    if (s[0] == '\0') {
+        set_err(err, errlen, "%s: empty value (expected off or an mpv scaler name)", what);
+        return -1;
+    }
+    if (!strcmp(s, "off")) {
+        dst[0] = '\0';
+        return 0;
+    }
+    return set_string(what, dst, dstlen, s, err, errlen);
+}
+
 static int parse_layout(const char *s, xrd_layout *out, char *err, size_t errlen)
 {
     if (!xrd_value_layout(s, out)) {
@@ -92,6 +108,60 @@ static int parse_screen(const char *what, const char *s, bool *locked, char *err
         return -1;
     }
     return 0;
+}
+
+/* "on" or "off", and "yes" or "no" when yes_no (the ini, mpv's spelling), into
+ * *out. what names the key or flag. */
+static int parse_onoff(const char *what, const char *s, bool yes_no, bool *out, char *err,
+                       size_t errlen)
+{
+    if (!strcmp(s, "on") || (yes_no && !strcmp(s, "yes")))
+        *out = true;
+    else if (!strcmp(s, "off") || (yes_no && !strcmp(s, "no")))
+        *out = false;
+    else {
+        set_err(err, errlen, "%s: unknown value '%s' (expected on or off)", what, s);
+        return -1;
+    }
+    return 0;
+}
+
+/* "auto" or "off" into *on. what names the flag or key. */
+static int parse_sbs_switch(const char *what, const char *s, bool *on, char *err, size_t errlen)
+{
+    if (!strcmp(s, "auto"))
+        *on = true;
+    else if (!strcmp(s, "off"))
+        *on = false;
+    else {
+        set_err(err, errlen, "%s: unknown value '%s' (expected auto or off)", what, s);
+        return -1;
+    }
+    return 0;
+}
+
+/* "off" (0) or a radius in XRD_SCREEN_CURVE_MIN..MAX into *curve. what names
+ * the flag or key. Leaves *curve untouched on error. */
+static int parse_screen_curve(const char *what, const char *s, float *curve, char *err,
+                              size_t errlen)
+{
+    if (!strcmp(s, "off")) {
+        *curve = 0.f;
+        return 0;
+    }
+    float v;
+    switch (xrd_value_ranged(s, XRD_SCREEN_CURVE_MIN, XRD_SCREEN_CURVE_MAX, &v)) {
+    case XRD_VALUE_OK:
+        *curve = v;
+        return 0;
+    case XRD_VALUE_RANGE:
+        set_err(err, errlen, "%s: %s is out of range (off, or %g to %g)", what, s,
+                (double)XRD_SCREEN_CURVE_MIN, (double)XRD_SCREEN_CURVE_MAX);
+        return -1;
+    default:
+        set_err(err, errlen, "%s: '%s' is neither off nor a number", what, s);
+        return -1;
+    }
 }
 
 /* "HxV" in degrees, each within XRD_CONTENT_FOV_MIN..MAX. Leaves *h and *v
@@ -128,6 +198,7 @@ void xrd_config_defaults(xrd_config *c)
     c->filter = XRD_FILTER_BICUBIC;
     c->fbo_format = XRD_FBO_RGB10;
     c->dither = true;
+    c->deband = false;
     c->proj_auto = true;
     c->proj = XRD_PROJ_HEQUIRECT;
     c->layout_auto = true;
@@ -136,7 +207,9 @@ void xrd_config_defaults(xrd_config *c)
     c->zoom_default = 1.0f;
     c->flat_zoom = 1.5f;
     c->screen_locked = false;
+    c->screen_curve = 0.f;
     c->mipmap = true;
+    c->sbs_switch = true;
     copy_str(c->ffprobe, sizeof c->ffprobe, "ffprobe");
 }
 
@@ -244,8 +317,22 @@ static int ini_read(xrd_config *c, const char *path, bool *device_found, char *e
                               sizeof msg);
         } else if (sec == SEC_GENERAL && !strcmp(key, "screen")) {
             rc = parse_screen("screen", val, &c->screen_locked, msg, sizeof msg);
+        } else if (sec == SEC_GENERAL && !strcmp(key, "deband")) {
+            rc = parse_onoff("deband", val, true, &c->deband, msg, sizeof msg);
+        } else if (sec == SEC_GENERAL && !strcmp(key, "resume")) {
+            if (!xrd_value_yesno(val, &c->resume)) {
+                snprintf(msg, sizeof msg, "resume: expected yes or no, got '%s'", val);
+                rc = -1;
+            }
+        } else if (sec == SEC_GENERAL && !strcmp(key, "screen_curve")) {
+            rc = parse_screen_curve("screen_curve", val, &c->screen_curve, msg, sizeof msg);
+        } else if (sec == SEC_GENERAL && !strcmp(key, "sbs_switch")) {
+            rc = parse_sbs_switch("sbs_switch", val, &c->sbs_switch, msg, sizeof msg);
         } else if (sec == SEC_GENERAL && !strcmp(key, "ffprobe")) {
             rc = set_string("ffprobe", c->ffprobe, sizeof c->ffprobe, val, msg, sizeof msg);
+        } else if (sec == SEC_GENERAL && !strcmp(key, "mpv_scale")) {
+            rc = parse_mpv_scale("mpv_scale", val, c->mpv_scale, sizeof c->mpv_scale, msg,
+                                 sizeof msg);
         } else {
             snprintf(msg, sizeof msg, "unknown key '%s'", key);
             rc = -1;
@@ -273,8 +360,9 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
            OPT_CONTENT_FOV, OPT_HWDEC, OPT_WINDOWED, OPT_TIMING, OPT_SYNC, OPT_FRAMES,
            OPT_MIPMAP_FORCE, OPT_MIPMAP_CHECK, OPT_DUMP,
            OPT_MPV_PROFILE, OPT_MPV_OPT, OPT_MPV_LOG, OPT_CONVERGENCE, OPT_FILTER,
-           OPT_FBO_FORMAT, OPT_DITHER, OPT_NO_MEMORY, OPT_FORGET,
-           OPT_PACKING, OPT_ZOOM_MODE, OPT_SCREEN, OPT_MIPMAP };
+           OPT_FBO_FORMAT, OPT_DITHER, OPT_NO_MEMORY, OPT_FORGET, OPT_RESUME, OPT_NO_RESUME,
+           OPT_PACKING, OPT_ZOOM_MODE, OPT_SCREEN, OPT_MIPMAP, OPT_DEBAND, OPT_SCREEN_CURVE,
+           OPT_SBS_SWITCH, OPT_MPV_SCALE };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
         {"layout", required_argument, NULL, OPT_LAYOUT},
@@ -294,16 +382,22 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"mpv-profile", required_argument, NULL, OPT_MPV_PROFILE},
         {"mpv-opt", required_argument, NULL, OPT_MPV_OPT},
         {"mpv-log", required_argument, NULL, OPT_MPV_LOG},
+        {"mpv-scale", required_argument, NULL, OPT_MPV_SCALE},
         {"convergence", required_argument, NULL, OPT_CONVERGENCE},
         {"filter", required_argument, NULL, OPT_FILTER},
         {"fbo-format", required_argument, NULL, OPT_FBO_FORMAT},
         {"dither", required_argument, NULL, OPT_DITHER},
+        {"deband", required_argument, NULL, OPT_DEBAND},
         {"no-memory", no_argument, NULL, OPT_NO_MEMORY},
         {"forget", no_argument, NULL, OPT_FORGET},
+        {"resume", no_argument, NULL, OPT_RESUME},
+        {"no-resume", no_argument, NULL, OPT_NO_RESUME},
         {"packing", required_argument, NULL, OPT_PACKING},
         {"zoom-mode", required_argument, NULL, OPT_ZOOM_MODE},
         {"screen", required_argument, NULL, OPT_SCREEN},
         {"mipmap", required_argument, NULL, OPT_MIPMAP},
+        {"screen-curve", required_argument, NULL, OPT_SCREEN_CURVE},
+        {"sbs-switch", required_argument, NULL, OPT_SBS_SWITCH},
         {NULL, 0, NULL, 0},
     };
 
@@ -424,6 +518,10 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
             } else
                 copy_str(c->mpv_log, sizeof c->mpv_log, optarg);
             break;
+        case OPT_MPV_SCALE:
+            rc = parse_mpv_scale("--mpv-scale", optarg, c->mpv_scale, sizeof c->mpv_scale, err,
+                                 errlen);
+            break;
         case OPT_CONVERGENCE:
             rc = parse_ranged("--convergence", optarg, -XRD_CONVERGENCE_MAX, XRD_CONVERGENCE_MAX,
                               &c->convergence, err, errlen);
@@ -468,6 +566,12 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         case OPT_FORGET:
             c->forget = true;
             break;
+        case OPT_RESUME: /* the last of --resume and --no-resume wins */
+            c->resume = true;
+            break;
+        case OPT_NO_RESUME:
+            c->resume = false;
+            break;
         case OPT_PACKING:
             if (!strcmp(optarg, "auto")) {
                 c->packing = XRD_PACKING_AUTO;
@@ -492,6 +596,9 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         case OPT_SCREEN:
             rc = parse_screen("--screen", optarg, &c->screen_locked, err, errlen);
             break;
+        case OPT_DEBAND:
+            rc = parse_onoff("--deband", optarg, false, &c->deband, err, errlen);
+            break;
         case OPT_MIPMAP:
             if (!strcmp(optarg, "on"))
                 c->mipmap = true;
@@ -501,6 +608,12 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
                 set_err(err, errlen, "--mipmap: unknown value '%s' (expected on or off)", optarg);
                 rc = -1;
             }
+            break;
+        case OPT_SCREEN_CURVE:
+            rc = parse_screen_curve("--screen-curve", optarg, &c->screen_curve, err, errlen);
+            break;
+        case OPT_SBS_SWITCH:
+            rc = parse_sbs_switch("--sbs-switch", optarg, &c->sbs_switch, err, errlen);
             break;
         case ':':
             set_err(err, errlen, "option '%s' requires an argument", argv[optind - 1]);

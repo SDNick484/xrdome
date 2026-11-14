@@ -7,6 +7,8 @@
 
 #define XRD_SBS_W 3840
 #define XRD_SBS_H 1080
+#define XRD_MIRROR_W 1920 /* the glasses in 1080p (mirror) mode */
+#define XRD_MIRROR_H 1080
 
 static int is_sbs(const xrd_output_info *o)
 {
@@ -38,6 +40,18 @@ int xrd_output_select(const xrd_output_info *outs, int n, const char *want, int 
         }
     }
     return XRD_OUT_NOT_FOUND;
+}
+
+bool xrd_output_sbs_candidate(const xrd_output_info *outs, int n, const char *want, int sel)
+{
+    if (want == NULL || strcmp(want, "auto") == 0)
+        return sel == XRD_OUT_NOT_FOUND;
+    if (sel != XRD_OUT_NOT_SBS)
+        return false;
+    for (int i = 0; i < n; i++)
+        if (name_matches(outs[i].name, want))
+            return outs[i].w == XRD_MIRROR_W && outs[i].h == XRD_MIRROR_H;
+    return false;
 }
 
 void xrd_output_list(const xrd_output_info *outs, int n, char *buf, size_t len)
