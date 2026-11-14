@@ -33,6 +33,7 @@ core_sources = files(
   'src/track/tracker.c',
   'src/render/renderer_gl.c',
   'src/display/output.c',
+  'src/driver/xrdriver.c',
   'src/video/player_mpv.c',
   'src/app/controls.c',
   'src/store/filestate.c',
@@ -60,6 +61,7 @@ test_names = [
   'detect',
   'probe_run',
   'session',
+  'xrdriver',
 ]
 
 inc = include_directories('src')
