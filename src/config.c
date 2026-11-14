@@ -94,6 +94,22 @@ static int parse_screen(const char *what, const char *s, bool *locked, char *err
     return 0;
 }
 
+/* "on" or "off", and "yes" or "no" when yes_no (the ini, mpv's spelling), into
+ * *out. what names the key or flag. */
+static int parse_onoff(const char *what, const char *s, bool yes_no, bool *out, char *err,
+                       size_t errlen)
+{
+    if (!strcmp(s, "on") || (yes_no && !strcmp(s, "yes")))
+        *out = true;
+    else if (!strcmp(s, "off") || (yes_no && !strcmp(s, "no")))
+        *out = false;
+    else {
+        set_err(err, errlen, "%s: unknown value '%s' (expected on or off)", what, s);
+        return -1;
+    }
+    return 0;
+}
+
 /* "HxV" in degrees, each within XRD_CONTENT_FOV_MIN..MAX. Leaves *h and *v
  * untouched on error. */
 static int parse_content_fov(const char *s, float *h, float *v, char *err, size_t errlen)
@@ -128,6 +144,7 @@ void xrd_config_defaults(xrd_config *c)
     c->filter = XRD_FILTER_BICUBIC;
     c->fbo_format = XRD_FBO_RGB10;
     c->dither = true;
+    c->deband = false;
     c->proj_auto = true;
     c->proj = XRD_PROJ_HEQUIRECT;
     c->layout_auto = true;
@@ -244,6 +261,8 @@ static int ini_read(xrd_config *c, const char *path, bool *device_found, char *e
                               sizeof msg);
         } else if (sec == SEC_GENERAL && !strcmp(key, "screen")) {
             rc = parse_screen("screen", val, &c->screen_locked, msg, sizeof msg);
+        } else if (sec == SEC_GENERAL && !strcmp(key, "deband")) {
+            rc = parse_onoff("deband", val, true, &c->deband, msg, sizeof msg);
         } else if (sec == SEC_GENERAL && !strcmp(key, "ffprobe")) {
             rc = set_string("ffprobe", c->ffprobe, sizeof c->ffprobe, val, msg, sizeof msg);
         } else {
@@ -274,7 +293,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
            OPT_MIPMAP_FORCE, OPT_MIPMAP_CHECK, OPT_DUMP,
            OPT_MPV_PROFILE, OPT_MPV_OPT, OPT_MPV_LOG, OPT_CONVERGENCE, OPT_FILTER,
            OPT_FBO_FORMAT, OPT_DITHER, OPT_NO_MEMORY, OPT_FORGET,
-           OPT_PACKING, OPT_ZOOM_MODE, OPT_SCREEN, OPT_MIPMAP };
+           OPT_PACKING, OPT_ZOOM_MODE, OPT_SCREEN, OPT_MIPMAP, OPT_DEBAND };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
         {"layout", required_argument, NULL, OPT_LAYOUT},
@@ -298,6 +317,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"filter", required_argument, NULL, OPT_FILTER},
         {"fbo-format", required_argument, NULL, OPT_FBO_FORMAT},
         {"dither", required_argument, NULL, OPT_DITHER},
+        {"deband", required_argument, NULL, OPT_DEBAND},
         {"no-memory", no_argument, NULL, OPT_NO_MEMORY},
         {"forget", no_argument, NULL, OPT_FORGET},
         {"packing", required_argument, NULL, OPT_PACKING},
@@ -491,6 +511,9 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
             break;
         case OPT_SCREEN:
             rc = parse_screen("--screen", optarg, &c->screen_locked, err, errlen);
+            break;
+        case OPT_DEBAND:
+            rc = parse_onoff("--deband", optarg, false, &c->deband, err, errlen);
             break;
         case OPT_MIPMAP:
             if (!strcmp(optarg, "on"))

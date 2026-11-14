@@ -272,6 +272,8 @@ xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void 
     if (set_opt(p, "vo", "libmpv", err, errlen) || set_opt(p, "hwdec", "vaapi", err, errlen) ||
         set_opt(p, "osd-level", "0", err, errlen))
         goto fail;
+    if (set_opt(p, "deband", opt && opt->deband ? "yes" : "no", err, errlen))
+        goto fail;
     /* Square pixels: mpv ignores every aspect the file declares, so it draws
      * the coded frame filling a texture of the coded size (spec 5.10).
      * Without it a stereo-tagged Matroska file, whose display size describes
@@ -641,6 +643,20 @@ void xrd_player_video_size(const xrd_player *p, int *w, int *h)
 {
     *w = p->w;
     *h = p->h;
+}
+
+bool xrd_player_set_deband(xrd_player *p, bool on)
+{
+    int v = on ? 1 : 0;
+    return mpv_set_property(p->mpv, "deband", MPV_FORMAT_FLAG, &v) >= 0;
+}
+
+bool xrd_player_deband(xrd_player *p)
+{
+    int v = 0;
+    if (mpv_get_property(p->mpv, "deband", MPV_FORMAT_FLAG, &v) < 0)
+        return false;
+    return v != 0;
 }
 
 const char *xrd_player_hwdec(xrd_player *p)

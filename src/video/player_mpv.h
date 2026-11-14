@@ -37,6 +37,7 @@ typedef struct {
     int opt_count;
     const char *log_level;
     xrd_fbo_format fbo_format; /* video texture format; 0 = XRD_FBO_RGBA8 */
+    bool deband;               /* mpv "deband" at open; --mpv-opt deband=... still wins */
 } xrd_player_options;
 
 /* As xrd_player_open; opt may be NULL (profile "fast", no extra options,
@@ -85,6 +86,10 @@ void        xrd_player_set_mipmaps(xrd_player *p, bool want);
  * frame now in the texture, at the current size). Only then may the eye pass
  * sample it with xrd_draw_params.trilinear. */
 bool        xrd_player_mipmapped(const xrd_player *p);
+/* mpv's "deband" property: set (true if mpv accepted it) and read (the live value,
+ * so --mpv-opt deband=yes shows). */
+bool        xrd_player_set_deband(xrd_player *p, bool on);
+bool        xrd_player_deband(xrd_player *p);
 const char *xrd_player_hwdec(xrd_player *p);             /* mpv "hwdec-current", "" if unknown */
 bool        xrd_player_finished(const xrd_player *p);    /* end of file or load failure */
 const char *xrd_player_error(const xrd_player *p);

@@ -207,6 +207,7 @@ static void print_keys(void)
         {"Z", "zoom mode: screen / magnify (flat)"},
         {"L", "screen: fixed / head-locked (flat)"},
         {"?", "this list"},
+        {"B", "debanding on / off"},
         {"I", "playback information"},
         {"Q", "quit"},
     };
@@ -264,6 +265,7 @@ static void print_info(xrd_app *a)
     fprintf(stderr, "info: texture: %s %dx%d dither=%s\n",
             xrd_texture_bits_name(xrd_player_texture_bits(a->p)), vw, vh,
             a->cfg->dither ? "on" : "off");
+    fprintf(stderr, "info: deband: %s\n", xrd_player_deband(a->p) ? "on" : "off");
     fprintf(stderr, "info: frames: %lu presented, %u missed vsyncs\n", a->frames,
             xrd_timing_missed_vsyncs(a->timing));
 }
@@ -390,6 +392,15 @@ static bool handle_key_action(const SDL_KeyboardEvent *k, xrd_app *a)
     case SDLK_QUESTION:
         if (!k->repeat)
             print_keys();
+        break;
+    case SDLK_b:
+        if (!k->repeat) {
+            bool now = !xrd_player_deband(a->p);
+            if (!xrd_player_set_deband(a->p, now))
+                fprintf(stderr, "deband: mpv would not change it\n");
+            else
+                fprintf(stderr, "deband: %s\n", xrd_player_deband(a->p) ? "on" : "off");
+        }
         break;
     case SDLK_i:
         if (!k->repeat)
@@ -665,7 +676,7 @@ int main(int argc, char **argv)
         mpv_opts[i] = cfg.mpv_opts[i];
     xrd_player_options popt = {.profile = cfg.mpv_profile, .opts = mpv_opts,
                                .opt_count = cfg.mpv_opt_count, .log_level = cfg.mpv_log,
-                               .fbo_format = cfg.fbo_format};
+                               .fbo_format = cfg.fbo_format, .deband = cfg.deband};
     p = xrd_player_open_ex(cfg.file, gl_get_proc, wm.info.x11.display, &popt, err, sizeof err);
     if (!p) {
         fail("%s", err);

@@ -31,6 +31,7 @@ typedef struct {
     xrd_filter filter;     /* --filter bilinear|bicubic, default bicubic */
     xrd_fbo_format fbo_format; /* --fbo-format rgb10|rgba8, default rgb10 */
     bool dither;           /* --dither on|off, default on */
+    bool deband;           /* --deband on|off, [general] deband; default off; set on mpv at open */
     unsigned explicit_flags; /* XRD_SET_ZOOM|LAYOUT|CONTENT_FOV|CONVERGENCE|PROJ|PACKING|ZOOM_MODE given on the command line */
     bool no_memory;        /* --no-memory */
     bool forget;           /* --forget */

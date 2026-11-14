@@ -705,4 +705,77 @@ check "M12 projection from the record" $?
 grep -qx 'proj = flat' "$work"/state-flat/xrdome/files/*.ini && grep -qx 'flat_zoom = 2.0000' "$work"/state-flat/xrdome/files/*.ini
 check "M12 record has proj = flat and flat_zoom" $?
 
+# B1-B3. Debanding (mpv's deband, off by default). A coarse 8-bit gradient,
+# 32 bands 4 levels apart, is played with and without it and the middle row of
+# the dumped frame is read: with deband on the row holds many more distinct
+# levels (mpv's deband adds grain, and smooths the steps). Mesa llvmpipe only
+# honours it outside gpu-dumb-mode, so these runs pass --mpv-opt
+# gpu-dumb-mode=no, which on llvmpipe sometimes renders a black frame (see
+# player_mpv.c); a run that shows fewer than 8 distinct levels is that, not
+# deband, and is repeated up to 4 times.
+ffmpeg -v error -y -f lavfi -i "color=black:s=640x360:r=25:d=2,format=gray,geq=lum='64+floor(X/20)*4',format=yuv420p" \
+    -c:v libx264 -qp 0 -pix_fmt yuv420p "$work/band.mp4" || { echo "FAIL: make band.mp4"; exit 1; }
+
+# levels PPM: distinct values of the red channel along the middle row.
+levels() {
+python3 -I - "$1" <<'PY'
+import sys
+with open(sys.argv[1], "rb") as f:
+    magic, size, maxval, px = f.read().split(b"\n", 3)
+w, h = map(int, size.split())
+print(len({px[(h // 2 * w + x) * 3] for x in range(w)}))
+PY
+}
+
+# band NAME ARGS...: a banded-gradient run (repeated when the frame is black);
+# the distinct level count lands in $band_levels.
+band() {
+    _name=$1
+    shift
+    band_levels=0
+    for _try in 1 2 3 4; do
+        xvfb "$xrdome" --no-memory --windowed --pose null --proj flat --layout mono --zoom 1.0 \
+            --dither off --mpv-opt gpu-dumb-mode=no --frames 30 --dump-frame "$work/$_name.ppm" \
+            "$@" "$work/band.mp4" >"$work/$_name.err" 2>&1
+        _st=$?
+        cat "$work/$_name.err"
+        [ "$_st" -eq 0 ] || break
+        band_levels=$(levels "$work/$_name.ppm")
+        [ "$band_levels" -ge 8 ] && break
+    done
+    check "$_name exits 0 (got $_st)" "$([ "$_st" -eq 0 ]; echo $?)"
+    echo "$_name: $band_levels distinct levels"
+}
+
+band b1off --deband off
+off_levels=$band_levels
+band b1on --deband on
+on_levels=$band_levels
+no_xrdome_lines "$work/b1on.err"; check "B1 no xrdome lines" $?
+[ "$off_levels" -ge 8 ] && [ "$on_levels" -ge $((off_levels * 3 / 2)) ]
+check "B1 --deband on: more distinct levels than off ($on_levels against $off_levels)" $?
+
+# B2. The ini key does the same as the flag, and --deband off beats the ini.
+mkdir -p "$work/cfg/xrdome"
+printf '[general]\ndeband = yes\n' >"$work/cfg/xrdome/config.ini"
+XDG_CONFIG_HOME="$work/cfg"; export XDG_CONFIG_HOME
+band b2ini
+[ "$band_levels" -ge $((off_levels * 3 / 2)) ]
+check "B2 ini deband = yes: more distinct levels than off ($band_levels against $off_levels)" $?
+band b2flag --deband off
+unset XDG_CONFIG_HOME
+[ "$band_levels" -lt $((off_levels * 3 / 2)) ]
+check "B2 --deband off beats ini deband = yes ($band_levels against $off_levels)" $?
+
+# B3. --mpv-opt is applied after --deband, so deband=no wins over --deband on.
+band b3 --deband on --mpv-opt deband=no
+[ "$band_levels" -lt $((off_levels * 3 / 2)) ]
+check "B3 --mpv-opt deband=no beats --deband on ($band_levels against $off_levels)" $?
+
+# B4. A bad value is named, nothing starts.
+xvfb "$xrdome" --no-memory --windowed --pose null --deband maybe "$work/band.mp4" >"$work/b4.err" 2>&1
+st=$?
+check "B4 --deband maybe exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
+grep -q '^xrdome: .*--deband' "$work/b4.err"; check "B4 names --deband" $?
+
 exit $fail
