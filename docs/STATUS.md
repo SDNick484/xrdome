@@ -411,6 +411,88 @@ Awaits the glasses (hardware check, after merge; all of the real switch is unver
 7. Unplug during playback: no switch-back request (`ls /dev/shm/xr_driver_control` stays empty
    after exit).
 
+## mpv scaling of enlarged flat video (`--mpv-scale`, issue #23)
+
+`--mpv-scale off|NAME` (ini `mpv_scale`, default `off`, which keeps the previous behaviour): while a
+flat picture is enlarged (`xrd_minify_ratio` < 1) and mipmaps are not in use, mpv draws each frame
+into a texture of the picture's size on the display, with its own scaler `NAME` and
+`keepaspect=no`, and the eye pass samples it at about 1:1. Shrunk pictures (mipmaps) and VR180 keep
+the coded texture. `I` prints `info: mpv scale: ...`; the `video texture:` line ends in
+`mpv-scale=NAME` or `mpv-scale=unused` and is printed again on each resize.
+
+Decisions:
+- Texture size (`xrd_mpv_scale_size`, `src/video/mpv_scale.c`, a pure function of the flat
+  geometry, the layout, the coded size and the eye's viewport): each eye gets the screen's size in
+  display pixels at the view centre, `half_w / tan_h * eye_w` by `half_h / tan_v * eye_h`, rounded;
+  side by side and top-bottom keep two such eyes on the split axis (so even there). Used only
+  when that is larger than the coded eye on both axes. Cap: at most 3840x2160 texels for the whole
+  texture (what mpv already draws for a 4K film) and the GPU's largest texture, scaling both axes
+  by the same factor; if the cap leaves an axis at or below the coded size, the coded texture is
+  kept. There is no cap on the enlargement factor itself: the texel count is what costs.
+- Debounce (`xrd_size_debounce`): the first size applies at once (so the first frame and the
+  `video texture:` line already have it); after that a new size takes effect once it has been
+  asked for unchanged for 250 ms, so a held `]` reallocates once.
+- No black or half-drawn frame on a resize: the player reallocates the texture in place and has
+  mpv draw the current frame again (`mpv_render_context_render` with no new frame redraws the
+  current one, also on mpv 0.37 per its `vo_libmpv.c`) before the eye pass reads it; a coded-size
+  change keeps a requested size, since mpv scales into any size.
+- Eye pass at about 1:1: the `F` filter as before (Catmull-Rom by default). At 1:1 with the
+  picture off the texel grid by a fraction of a pixel, which head motion makes the normal case,
+  bilinear keeps 0.71 of the contrast of a 4-pixel period at half a pixel's offset and 0.50 of a
+  3-pixel period; Catmull-Rom keeps 0.88 and 0.69 (computed from the kernels, not seen on the
+  glasses). It costs no more than today since the eye pass runs per display pixel.
+- `scale` is set after `mpv_initialize` with `mpv_set_property_string`: before it, mpv rejects a
+  bad name without logging why. `cscale` is left unset, so it follows `scale` (mpv 0.37's default,
+  checked in its `video.c`; the `fast` profile sets `scale` and `dscale` only). An `--mpv-opt
+  scale=` wins and the flag's scale is then not set.
+- VR180 is left alone. With the Viture Pro's 1920x1080 eyes over 37.9 x 21.9 degrees, any VR180
+  file would need about 17600x8800 texels (154 million) to be 1:1 at the centre: 2.3x the coded
+  size for 7680x3840, 4.1x for 4320x2160, 6.1x for 2880x1440. The 3840x2160 cap allows 0.53x,
+  0.94x and 1.41x of the coded size, so a fixed oversize would buy nothing for 4K and 8K files and
+  little for smaller ones, while the visible area is about 2.6% of each eye. Not worth a
+  follow-up; a better eye-pass filter (#25) is the way for VR180.
+- Side by side and top-bottom go through mpv as one picture, so mpv's kernel reaches across
+  the eyes' shared edge by its radius less half a pixel (2.5 source pixels for `spline36`,
+  0.5 for the bilinear of `gpu-dumb-mode`). The eye pass's clamp keeps its own filter on its
+  side, but not mpv's. Today's path already shares the 4:2:0 chroma at that edge (the encode
+  and mpv's chroma upsampling): a 480x270 half-SBS pattern with a 1-pixel white border shows
+  the other eye in its last two columns without `--mpv-scale` and three with it. The smoke
+  patterns of a given size therefore get a 4-pixel white border (`tools/make_pattern.sh`; the
+  default patterns are byte for byte as before), as F4's 960-wide halves already have. Not
+  guarded further: in a 3D film both edges show the same part of the scene. If the owner sees a
+  seam, the eye pass can clamp each eye that many texels (times the enlargement) away from it.
+- What xrdome's own filter still enlarges once this lands: all of VR180 (about 2 to 6x); flat video
+  with `--mpv-scale off` (the default); flat video beyond the cap (the part above it, e.g. 1080p
+  half SBS at zoom 1.5); pictures enlarged on one axis and shrunk on the other (mipmaps); and the
+  250 ms after a zoom change before the new size settles. These are what #25 and #26 still act on.
+
+Verified in the sandbox (llvmpipe, mpv in `gpu-dumb-mode`, which ignores the scaler's name and
+enlarges bilinearly, so the look of `spline36` was not seen): unit tests for the size (mono, half
+and full SBS, top-bottom, odd sizes, both caps, VR180 and bad input, agreement with
+`xrd_minify_ratio`) and the debounce; smoke cases V1 to V7 (a 480x270 picture at zoom 1.5 gets a
+960x540 texture and the same picture as without the flag; zoom 1.0 from the ini key fills the eye
+exactly; zoom 0.5 keeps the coded texture with every trilinear draw checked; half SBS gets
+1280x360 and each viewport shows only its own eye; subtitles appear where F6 has them; an unknown name exits 1
+with mpv's reason; VR180 keeps the coded texture). By hand with XTest key presses under Xvfb
+(not in the suite): `]` three times gave one resize to 1278x719 after the presses, zoom changes
+while paused resized with the frame redrawn, zooming out to 0.58 went back to the coded texture
+with trilinear filtering, zoom 4 gave 2560x1440 (the 640x360 window's eye), `P` to VR180 went
+back to the coded texture, and a probe of every drawn frame found no black one. mpv's message
+for an unknown name was seen on libmpv 2.6 only; on 0.37 its source logs `No scaler named
+'...' found!` on the same path.
+
+Hardware check (owner, after merge):
+1. Timing on the 1080p AV1 film at the default zoom 1.5, AC power, `--no-memory --frames 3600`,
+   a `--timing-log` each, no keys: `--mpv-scale off`, `--mpv-scale spline36`,
+   `--mpv-scale ewa_lanczossharp`; the missed vsyncs of each from the `timing:` line. If cheap,
+   the same at `--zoom 2.0` (a 3840x2160 texture).
+2. The owner's judgement of the look on a still frame and in motion: `off` (Catmull-Rom from
+   1920x1080) against `spline36` against `ewa_lanczossharp`, and `F` with each.
+3. Subtitles on a flat 2D film with `--mpv-scale spline36`: in the same place and size as
+   without it, and sharper or not.
+4. `I` shows `info: mpv scale: spline36, 1920x1080 to 2880x1620` at zoom 1.5, and `[` `]`
+   change the `video texture:` line once per burst with no black flash.
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship

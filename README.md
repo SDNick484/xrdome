@@ -123,7 +123,9 @@ projection, layout and (flat 3D) packing, each with where it came from (the sour
 `detect:` line, or `key`); zoom, and for flat video the zoom mode and the screen size in degrees
 (for a curved screen, the angle between its ends as seen from the eye); screen fixed or
 head-locked and the screen curve; the filter in use (`trilinear` while mipmaps are used) and whether
-mipmaps are on; the video texture; `deband` on or off; frames presented and missed vsyncs so far. For example:
+mipmaps are on; mpv's scaler (`--mpv-scale`: `off`, the scaler and the sizes it scales between, or
+why it is not in use); the video texture; `deband` on or off; frames presented and missed vsyncs
+so far. For example:
 
 ```
 info: projection: flat (frame shape)
@@ -132,6 +134,7 @@ info: zoom: 1.50, zoom mode screen, screen 54.5 x 32.3 degrees
 info: screen: fixed
 info: screen curve: off
 info: filter: trilinear, mipmaps on
+info: mpv scale: spline36, not in use (picture shrunk)
 ```
 
 These go to the terminal only; the per-eye HUD planned next will show them on the glasses.
@@ -150,9 +153,10 @@ start gives a tilted picture, and `R` does not correct that. Hold your head leve
 `--require-hwdec` (exit 1 unless mpv decodes with VA-API), `--timing-log PATH`,
 `--content-fov HxV`, `--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)),
 `--mpv-profile NAME`, `--mpv-opt KEY=VALUE` (repeatable, up to 16), `--mpv-log LEVEL`,
-`--convergence DEG`, `--filter bilinear|bicubic`, `--fbo-format rgb10|rgba8`, `--dither on|off`,
-`--deband on|off`, `--no-memory`, `--forget`, `--resume`, `--no-resume` (the last four are
-described under [Per-file settings](#per-file-settings)).
+`--mpv-scale off|NAME`, `--convergence DEG`, `--filter bilinear|bicubic`,
+`--fbo-format rgb10|rgba8`, `--dither on|off`, `--deband on|off`, `--no-memory`, `--forget`,
+`--resume`, `--no-resume` (the last four are described under
+[Per-file settings](#per-file-settings)).
 
 `--proj auto|hequirect|flat` (default `auto`) chooses the projection: `hequirect` is VR180
 (half-equirectangular), `flat` an ordinary flat screen (see [Flat video](#flat-video)), `auto`
@@ -192,7 +196,9 @@ pass's final write: the window is 8-bit, so without it the extra precision is ro
 at the very end. Black outside the video (behind you, or outside `--content-fov`) is never
 dithered. After the first frame stderr shows which texture was used, e.g.
 `video texture: rgb10_a2 1920x1080 dither=on mipmap=off` (the size is the coded frame size, and
-`mipmap` says whether mipmaps were used for the first frame). Both are command-line flags only. To compare against the old
+`mipmap` says whether mipmaps were used for the first frame). With `--mpv-scale` the line ends in
+`mpv-scale=NAME` while mpv enlarges into the texture (the size is then the enlarged size) or
+`mpv-scale=unused`, and it is printed again whenever the texture's size changes. Both are command-line flags only. To compare against the old
 output, run the same file twice, the second time with `--fbo-format rgba8 --dither off` (which
 reproduces the output from before these flags existed), and look at a sky or a slow gradient. 8-bit files
 gain little from either flag.
@@ -221,9 +227,17 @@ an equirectangular mapping within the stated field of view, which may not hold f
 footage (lens projections other than equirectangular will look distorted). It is a command-line
 flag only, not an ini key, because it describes the file and not the glasses.
 
+`--mpv-scale off|NAME` (default `off`; ini key `mpv_scale`) lets mpv enlarge a flat picture
+with its own scaler `NAME` (mpv's `scale` option, e.g. `spline36` or `ewa_lanczossharp`; mpv's
+chroma scaler follows it unless `--mpv-opt cscale=...` sets one). See
+[Viewing comfort and sharpness](#viewing-comfort-and-sharpness). A name mpv does not know exits 1
+with mpv's own reason (its wording depends on the mpv version; libmpv 2.6 prints
+`mpv: [cplayer] Invalid value for option scale: bogus`) followed by
+`xrdome: --mpv-scale bogus: mpv rejects it as a scaler (mpv --scale=help lists them)`. `--mpv-opt scale=...` wins over it.
+
 `--mpv-profile NAME` selects the mpv profile applied before mpv starts. The default is `fast`.
-xrdome has mpv render the video at its native size into an offscreen buffer, with no scaling, so
-mpv's default quality settings (high-quality chroma scaling, float intermediate buffers,
+xrdome has mpv render the video at its native size into an offscreen buffer, with no scaling
+(unless `--mpv-scale` is on), so mpv's default quality settings (high-quality chroma scaling, float intermediate buffers,
 dithering) cost GPU time without a visible benefit; on a 7680x2880 file they saturated an
 integrated GPU. `--mpv-profile default` applies no profile. `--mpv-opt KEY=VALUE` sets any mpv
 option after the profile and xrdome's own fixed options (`vo`, `hwdec`, `osd-level`), so it can
@@ -262,7 +276,8 @@ to highest: built-in defaults, built-in device values, the ini file, the command
 [Resume](#resume-where-you-left-off)), `screen_curve` (`off` or a radius from 1 to 10, as
 `--screen-curve`, default `off`), `sbs_switch` (`auto` or `off`, as `--sbs-switch`, default
 `auto`), `ffprobe` (the program run for format detection, default `ffprobe` looked up on
-`PATH`) and `deband` (`yes` or `no`, also `on` or `off`, as `--deband`, default `no`).
+`PATH`), `deband` (`yes` or `no`, also `on` or `off`, as `--deband`, default `no`) and
+`mpv_scale` (`off` or an mpv scaler name, as `--mpv-scale`, default `off`).
 
 `[device.<name>]` keys, read for the device selected with `--device` (default `viture-pro`):
 `fov_diag` (diagonal FOV in degrees, 10 to 120), `zoom` (the VR180 zoom, 0.25 to 4, default 1)
@@ -281,6 +296,7 @@ screen_curve = off
 sbs_switch = auto
 ffprobe = /usr/bin/ffprobe
 deband = no
+mpv_scale = off
 
 [device.viture-pro]
 fov_diag = 43
@@ -679,6 +695,39 @@ On the owner's Radeon (2026-11-14, AC power) a 4K film at zoom 1.0 missed 8 of 3
 `--mipmap off` and 13 with `on`; whether mipmaps visibly reduce shimmer was not settled (no clear
 difference seen on one film at zoom 0.5).
 
+**Enlarging flat video: mpv's scalers (`--mpv-scale`).** Normally mpv draws each frame into a
+texture of the coded size and the eye pass enlarges it (Catmull-Rom or bilinear). With
+`--mpv-scale NAME`, while a flat picture is enlarged (the opposite of the mipmap case above: at
+the centre of the view one source pixel covers more than one display pixel), mpv draws each
+frame into a texture of the size the picture has on the glasses, enlarging it with its own scaler
+(`spline36`, `ewa_lanczossharp`, ...), and the eye pass samples that texture at about 1:1 with
+the `F` filter. Side-by-side and top-bottom frames keep their layout, each eye at its display
+size. On the Viture Pro XR a 1080p film at the default zoom 1.5 is drawn into 2880x1620 instead
+of 1920x1080. Because mpv then draws at the display's size, mpv shader options
+(`--mpv-opt glsl-shaders=...`, e.g. FSRCNNX) act at that size too. Subtitles are drawn at the
+larger size as well.
+
+- Only flat video, and only while enlarged. A shrunk picture keeps the coded texture and
+  mipmaps; VR180 always keeps the coded texture (to be 1:1 at the centre a VR180 texture would
+  need about 17600x8800 texels for any file, 150 million). `I` says which applies:
+  `info: mpv scale: spline36, 1920x1080 to 2880x1620` or
+  `info: mpv scale: spline36, not in use (picture shrunk)`.
+- The texture holds at most 3840x2160 texels (both eyes together), the frame size mpv already
+  draws for a 4K film, and fits the GPU's largest texture; beyond that it is scaled down with
+  its shape kept, and the eye pass enlarges the rest. 1080p mono reaches the cap only above zoom
+  2; a 1080p half side-by-side film at zoom 1.5 (two 2880x1620 eyes) is capped to two
+  2715x1527 eyes.
+- Zooming resizes the texture once the zoom has stayed the same for a quarter of a second, so a
+  held `[` or `]` does not reallocate on every step; until then the old texture is drawn larger
+  or smaller. Each resize has mpv draw the current frame again at once (also while paused), so
+  no black or half-drawn frame is shown.
+- In side-by-side and top-bottom frames mpv's scaler sees both eyes as one picture, so within
+  2.5 source pixels of the eyes' shared edge (for `spline36`) its kernel mixes in a little of the
+  other eye's edge (4:2:0 chroma is already shared there without `--mpv-scale`). For ordinary 3D
+  films both edges show the same part of the scene.
+- Cost: mpv scales into more pixels with a heavier kernel every frame; see
+  [Performance notes](#performance-notes). It is off by default until measured.
+
 ## Diagnostics
 
 `--sync-after-swap` calls `glFinish()` right after `SDL_GL_SwapWindow`, before the frame is reported
@@ -849,6 +898,14 @@ Viture Pro XR glasses at 3840x1080 60 Hz, with a 4320x2160 10-bit AV1 60 fps fil
   AV1 VR180 file at `--zoom 0.5` missed 113 (3.1%) without mipmaps and 85 (2.4%) with
   `--mipmap-force`, which makes the chain every frame. One pair each; the differences are within
   run-to-run noise. A flat 1080p AV1 film missed 0 of 10754.
+
+- `--mpv-scale` (not measured yet): mpv then draws every frame of an enlarged flat film at the
+  display's size with the named scaler, so the cost grows with the texture's size and the
+  scaler. To measure it, play the same 1080p film at the same zoom with the same `--frames 3600`
+  and a separate `--timing-log` per run: `--mpv-scale off`, `--mpv-scale spline36` and
+  `--mpv-scale ewa_lanczossharp` (an EWA scaler is much heavier than a separable one), and
+  compare the missed vsyncs in the `timing:` summaries; `I` and the `video texture:` line show the
+  texture's size. Repeat at zoom 2.0 for a larger texture.
 
 ## Tracking notes
 
