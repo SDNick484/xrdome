@@ -1,0 +1,67 @@
+# CI: build xrdome and run the whole test suite, including both Xvfb smoke tests.
+#
+# Known difference: ubuntu-24.04 ships mpv 0.37 (libmpv-dev), while the owner runs
+# a newer libmpv (2.6.0) on Gentoo. That difference is accepted for now.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc meson ninja-build pkg-config python3 \
+            libmpv-dev libsdl2-dev libepoxy-dev libegl-dev libcmocka-dev \
+            libegl-mesa0 libgl1-mesa-dri libglx-mesa0 \
+            ffmpeg xvfb xauth
+
+      # -Dwerror=true makes any warning in xrdome's own sources (src/, tests/)
+      # fail the build; warnings in system headers are not reported by gcc.
+      - name: Configure
+        run: meson setup build -Dwerror=true
+
+      - name: Build
+        run: meson compile -C build
+
+      - name: Test
+        run: meson test -C build --print-errorlogs
+
+      # meson reports a skipped test (exit 77) as non-failing, and a skipped
+      # smoke test proves nothing, so require both to have really passed.
+      - name: Require both smoke tests to have run
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          want = {"smoke", "smoke_tracking"}
+          seen = {}
+          with open("build/meson-logs/testlog.json") as f:
+              for line in f:
+                  line = line.strip()
+                  if line:
+                      t = json.loads(line)
+                      seen[t["name"].split(":")[-1]] = t["result"]
+          bad = {n: seen.get(n, "MISSING") for n in sorted(want) if seen.get(n) != "OK"}
+          for n, r in bad.items():
+              print(f"::error::{n}: {r} (expected OK)")
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: Upload test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testlog
+          path: build/meson-logs/testlog.txt
