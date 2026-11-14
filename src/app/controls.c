@@ -11,6 +11,7 @@ void xrd_controls_init(xrd_controls *c, float zoom, xrd_layout layout)
     c->mouse_pitch_deg = 0.0;
     xrd_controls_init_display(c, 0.0f, XRD_FILTER_BICUBIC);
     xrd_controls_init_format(c, XRD_PROJ_HEQUIRECT, XRD_PACKING_AUTO, 1.0f, XRD_ZOOM_SCREEN, false);
+    xrd_controls_init_curve(c, 0.0f);
     c->layout_chosen = false;
 }
 
@@ -46,6 +47,28 @@ bool xrd_controls_toggle_lock(xrd_controls *c)
         return false;
     c->screen_locked = !c->screen_locked;
     return true;
+}
+
+void xrd_controls_init_curve(xrd_controls *c, float curve)
+{
+    bool ok = curve >= XRD_SCREEN_CURVE_MIN && curve <= XRD_SCREEN_CURVE_MAX;
+    c->screen_curved = ok;
+    c->screen_curve = ok ? curve : XRD_SCREEN_CURVE_MIN;
+}
+
+bool xrd_controls_toggle_curve(xrd_controls *c)
+{
+    if (c->proj != XRD_PROJ_FLAT)
+        return false;
+    c->screen_curved = !c->screen_curved;
+    return true;
+}
+
+float xrd_controls_screen_curve(const xrd_controls *c)
+{
+    if (c->proj != XRD_PROJ_FLAT || c->zoom_mode != XRD_ZOOM_SCREEN || !c->screen_curved)
+        return 0.0f;
+    return c->screen_curve;
 }
 
 void xrd_controls_init_display(xrd_controls *c, float convergence_deg, xrd_filter filter)

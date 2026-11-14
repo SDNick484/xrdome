@@ -110,6 +110,30 @@ static int parse_onoff(const char *what, const char *s, bool yes_no, bool *out, 
     return 0;
 }
 
+/* "off" (0) or a radius in XRD_SCREEN_CURVE_MIN..MAX into *curve. what names
+ * the flag or key. Leaves *curve untouched on error. */
+static int parse_screen_curve(const char *what, const char *s, float *curve, char *err,
+                              size_t errlen)
+{
+    if (!strcmp(s, "off")) {
+        *curve = 0.f;
+        return 0;
+    }
+    float v;
+    switch (xrd_value_ranged(s, XRD_SCREEN_CURVE_MIN, XRD_SCREEN_CURVE_MAX, &v)) {
+    case XRD_VALUE_OK:
+        *curve = v;
+        return 0;
+    case XRD_VALUE_RANGE:
+        set_err(err, errlen, "%s: %s is out of range (off, or %g to %g)", what, s,
+                (double)XRD_SCREEN_CURVE_MIN, (double)XRD_SCREEN_CURVE_MAX);
+        return -1;
+    default:
+        set_err(err, errlen, "%s: '%s' is neither off nor a number", what, s);
+        return -1;
+    }
+}
+
 /* "HxV" in degrees, each within XRD_CONTENT_FOV_MIN..MAX. Leaves *h and *v
  * untouched on error. */
 static int parse_content_fov(const char *s, float *h, float *v, char *err, size_t errlen)
@@ -153,6 +177,7 @@ void xrd_config_defaults(xrd_config *c)
     c->zoom_default = 1.0f;
     c->flat_zoom = 1.5f;
     c->screen_locked = false;
+    c->screen_curve = 0.f;
     c->mipmap = true;
     copy_str(c->ffprobe, sizeof c->ffprobe, "ffprobe");
 }
@@ -268,6 +293,8 @@ static int ini_read(xrd_config *c, const char *path, bool *device_found, char *e
                 snprintf(msg, sizeof msg, "resume: expected yes or no, got '%s'", val);
                 rc = -1;
             }
+        } else if (sec == SEC_GENERAL && !strcmp(key, "screen_curve")) {
+            rc = parse_screen_curve("screen_curve", val, &c->screen_curve, msg, sizeof msg);
         } else if (sec == SEC_GENERAL && !strcmp(key, "ffprobe")) {
             rc = set_string("ffprobe", c->ffprobe, sizeof c->ffprobe, val, msg, sizeof msg);
         } else {
@@ -298,7 +325,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
            OPT_MIPMAP_FORCE, OPT_MIPMAP_CHECK, OPT_DUMP,
            OPT_MPV_PROFILE, OPT_MPV_OPT, OPT_MPV_LOG, OPT_CONVERGENCE, OPT_FILTER,
            OPT_FBO_FORMAT, OPT_DITHER, OPT_NO_MEMORY, OPT_FORGET, OPT_RESUME, OPT_NO_RESUME,
-           OPT_PACKING, OPT_ZOOM_MODE, OPT_SCREEN, OPT_MIPMAP, OPT_DEBAND };
+           OPT_PACKING, OPT_ZOOM_MODE, OPT_SCREEN, OPT_MIPMAP, OPT_DEBAND, OPT_SCREEN_CURVE };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
         {"layout", required_argument, NULL, OPT_LAYOUT},
@@ -331,6 +358,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"zoom-mode", required_argument, NULL, OPT_ZOOM_MODE},
         {"screen", required_argument, NULL, OPT_SCREEN},
         {"mipmap", required_argument, NULL, OPT_MIPMAP},
+        {"screen-curve", required_argument, NULL, OPT_SCREEN_CURVE},
         {NULL, 0, NULL, 0},
     };
 
@@ -537,6 +565,9 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
                 set_err(err, errlen, "--mipmap: unknown value '%s' (expected on or off)", optarg);
                 rc = -1;
             }
+            break;
+        case OPT_SCREEN_CURVE:
+            rc = parse_screen_curve("--screen-curve", optarg, &c->screen_curve, err, errlen);
             break;
         case ':':
             set_err(err, errlen, "option '%s' requires an argument", argv[optind - 1]);

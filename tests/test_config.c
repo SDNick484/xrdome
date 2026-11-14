@@ -272,6 +272,7 @@ static void flat_defaults(void **state)
     assert_float_equal(c.flat_zoom, 1.5f, TOL);
     assert_float_equal(c.zoom_default, 1.0f, TOL);
     assert_false(c.screen_locked);
+    assert_true(c.screen_curve == 0.f);
     assert_true(c.mipmap);
     assert_false(c.deband);
     assert_string_equal(c.ffprobe, "ffprobe");
@@ -414,6 +415,82 @@ static void deband_flag_ini_and_precedence(void **state)
     assert_non_null(strstr(err, ":2:"));
     assert_non_null(strstr(err, "deband"));
     unlink(path);
+}
+
+static void flag_screen_curve(void **state)
+{
+    (void)state;
+    xrd_config c;
+    char err[256] = "";
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--screen-curve", "1.0"), 0);
+    assert_float_equal(c.screen_curve, 1.0f, TOL);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--screen-curve", "2.5"), 0);
+    assert_float_equal(c.screen_curve, 2.5f, TOL);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--screen-curve", "10"), 0);
+    assert_float_equal(c.screen_curve, 10.0f, TOL);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--screen-curve", "off"), 0);
+    assert_true(c.screen_curve == 0.f);
+    /* not part of the per-file record */
+    assert_int_equal((int)c.explicit_flags, 0);
+
+    const char *bad[] = {"0.99", "0", "-1", "10.5", "nan", "inf"};
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        err[0] = '\0';
+        assert_int_equal(parse_flags(&c, err, sizeof err, "--screen-curve", bad[i]), -1);
+        assert_non_null(strstr(err, "--screen-curve"));
+        assert_non_null(strstr(err, "out of range") ? strstr(err, "1 to 10") : strstr(err, "neither"));
+    }
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--screen-curve", "on"), -1);
+    assert_non_null(strstr(err, "neither off nor a number"));
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--screen-curve", "OFF"), -1);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--screen-curve", ""), -1);
+
+    /* the last one wins, and a failed one leaves the value alone */
+    char *argv[] = {"xrdome", "--screen-curve", "3", "--screen-curve", "1.5", "a.mp4", NULL};
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_parse_args(&c, 6, argv, err, sizeof err), 0);
+    assert_float_equal(c.screen_curve, 1.5f, TOL);
+    char *argv2[] = {"xrdome", "--screen-curve", "x", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, argv2, err, sizeof err), -1);
+    assert_float_equal(c.screen_curve, 1.5f, TOL);
+}
+
+static void ini_screen_curve(void **state)
+{
+    (void)state;
+    char path[64], err[256] = "";
+    write_tmp(path, "[general]\nscreen_curve = 1.25\n");
+    char *argv[] = {"xrdome", "movie.mp4", NULL};
+    xrd_config c;
+    int rc = xrd_config_load(&c, path, 2, argv, err, sizeof err);
+    assert_int_equal(rc, 0);
+    assert_float_equal(c.screen_curve, 1.25f, TOL);
+    /* the flag wins over the ini */
+    char *argv2[] = {"xrdome", "--screen-curve", "off", "movie.mp4", NULL};
+    rc = xrd_config_load(&c, path, 4, argv2, err, sizeof err);
+    unlink(path);
+    assert_int_equal(rc, 0);
+    assert_true(c.screen_curve == 0.f);
+
+    /* only in [general]; a bad value names the file, line and key */
+    const char *texts[] = {"[general]\nscreen_curve = 0.5\n", "[general]\nscreen_curve = yes\n",
+                           "[device.viture-pro]\nscreen_curve = 1\n"};
+    for (int i = 0; i < 3; i++) {
+        char want[80];
+        write_tmp(path, texts[i]);
+        xrd_config_defaults(&c);
+        assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), -1);
+        snprintf(want, sizeof want, "%s:2:", path);
+        assert_non_null(strstr(err, want));
+        assert_non_null(strstr(err, "screen_curve"));
+        unlink(path);
+    }
+    write_tmp(path, "[general]\nscreen_curve = off\n");
+    xrd_config_defaults(&c);
+    c.screen_curve = 2.f;
+    assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), 0);
+    unlink(path);
+    assert_true(c.screen_curve == 0.f);
 }
 
 static void flat_ini_keys(void **state)
@@ -1282,6 +1359,8 @@ int main(void)
         cmocka_unit_test(flat_flag_packing),
         cmocka_unit_test(flat_flag_zoom_mode_screen_mipmap),
         cmocka_unit_test(deband_flag_ini_and_precedence),
+        cmocka_unit_test(flag_screen_curve),
+        cmocka_unit_test(ini_screen_curve),
         cmocka_unit_test(flat_ini_keys),
         cmocka_unit_test(flat_zoom_default_survives_zoom_flag),
         cmocka_unit_test(flat_ini_bad_values_name_file_and_line),

@@ -22,6 +22,8 @@ typedef struct {
     float zoom_other;           /* the zoom of the projection not in effect */
     xrd_zoom_mode zoom_mode;
     bool screen_locked;
+    bool screen_curved;         /* C: the flat screen is curved (screen zoom mode only) */
+    float screen_curve;         /* the curved screen's radius, XRD_SCREEN_CURVE_MIN..MAX */
     bool layout_chosen;         /* M or S was pressed in this run */
 } xrd_controls;
 
@@ -43,6 +45,16 @@ void xrd_controls_init_format(xrd_controls *c, xrd_proj proj, xrd_packing packin
 void xrd_controls_toggle_proj(xrd_controls *c);      /* flips proj, exchanges zoom and zoom_other */
 bool xrd_controls_toggle_zoom_mode(xrd_controls *c); /* false, unchanged, in hequirect */
 bool xrd_controls_toggle_lock(xrd_controls *c);      /* false, unchanged, in hequirect */
+/* From --screen-curve: 0 (off) leaves the screen flat and C curves it with
+ * radius 1; a radius in range curves it with that radius. Anything else
+ * counts as 0. xrd_controls_init sets 0. */
+void xrd_controls_init_curve(xrd_controls *c, float curve);
+bool xrd_controls_toggle_curve(xrd_controls *c);     /* C; false, unchanged, in hequirect */
+/* The curve to draw with (xrd_draw_params.screen_curve): the radius while the
+ * screen is curved, flat and in screen zoom mode; otherwise 0. Magnify mode
+ * keeps the zoom-1 screen and narrows the view, so it has no large screen
+ * to bend: the screen stays flat there. */
+float xrd_controls_screen_curve(const xrd_controls *c);
 void xrd_controls_zoom_in(xrd_controls *c);       /* zoom * 1.1, at most 4 */
 void xrd_controls_zoom_out(xrd_controls *c);      /* zoom / 1.1, at least 0.25 */
 /* M. hequirect: sbs-lr, sbs-rl, tb-lr, mono, back to sbs-lr. flat: mono,

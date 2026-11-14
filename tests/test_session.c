@@ -198,6 +198,10 @@ static void settings_take_zooms_by_projection(void **state)
     xrd_session_controls(&ss, &cfg, &c);
     assert_float_equal(c.zoom, 1.5f, TOL);
     assert_float_equal(c.zoom_other, cfg.zoom_default, TOL);
+    assert_true(xrd_controls_screen_curve(&c) == 0.f); /* --screen-curve off by default */
+    cfg.screen_curve = 1.5f;
+    xrd_session_controls(&ss, &cfg, &c);
+    assert_float_equal(xrd_controls_screen_curve(&c), 1.5f, TOL);
     xrd_file_settings s;
     xrd_session_settings(&c, 180.0f, 180.0f, &s);
     assert_float_equal(s.flat_zoom, 1.5f, TOL);

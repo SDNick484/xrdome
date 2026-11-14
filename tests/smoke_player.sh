@@ -542,6 +542,121 @@ cd "$here" || exit 1
 grep -qx 'detect: proj=flat (frame shape) layout=mono (frame shape)' "$work/f8.err"
 check "F8 '-weird name.mp4' probed (flat by frame shape)" $?
 
+# ---- curved screen (--screen-curve, C1 to C4) ----
+
+# check_curve MODE PPM [PPM2]: the flat2d pattern's white border at --zoom 0.9,
+# where the whole screen is in view, found per eye from pixel rows and columns.
+#   curved  the left and right borders each lie in one column (columns stay
+#           straight), and the top and bottom borders bow outwards: at the
+#           outer columns they are at least 3 rows nearer the frame's edge
+#           than at the centre column.
+#   flat    all four borders straight (one row or column each, within 1).
+#   same    PPM and PPM2 differ by more than 24 levels nowhere.
+check_curve() {
+python3 -I - "$@" <<'PY'
+import sys
+
+def load(path):
+    with open(path, "rb") as f:
+        magic, size, maxval, px = f.read().split(b"\n", 3)
+    w, h = map(int, size.split())
+    assert magic == b"P6" and maxval == b"255" and len(px) == w * h * 3, "bad PPM"
+    return w, h, px
+
+ok = True
+def expect(name, value, good):
+    global ok
+    ok &= good
+    print(f"  {'ok  ' if good else 'FAIL'} {name}: {value}")
+
+mode, (w, h, px) = sys.argv[1], load(sys.argv[2])
+if mode == "same":
+    other = load(sys.argv[3])
+    assert other[:2] == (w, h), "frame sizes differ"
+    n = sum(abs(a - b) > 24 for a, b in zip(px, other[2]))
+    expect("bytes differing by more than 24", n, n == 0)
+    sys.exit(0 if ok else 1)
+if mode not in ("curved", "flat"):
+    sys.exit(f"check_curve: unknown mode {mode}")
+
+ew = w // 2
+# The white border against the green field (blue 0): blue lights up.
+white = lambda x, y: px[(y * w + x) * 3 + 2] > 80
+
+def first_run(points):
+    """Middle of the first run of white pixels along points, as an index into them."""
+    start = None
+    for i, (x, y) in enumerate(points):
+        if white(x, y):
+            if start is None:
+                start = i
+        elif start is not None:
+            return (start + i - 1) / 2
+    return None
+
+cols = (.1, .3, .5, .7, .9)  # fractions of the eye's width; .5 is the centre column
+rows = (.3, .4, .6, .7)
+for e, name in ((0, "left"), (1, "right")):
+    x0 = e * ew
+    top = [first_run([(x0 + int(fx * ew), y) for y in range(h // 3)]) for fx in cols]
+    bot = [first_run([(x0 + int(fx * ew), y) for y in range(h - 1, h - h // 3, -1)]) for fx in cols]
+    left = [first_run([(x, int(fy * h)) for x in range(x0, x0 + ew // 4)]) for fy in rows]
+    right = [first_run([(x, int(fy * h)) for x in range(x0 + ew - 1, x0 + ew - ew // 4, -1)])
+             for fy in rows]
+    found = all(v is not None for v in top + bot + left + right)
+    expect(f"{name} eye: border found on every scan", found, found)
+    if not found:
+        continue
+    for side, v in (("left", left), ("right", right)):
+        spread = max(v) - min(v)
+        expect(f"{name} eye {side} border straight, columns in {v}", spread, spread <= 1)
+    for side, v in (("top", top), ("bottom", bot)):
+        if mode == "curved":
+            bow = min(v[2] - v[0], v[2] - v[4])
+            expect(f"{name} eye {side} border bows outwards, rows in {v}", bow, bow >= 3)
+        else:
+            spread = max(v) - min(v)
+            expect(f"{name} eye {side} border straight, rows in {v}", spread, spread <= 1)
+sys.exit(0 if ok else 1)
+PY
+}
+
+# C1. A curved screen at zoom 0.9 (at 1.0 the arc's ends sit just outside the
+# view): columns stay straight, the top and bottom borders bow.
+flat c1 --frames 30 --zoom 0.9 --screen-curve 1.0 --dump-frame "$work/c1.ppm" "$work/flat2d.mp4"
+no_xrdome_lines "$work/c1.err"; check "C1 no xrdome lines" $?
+check_curve curved "$work/c1.ppm"; check "C1 --screen-curve 1.0: side borders straight, top and bottom bow" $?
+
+# C2. off is the plane: every border straight, and the frame of a run without
+# the flag.
+flat c2 --frames 30 --zoom 0.9 --screen-curve off --dump-frame "$work/c2.ppm" "$work/flat2d.mp4"
+check_curve flat "$work/c2.ppm"; check "C2 --screen-curve off: all borders straight" $?
+flat c2n --frames 30 --zoom 0.9 --dump-frame "$work/c2n.ppm" "$work/flat2d.mp4"
+check_curve same "$work/c2.ppm" "$work/c2n.ppm"; check "C2 --screen-curve off draws what no flag draws" $?
+
+# C3. Magnify mode keeps the screen flat.
+flat c3 --frames 30 --zoom 0.9 --zoom-mode magnify --screen-curve 1.0 \
+     --dump-frame "$work/c3.ppm" "$work/flat2d.mp4"
+check_curve flat "$work/c3.ppm"; check "C3 magnify: all borders straight" $?
+flat c3n --frames 30 --zoom 0.9 --zoom-mode magnify --dump-frame "$work/c3n.ppm" "$work/flat2d.mp4"
+check_curve same "$work/c3.ppm" "$work/c3n.ppm"; check "C3 magnify: the curve changes nothing" $?
+
+# C4. [general] screen_curve in config.ini, and a radius out of range.
+mkdir -p "$work/cfgc/xrdome"
+printf '[general]\nscreen_curve = 1\n' >"$work/cfgc/xrdome/config.ini"
+had_cfg=${XDG_CONFIG_HOME+set} old_cfg=${XDG_CONFIG_HOME-}
+XDG_CONFIG_HOME="$work/cfgc"
+export XDG_CONFIG_HOME
+flat c4 --frames 30 --zoom 0.9 --dump-frame "$work/c4.ppm" "$work/flat2d.mp4"
+if [ -n "$had_cfg" ]; then XDG_CONFIG_HOME=$old_cfg; else unset XDG_CONFIG_HOME; fi
+check_curve curved "$work/c4.ppm"; check "C4 screen_curve = 1 in config.ini curves the screen" $?
+"$xrdome" --no-memory --windowed --pose null --screen-curve 0.5 "$work/flat2d.mp4" >"$work/c4b.err" 2>&1
+st=$?
+cat "$work/c4b.err"
+check "C4 --screen-curve 0.5 exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
+grep -qx 'xrdome: --screen-curve: 0.5 is out of range (off, or 1 to 10)' "$work/c4b.err"
+check "C4 --screen-curve 0.5 names the flag and the range" $?
+
 # ---- per-file settings memory (M1 to M10) ----
 cp "$work/pattern.mp4" "$work/mem.mp4"
 rec() { ls "$XDG_STATE_HOME"/xrdome/files/*.ini 2>/dev/null; }

@@ -208,6 +208,7 @@ static void print_keys(void)
         {"P", "projection: flat / VR180"},
         {"Z", "zoom mode: screen / magnify (flat)"},
         {"L", "screen: fixed / head-locked (flat)"},
+        {"C", "screen: flat / curved (flat, screen zoom mode)"},
         {"?", "this list"},
         {"B", "debanding on / off"},
         {"I", "playback information"},
@@ -215,6 +216,19 @@ static void print_keys(void)
     };
     for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++)
         fprintf(stderr, "keys: %s  %s\n", keys[i][0], keys[i][1]);
+}
+
+/* "screen curve: off" or "screen curve: 1.00", and why magnify mode draws a
+ * curved screen flat. */
+static void print_curve(const xrd_controls *c, const char *prefix)
+{
+    if (!c->screen_curved)
+        fprintf(stderr, "%sscreen curve: off\n", prefix);
+    else if (c->zoom_mode != XRD_ZOOM_SCREEN)
+        fprintf(stderr, "%sscreen curve: %.2f (flat in magnify mode)\n", prefix,
+                (double)c->screen_curve);
+    else
+        fprintf(stderr, "%sscreen curve: %.2f\n", prefix, (double)c->screen_curve);
 }
 
 /* The I key (spec 5.7): one item per line. */
@@ -252,11 +266,13 @@ static void print_info(xrd_app *a)
                 xrd_value_zoom_mode_name(c->zoom_mode));
         if (a->frames > 0)
             fprintf(stderr, ", screen %.1f x %.1f degrees\n",
-                    2.0 * atan((double)a->geom.half_w) * 180.0 / XRD_PI_D,
+                    2.0 * xrd_flat_half_angle(a->geom.half_w, xrd_controls_screen_curve(c)) *
+                        180.0 / XRD_PI_D,
                     2.0 * atan((double)a->geom.half_h) * 180.0 / XRD_PI_D);
         else
             fputc('\n', stderr);
         fprintf(stderr, "info: screen: %s\n", c->screen_locked ? "head-locked" : "fixed");
+        print_curve(c, "info: ");
     } else {
         fprintf(stderr, "info: zoom: %.2f\n", (double)c->zoom);
         fprintf(stderr, "info: screen: fixed (VR180)\n");
@@ -386,6 +402,14 @@ static bool handle_key_action(const SDL_KeyboardEvent *k, xrd_app *a)
         } else {
             fprintf(stderr, "screen: fixed (VR180 cannot be head-locked)\n");
         }
+        break;
+    case SDLK_c:
+        if (k->repeat)
+            break;
+        if (xrd_controls_toggle_curve(ctl))
+            print_curve(ctl, "");
+        else
+            fprintf(stderr, "screen curve: none (VR180 has no flat screen)\n");
         break;
     case SDLK_SLASH: /* '?' is Shift+/ on a US layout */
         if (shift && !k->repeat)
@@ -841,6 +865,7 @@ int main(int argc, char **argv)
                 .swap_eyes = ctl.swap_eyes,
                 .geom = app.geom,
                 .trilinear = app.trilinear,
+                .screen_curve = xrd_controls_screen_curve(&ctl),
             };
             /* --mipmap-check: every draw that wants mipmaps must find a chain
              * generated for the frame in the texture. Without one the draw

@@ -44,6 +44,8 @@ typedef struct {
     float zoom_default;    /* VR180 zoom from device and ini, before --zoom */
     float flat_zoom;       /* [device.X] flat_zoom, default 1.5 */
     bool screen_locked;    /* --screen fixed|locked, [general] screen */
+    float screen_curve;    /* --screen-curve off|R, [general] screen_curve: 0 = off (default),
+                              else the radius, XRD_SCREEN_CURVE_MIN..MAX */
     bool mipmap;           /* --mipmap on|off, default on */
     char ffprobe[256];     /* [general] ffprobe, default "ffprobe" */
     /* development only (smoke test), not documented: */
