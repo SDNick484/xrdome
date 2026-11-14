@@ -140,8 +140,9 @@ start gives a tilted picture, and `R` does not correct that. Hold your head leve
 `--require-hwdec` (exit 1 unless mpv decodes with VA-API), `--timing-log PATH`,
 `--content-fov HxV`, `--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)),
 `--mpv-profile NAME`, `--mpv-opt KEY=VALUE` (repeatable, up to 16), `--mpv-log LEVEL`,
-`--convergence DEG`, `--filter bilinear|bicubic`, `--fbo-format rgb10|rgba8`, `--dither on|off`, `--deband on|off`,
-`--no-memory`, `--forget` (the last two are described under [Per-file settings](#per-file-settings)).
+`--convergence DEG`, `--filter bilinear|bicubic`, `--fbo-format rgb10|rgba8`, `--dither on|off`,
+`--deband on|off`, `--no-memory`, `--forget`, `--resume`, `--no-resume` (the last four are
+described under [Per-file settings](#per-file-settings)).
 
 `--proj auto|hequirect|flat` (default `auto`) chooses the projection: `hequirect` is VR180
 (half-equirectangular), `flat` an ordinary flat screen (see [Flat video](#flat-video)), `auto`
@@ -240,8 +241,10 @@ to highest: built-in defaults, built-in device values, the ini file, the command
 
 `[general]` keys: `pose` (same spec as `--pose`, default `udp-opentrack:port=4242`), `output`
 (same as `--output`, default `auto`), `screen` (`fixed` or `locked`, as `--screen`, default
-`fixed`) and `ffprobe` (the program run for format detection, default `ffprobe` looked up on
-`PATH`) and `deband` (`yes` or `no`, also `on` or `off`, as `--deband`, default `no`).
+`fixed`), `resume` (`yes` or `no`, as `--resume`, default `no`; see
+[Resume](#resume-where-you-left-off)), `ffprobe` (the program run for format detection,
+default `ffprobe` looked up on `PATH`) and `deband` (`yes` or `no`, also `on` or `off`, as
+`--deband`, default `no`).
 
 `[device.<name>]` keys, read for the device selected with `--device` (default `viture-pro`):
 `fov_diag` (diagonal FOV in degrees, 10 to 120), `zoom` (the VR180 zoom, 0.25 to 4, default 1)
@@ -255,6 +258,7 @@ unknown keys and bad values are errors that name the file and line.
 pose = udp-opentrack:port=4242,yaw=-1
 output = auto
 screen = fixed
+resume = no
 ffprobe = /usr/bin/ffprobe
 deband = no
 
@@ -403,7 +407,8 @@ by `P` is not.
 xrdome remembers these settings for each video file and restores them the next time you open the
 same file: the projection, the VR180 zoom and the flat zoom, layout (`sbs-lr`, `sbs-rl`, `tb-lr`,
 `tb-rl`, `mono`), packing, zoom mode, swap-eyes, content FOV and convergence. The screen lock is
-not remembered.
+not remembered. The playback position is remembered only when you ask for it with `--resume`
+(see [Resume](#resume-where-you-left-off)).
 
 Only settings you changed are stored. A setting counts as changed for a file when a key changed it
 during the run (`[`, `]`, `S`, `M`, `P`, `Z`), when you gave its flag (`--zoom`, `--proj`,
@@ -446,7 +451,8 @@ content_fov = 120x90
 record. The settings keys are `zoom` (the VR180 zoom, 0.25 to 4), `flat_zoom` (the flat zoom, 0.25
 to 4), `layout`, `packing` (`half` or `full`), `zoom_mode` (`screen` or `magnify`), `swap` (`yes`
 or `no`), `content_fov` (`HxV`, each 10 to 180) and `convergence` (-5 to 5); a missing key means
-"follow the defaults" (or, for `layout` and `packing`, detection).
+"follow the defaults" (or, for `layout` and `packing`, detection). `position` (seconds, three
+decimals) is only written with `--resume`.
 
 `proj` (`hequirect` or `flat`) is written in every record: it is the projection in effect when
 the player quit, and on the next open it decides the projection (`detect: proj=flat (record)`).
@@ -487,7 +493,8 @@ settings: forgot 8123456789-9f3c0a1b22d4e6f7
 ```
 
 The words are `zoom`, `layout`, `swap`, `content-fov`, `convergence`, `proj`, `flat-zoom`,
-`packing` and `zoom-mode`, in that order. `restored` is printed at open, after the `detect:` line,
+`packing`, `zoom-mode` and `position` (`H:MM:SS`, only with `--resume`), in that order. `restored`
+is printed at open, after the `detect:` line,
 and lists only the values actually applied (not ones a flag overrode). `saved` is printed at exit when a record was written. `forgot` is printed by `--forget`
 when it deleted a record. A file with no record prints nothing.
 
@@ -498,6 +505,40 @@ when it deleted a record. A file with no record prints nothing.
   record is still deleted and then nothing is read or written.
 
 Both are command-line only.
+
+### Resume (where you left off)
+
+Off by default. With `--resume` (or `resume = yes` under `[general]` in `config.ini`) a file
+reopens where it was left; `--no-resume` turns it off again for one run. If both flags are given,
+the last one wins, and either flag beats the ini file.
+
+While resume is on, the record gets a `position = SECONDS` line (three decimals, for example
+`position = 3723.457`) when the player exits, and the next `--resume` run opens the file there
+through mpv's `start` option. The restored line shows it, for example
+`settings: restored zoom=0.75 proj=hequirect position=1:02:03`, and the saved line shows the
+new one. The position is mpv's playback position at the moment of exit.
+
+A position is saved and resumed only inside this part of the file: not in the first 30 seconds,
+and not in the last 5% of the file or the last 60 seconds, whichever is shorter. So a position t
+in a file of length d is used when `t >= 30` and `t < d - min(0.05 * d, 60)`. A finished film
+therefore starts from the beginning next time. Quitting outside that range removes the record's
+`position` line. A file of 30 seconds or less never resumes.
+
+- Without `--resume` a record is exactly what it was before this feature, and a `position` line
+  already in it is kept as it is, neither used nor changed.
+- `--no-memory` turns resume off as well: nothing is read or written.
+- `--no-resume` (or no `--resume`) reads and writes the other settings as usual and leaves the
+  `position` line alone.
+- An explicit start, `--mpv-opt start=TIME`, wins over the record: the file opens at TIME, the
+  record's position is not printed as restored, and the position at exit is saved as usual.
+- A position past the end of the file (the file was replaced by a shorter one with the same key) is
+  ignored: one `xrdome: note: saved position H:MM:SS is past the end of this file (H:MM:SS); starting
+  from the beginning` line is printed and the file plays from the start. The `restored` line has
+  already been printed by then, and shows the position. The duration is only known once mpv has
+  opened the file, so xrdome gives mpv the start option first and seeks back to 0 when the
+  position turns out to be unusable.
+- A `position` that is not a number from 0 to 10000000 makes the record unusable, like any other bad
+  value (see below).
 
 To find the record for a video, search the `path` labels, then open it in an editor:
 

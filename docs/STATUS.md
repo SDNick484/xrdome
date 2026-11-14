@@ -185,6 +185,39 @@ Still unverified (spec section 11):
   `fast` is the default profile for that reason); and the owner's judgement on a dark,
   low-bitrate file, toggling `B` on a still frame.
 
+## Resume from the last position (`--resume`, issue #19)
+
+Opt-in: `--resume` / `--no-resume` and `[general] resume = yes|no` (default no). New record key
+`position` (seconds, three decimals), written at quit only while resume is on; without resume a
+record is what it was before (and a `position` already in it is kept, not used).
+
+Decisions:
+- Not saved or resumed in the first 30 s, nor in the last `min(5% of the file, 60 s)`
+  (`t >= 30 and t < d - min(0.05 d, 60)`, `xrd_resume_check`). Quitting outside that range removes
+  the record's `position`, so a finished film starts over.
+- Precedence: `--no-memory` beats everything (nothing read or written); `--no-resume` beats an ini
+  `resume = yes`; of `--resume` and `--no-resume` the last wins; an explicit
+  `--mpv-opt start=...` wins over the record's position (which is then not printed as restored),
+  and the position at exit is still saved.
+- `position` is not in the table that `apply`, `collect` and `equal` walk, so `settings: restored`
+  cannot mention it unless resume used it; `main.c` adds it by hand.
+- The start is mpv's `start` option, put before the user's `--mpv-opt`s. mpv only knows the duration
+  after the file loads, so for the past-the-end case the player checks on `FILE_LOADED`, prints one
+  `xrdome: note:` and seeks to 0. The `restored` line is printed before that, so it still shows
+  the position.
+- Duration or position unknown at quit (mpv returns none): the record's position is left as loaded.
+
+Verified in the sandbox (Ubuntu 24.04-like, mpv, software GL, Xvfb): unit tests for the record's
+parse and format, the near-start and near-end rule, and the precedence; smoke cases M13 to M19
+(no position without `--resume`; saved and restored with it, and playback begins at the saved
+position; `--no-resume` and `--no-memory` leave the record byte-identical; an explicit start wins;
+quitting in the first 30 s drops the position; a position past the end gives one note and starts at
+0).
+
+Awaits the glasses: resuming a real long film (hardware decode, seeking with `start` on a large
+file, how long mpv takes to reach the position on an 8K file), and a real quit with `Q` or the
+window close in the middle of a film (the sandbox quits by `--frames`).
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship
@@ -231,7 +264,7 @@ Still unverified (spec section 11):
 - Untested: unplug behaviour during playback (a disconnect between runs happened on 2026-11-13,
   see Findings), automatic 8-bit FBO fallback.
 - Unanalysed: the remaining 0.6-1.3% late frames.
-- Per-file settings: the items listed as not covered above.
+- Per-file settings: the items listed as not covered above, and resume (see its section).
 - Recenter: `Shift+R` levels a tilted picture (2026-11-14). A gravity-level start or a
   "level" key is optional now.
 - `no pose data` after a glasses reconnect: once (2026-11-13) it was XRLinuxDriver crashing at
