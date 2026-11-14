@@ -10,7 +10,8 @@
 struct xrd_renderer {
     GLuint prog;
     GLuint vao;
-    GLint u_video, u_rot, u_tan_half, u_inv_fov, u_reject, u_u_scale, u_u_offset, u_bicubic, u_dither;
+    GLint u_video, u_rot, u_tan_half, u_proj, u_inv_fov, u_reject, u_flat_half, u_eye_scale,
+        u_eye_offset, u_bicubic, u_dither;
     float hfov_deg, vfov_deg;
     float convergence_deg;
     xrd_filter filter;
@@ -23,10 +24,11 @@ static void set_err(char *err, size_t errlen, const char *what, const char *log)
         snprintf(err, errlen, "%s: %s", what, log);
 }
 
-static GLuint compile(GLenum type, const char *src, const char *what, char *err, size_t errlen)
+static GLuint compile(GLenum type, const char *const *lines, int n, const char *what, char *err,
+                      size_t errlen)
 {
     GLuint s = glCreateShader(type);
-    glShaderSource(s, 1, &src, NULL);
+    glShaderSource(s, n, lines, NULL);
     glCompileShader(s);
     GLint ok = 0;
     glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
@@ -42,10 +44,12 @@ static GLuint compile(GLenum type, const char *src, const char *what, char *err,
 
 xrd_renderer *xrd_renderer_new(char *err, size_t errlen)
 {
-    GLuint vs = compile(GL_VERTEX_SHADER, XRD_SHADER_VR180_VERT, "vr180.vert", err, errlen);
+    GLuint vs = compile(GL_VERTEX_SHADER, XRD_SHADER_VR180_VERT,
+                        XRD_SHADER_LINES(XRD_SHADER_VR180_VERT), "vr180.vert", err, errlen);
     if (!vs)
         return NULL;
-    GLuint fs = compile(GL_FRAGMENT_SHADER, XRD_SHADER_VR180_FRAG, "vr180.frag", err, errlen);
+    GLuint fs = compile(GL_FRAGMENT_SHADER, XRD_SHADER_VR180_FRAG,
+                        XRD_SHADER_LINES(XRD_SHADER_VR180_FRAG), "vr180.frag", err, errlen);
     if (!fs) {
         glDeleteShader(vs);
         return NULL;
@@ -81,8 +85,10 @@ xrd_renderer *xrd_renderer_new(char *err, size_t errlen)
     r->u_reject = glGetUniformLocation(prog, "u_reject");
     r->hfov_deg = 180.f;
     r->vfov_deg = 180.f;
-    r->u_u_scale = glGetUniformLocation(prog, "u_u_scale");
-    r->u_u_offset = glGetUniformLocation(prog, "u_u_offset");
+    r->u_proj = glGetUniformLocation(prog, "u_proj");
+    r->u_flat_half = glGetUniformLocation(prog, "u_flat_half");
+    r->u_eye_scale = glGetUniformLocation(prog, "u_eye_scale");
+    r->u_eye_offset = glGetUniformLocation(prog, "u_eye_offset");
     r->u_bicubic = glGetUniformLocation(prog, "u_bicubic");
     r->convergence_deg = 0.f;
     r->filter = XRD_FILTER_BILINEAR;
@@ -131,8 +137,7 @@ static void mat3_mul(const float a[9], const float b[9], float out[9])
 }
 
 void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
-                       float tan_h, float tan_v, xrd_layout layout, bool swap_eyes,
-                       int out_w, int out_h)
+                       const xrd_draw_params *dp, int out_w, int out_h)
 {
     /* Own the fixed-function state the pass depends on. */
     glDisable(GL_SCISSOR_TEST);
@@ -148,7 +153,10 @@ void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, video_tex);
     glUniform1i(r->u_video, 0);
-    glUniform2f(r->u_tan_half, tan_h, tan_v);
+    glUniform2f(r->u_tan_half, dp->geom.tan_h, dp->geom.tan_v);
+    glUniform1i(r->u_proj, dp->proj == XRD_PROJ_FLAT ? 1 : 0);
+    /* The shader draws black for a flat screen whose extents are not > 0. */
+    glUniform2f(r->u_flat_half, dp->geom.half_w, dp->geom.half_h);
     const double deg = 3.14159265358979323846 / 180.0;
     glUniform2f(r->u_reject, r->hfov_deg < XRD_FULL_FOV_DEG ? 1.f : 0.f, r->vfov_deg < XRD_FULL_FOV_DEG ? 1.f : 0.f);
     glUniform2f(r->u_inv_fov, (float)(1.0 / (r->hfov_deg * deg)), (float)(1.0 / (r->vfov_deg * deg)));
@@ -157,10 +165,10 @@ void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
 
     int half = out_w / 2;
     for (int eye = 0; eye < 2; eye++) {
-        float scale, offset;
-        xrd_eye_u_transform(layout, eye, swap_eyes, &scale, &offset);
-        glUniform1f(r->u_u_scale, scale);
-        glUniform1f(r->u_u_offset, offset);
+        float scale[2], offset[2];
+        xrd_eye_uv_transform(dp->layout, eye, dp->swap_eyes, scale, offset);
+        glUniform2f(r->u_eye_scale, scale[0], scale[1]);
+        glUniform2f(r->u_eye_offset, offset[0], offset[1]);
         /* Convergence, in head space after the view rotation: positive yaw
          * turns left, so the left viewport turns right by half (-c/2) and
          * the right viewport left (+c/2). */

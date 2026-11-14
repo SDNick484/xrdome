@@ -40,19 +40,37 @@ void xrd_renderer_set_filter(xrd_renderer *r, xrd_filter f);
  * xrd_renderer_draw. */
 void xrd_renderer_set_dither(xrd_renderer *r, bool on);
 
+typedef struct {
+    xrd_proj proj;
+    xrd_layout layout;
+    bool swap_eyes;
+    xrd_view_geom geom;
+    bool trilinear;   /* sample through the mipmap chain; the caller guarantees it is valid */
+} xrd_draw_params;
+
 /* Draws both eyes into the currently bound framebuffer: left eye in the left half.
  * rot is column-major (xrd_quat_to_mat3).
  *
+ * dp->proj selects the mapping: XRD_PROJ_HEQUIRECT is the half-equirect lookup
+ * of xrd_dir_to_uv_fov (with the content FOV), XRD_PROJ_FLAT the screen of
+ * xrd_flat_dir_to_uv with dp->geom.half_w / half_h. Directions that miss the
+ * picture draw black. dp->layout and dp->swap_eyes pick each eye's sub-image
+ * (xrd_eye_uv_transform); when a split axis has an odd number of texels, the
+ * middle texel column (sbs) or row (tb) belongs to neither eye, so no filter
+ * ever reads one eye's pixels for the other.
+ *
  * Contract:
  *  - video_tex must not be 0. It is GL-oriented (t = 1 is the image top). Its
- *    owner must set GL_LINEAR min/mag filters and GL_CLAMP_TO_EDGE on both axes.
- *  - tan_h/tan_v must be computed with the per-eye aspect (out_w / 2) / out_h.
+ *    owner must set GL_LINEAR mag filter and GL_CLAMP_TO_EDGE on both axes;
+ *    when dp->trilinear is false the texture's min filter must be GL_LINEAR.
+ *  - dp must not be NULL. dp->geom.tan_h/tan_v must be computed with the
+ *    per-eye aspect (out_w / 2) / out_h (xrd_view_geometry does).
+ *  - dp->trilinear is accepted and not used yet: the eye pass samples level 0.
  *  - draw disables GL_SCISSOR_TEST, GL_BLEND, GL_CULL_FACE, GL_DEPTH_TEST,
  *    GL_STENCIL_TEST and GL_FRAMEBUFFER_SRGB and enables all colour writes.
  *  - draw changes the bound program, VAO, active texture unit, the unit-0 2D
  *    texture binding, the viewport and the flags above, and does not restore them. */
 void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
-                       float tan_h, float tan_v, xrd_layout layout, bool swap_eyes,
-                       int out_w, int out_h);
+                       const xrd_draw_params *dp, int out_w, int out_h);
 
 #endif

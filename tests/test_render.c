@@ -167,7 +167,9 @@ static void draw_tex_fov(GLuint tex, xrd_quat q, xrd_layout layout, bool swap, b
         glCullFace(GL_FRONT_AND_BACK);
         glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     }
-    xrd_renderer_draw(g_r, tex, rot, g_th, g_tv, layout, swap, W, H);
+    const xrd_draw_params dp = {.proj = XRD_PROJ_HEQUIRECT, .layout = layout, .swap_eyes = swap,
+                                .geom = {.tan_h = g_th, .tan_v = g_tv}, .trilinear = false};
+    xrd_renderer_draw(g_r, tex, rot, &dp, W, H);
     assert_int_equal(glGetError(), GL_NO_ERROR);
     if (hostile) {
         glDisable(GL_SCISSOR_TEST);
@@ -949,6 +951,330 @@ static void dither_keeps_black_black(void **state)
     glDeleteTextures(1, &tex);
 }
 
+/* ---- flat projection and the two-axis eye split ---- */
+
+/* Viture Pro XR: the eye viewport is W/2 x H = 192 x 108, 16:9. */
+#define EYE_ASPECT ((float)(W / 2) / (float)H)
+
+static void flat_geom(xrd_zoom_mode mode, float zoom, double picture_aspect, xrd_view_geom *g)
+{
+    xrd_view_geometry(XRD_PROJ_FLAT, mode, 43.f, EYE_ASPECT, zoom, picture_aspect, g);
+}
+
+/* Draws dp into the test framebuffer, cleared to magenta first so that a
+ * pixel the pass leaves alone cannot pass for green, red, blue or black. */
+static void draw_dp(GLuint tex, xrd_quat q, const xrd_draw_params *dp)
+{
+    float rot[9];
+    xrd_quat_to_mat3(q, rot);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_fbo);
+    glViewport(0, 0, W, H);
+    glClearColor(1.f, 0.f, 1.f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    xrd_renderer_draw(g_r, tex, rot, dp, W, H);
+    assert_int_equal(glGetError(), GL_NO_ERROR);
+    glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, g_img);
+    assert_int_equal(glGetError(), GL_NO_ERROR);
+}
+
+static void draw_flat(GLuint tex, xrd_quat q, xrd_layout layout, bool swap, const xrd_view_geom *g)
+{
+    const xrd_draw_params dp = {.proj = XRD_PROJ_FLAT, .layout = layout, .swap_eyes = swap,
+                                .geom = *g, .trilinear = false};
+    draw_dp(tex, q, &dp);
+}
+
+static const uint8_t *px_at(int x, int y)
+{
+    return &g_img[(y * W + x) * 4];
+}
+
+/* 16:9 picture, 384 x 216 texels: solid green with a white top row (row
+ * FLAT_H - 1, since row 0 is the image bottom). */
+#define FLAT_W 384
+#define FLAT_H 216
+
+static GLuint make_flat_green_tex(void)
+{
+    uint8_t *px = malloc((size_t)FLAT_W * FLAT_H * 4);
+    assert_non_null(px);
+    for (int y = 0; y < FLAT_H; y++)
+        for (int x = 0; x < FLAT_W; x++) {
+            uint8_t *p = &px[(y * FLAT_W + x) * 4];
+            bool top = y == FLAT_H - 1;
+            p[0] = top ? 255 : 0;
+            p[1] = 255;
+            p[2] = top ? 255 : 0;
+            p[3] = 255;
+        }
+    GLuint t = make_tex(FLAT_W, FLAT_H, px);
+    free(px);
+    return t;
+}
+
+static void flat_mono_centre_edge_and_outside(void **state)
+{
+    (void)state;
+    GLuint tex = make_flat_green_tex();
+    xrd_view_geom g;
+
+    /* zoom 1: the 16:9 picture fills the 16:9 eye exactly */
+    flat_geom(XRD_ZOOM_SCREEN, 1.f, 16.0 / 9.0, &g);
+    draw_flat(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_MONO, false, &g);
+    expect_px(W / 4, H / 2, 0, 255, 0);
+    expect_px(W / 2 + W / 4, H / 2, 0, 255, 0);
+    /* The white row lies on a single output row, the same one across the eye:
+     * a flat screen's top edge does not bow (a curved mapping would bend it by
+     * several rows between the centre and the sides). */
+    const int cols[] = {W / 2 / 10, W / 4, W / 2 * 9 / 10};
+    int row_of[3];
+    for (int eye = 0; eye < 2; eye++)
+        for (int i = 0; i < 3; i++) {
+            int n = 0;
+            for (int y = 0; y < H; y++)
+                if (px_at(eye * (W / 2) + cols[i], y)[0] > 32) {
+                    n++;
+                    row_of[i] = y;
+                }
+            if (n != 1)
+                fail_msg("eye %d column %d: white on %d rows, want 1", eye, cols[i], n);
+            if (row_of[i] != row_of[0])
+                fail_msg("eye %d: white row %d at column %d, %d at column %d", eye, row_of[i],
+                         cols[i], row_of[0], cols[0]);
+        }
+    assert_int_equal(row_of[0], H - 1);
+
+    /* zoom 0.5: the screen covers the middle half of the eye on each axis */
+    flat_geom(XRD_ZOOM_SCREEN, 0.5f, 16.0 / 9.0, &g);
+    draw_flat(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_MONO, false, &g);
+    for (int eye = 0; eye < 2; eye++) {
+        int x0 = eye * (W / 2);
+        expect_px(x0 + W / 4, H / 2, 0, 255, 0);
+        expect_px(x0 + W / 8 - 2, H / 2, 0, 0, 0);     /* just left of the screen */
+        expect_px(x0 + W / 8 + 2, H / 2, 0, 255, 0);   /* just inside it */
+        expect_px(x0 + 3 * W / 8 + 2, H / 2, 0, 0, 0); /* just right of it */
+        expect_px(x0 + W / 4, H / 4 - 2, 0, 0, 0);     /* just below it */
+        expect_px(x0 + W / 4, 3 * H / 4 + 2, 0, 0, 0); /* just above it */
+        expect_px(x0 + 2, 2, 0, 0, 0);
+    }
+    glDeleteTextures(1, &tex);
+}
+
+static void flat_behind_is_black(void **state)
+{
+    (void)state;
+    GLuint tex = make_flat_green_tex();
+    xrd_view_geom g;
+    flat_geom(XRD_ZOOM_SCREEN, 4.f, 16.0 / 9.0, &g);
+    draw_flat(tex, xrd_quat_from_ypr_deg(180, 0, 0), XRD_LAYOUT_MONO, false, &g);
+    expect_all_black("flat, behind");
+    /* looking 90 degrees right: the screen's plane is edge-on */
+    draw_flat(tex, xrd_quat_from_ypr_deg(-90, 0, 0), XRD_LAYOUT_MONO, false, &g);
+    expect_all_black("flat, beside");
+    /* a junk screen (zero extents) draws black, not garbage */
+    xrd_view_geom bad = g;
+    bad.half_w = 0.f;
+    draw_flat(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_MONO, false, &bad);
+    expect_all_black("flat, zero-width screen");
+    glDeleteTextures(1, &tex);
+}
+
+/* A stereo test frame: the first eye's half red, the second's blue. sbs
+ * splits columns (left red), tb splits rows (top red: rows >= split, row 0
+ * being the image bottom). split is the first texel of the second colour
+ * along the split axis, counted from the left or from the top. */
+static GLuint make_split_tex(int w, int h, bool tb, int split)
+{
+    uint8_t *px = malloc((size_t)w * h * 4);
+    assert_non_null(px);
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            uint8_t *p = &px[((size_t)y * w + x) * 4];
+            /* index along the split axis, from the left or from the top */
+            int a = tb ? h - 1 - y : x;
+            bool red = a < split;
+            p[0] = red ? 255 : 0;
+            p[1] = 0;
+            p[2] = red ? 0 : 255;
+            p[3] = 255;
+        }
+    GLuint t = make_tex(w, h, px);
+    free(px);
+    return t;
+}
+
+/* 20 points inside a viewport (5 x 4 grid, away from the edges). */
+static void expect_viewport_colour(int eye, int r, int g, int b)
+{
+    for (int i = 0; i < 5; i++)
+        for (int j = 0; j < 4; j++) {
+            int x = eye * (W / 2) + (int)((0.1 + 0.2 * i) * (W / 2));
+            int y = (int)((0.125 + 0.25 * j) * H);
+            expect_px(x, y, r, g, b);
+        }
+}
+
+static void check_flat_stereo_colours(GLuint tex, xrd_layout layout, double frame_aspect)
+{
+    const xrd_filter filters[] = {XRD_FILTER_BILINEAR, XRD_FILTER_BICUBIC};
+    double a = xrd_picture_aspect(layout, xrd_packing_resolve(layout, XRD_PACKING_AUTO,
+                                                               frame_aspect), frame_aspect);
+    assert_float_equal(a, 16.0 / 9.0, 1e-9); /* the test frames hold 16:9 pictures */
+    xrd_view_geom g;
+    flat_geom(XRD_ZOOM_SCREEN, 1.f, a, &g);
+    for (size_t f = 0; f < 2; f++) {
+        xrd_renderer_set_filter(g_r, filters[f]);
+        draw_flat(tex, XRD_QUAT_IDENTITY, layout, false, &g);
+        expect_viewport_colour(0, 255, 0, 0);
+        expect_viewport_colour(1, 0, 0, 255);
+        draw_flat(tex, XRD_QUAT_IDENTITY, layout, true, &g);
+        expect_viewport_colour(0, 0, 0, 255);
+        expect_viewport_colour(1, 255, 0, 0);
+    }
+}
+
+/* Half SBS: a 16:9 frame holding two squeezed 16:9 pictures. */
+static void flat_half_sbs_eyes(void **state)
+{
+    (void)state;
+    GLuint tex = make_split_tex(64, 36, false, 32);
+    check_flat_stereo_colours(tex, XRD_LAYOUT_SBS_LR, 64.0 / 36.0);
+    glDeleteTextures(1, &tex);
+}
+
+/* Full top-bottom: an 8:9 frame holding two full 16:9 pictures. */
+static void flat_full_tb_eyes(void **state)
+{
+    (void)state;
+    GLuint tex = make_split_tex(64, 72, true, 36);
+    check_flat_stereo_colours(tex, XRD_LAYOUT_TB_LR, 64.0 / 72.0);
+    glDeleteTextures(1, &tex);
+}
+
+/* Largest value of channel c over viewport eye, and how many pixels there
+ * have channel lit > 200 and how many are black. */
+static void viewport_stats(int eye, int c, int lit, int *max_c, int *n_lit, int *n_black)
+{
+    *max_c = 0;
+    *n_lit = 0;
+    *n_black = 0;
+    for (int y = 0; y < H; y++)
+        for (int x = eye * (W / 2); x < (eye + 1) * (W / 2); x++) {
+            const uint8_t *p = px_at(x, y);
+            if (p[c] > *max_c)
+                *max_c = p[c];
+            *n_lit += p[lit] > 200;
+            *n_black += p[0] + p[1] + p[2] == 0;
+        }
+}
+
+/* Review Focus 4. The view is narrowed 20x (magnify) and turned to the
+ * screen's edge on the split axis, so one texel of the frame spans several
+ * display pixels and the seam-side edge of an eye's sub-image fills half of
+ * a viewport. tb == false: sbs, looking right at the left eye's seam edge and
+ * left at the right eye's. tb == true: tb-lr, looking down at the top (left)
+ * eye's seam edge and up at the bottom (right) eye's. The middle texel of an
+ * odd axis is coloured as the other eye in each check, so taking it into
+ * either eye fails. */
+static void check_seam_at_size(int w, int h, bool tb)
+{
+    const xrd_layout layout = tb ? XRD_LAYOUT_TB_LR : XRD_LAYOUT_SBS_LR;
+    const xrd_packing packing = tb ? XRD_PACKING_FULL : XRD_PACKING_HALF;
+    const double f = (double)w / h;
+    xrd_view_geom g;
+    flat_geom(XRD_ZOOM_MAGNIFY, 20.f, xrd_picture_aspect(layout, packing, f), &g);
+    const double to_edge_deg = atan(tb ? g.half_h : g.half_w) * 180.0 / 3.14159265358979323846;
+    const int n = tb ? h : w;
+    const xrd_filter filters[] = {XRD_FILTER_BILINEAR, XRD_FILTER_BICUBIC};
+
+    for (int which = 0; which < 2; which++) {
+        /* which 0: the left eye (red) at its seam edge, the middle texel blue.
+         * which 1: the right eye (blue) at its seam edge, the middle texel red. */
+        int split = which == 0 ? n / 2 : (n + 1) / 2;
+        GLuint tex = make_split_tex(w, h, tb, split);
+        /* sbs: yaw right (negative) to the left eye's u = 1 edge, left for the
+         * right eye's u = 0 edge. tb: pitch down (negative) to the top eye's
+         * v = 0 edge, up for the bottom eye's v = 1 edge. */
+        double ang = which == 0 ? -to_edge_deg : to_edge_deg;
+        xrd_quat q = tb ? xrd_quat_from_ypr_deg(0, ang, 0) : xrd_quat_from_ypr_deg(ang, 0, 0);
+        for (size_t fi = 0; fi < 2; fi++) {
+            xrd_renderer_set_filter(g_r, filters[fi]);
+            draw_flat(tex, q, layout, false, &g);
+            int eye = which, max_other, n_own, n_black;
+            /* the other eye's colour: blue (2) for the left eye, red (0) for the right */
+            viewport_stats(eye, which == 0 ? 2 : 0, which == 0 ? 0 : 2, &max_other, &n_own,
+                           &n_black);
+            if (max_other > 8)
+                fail_msg("%dx%d %s, %s, eye %d: other eye's colour up to %d/255", w, h,
+                         tb ? "tb-lr" : "sbs-lr", fi ? "Catmull-Rom" : "bilinear", eye,
+                         max_other);
+            /* the view really straddles the screen's edge */
+            if (n_own < W / 2 * H / 4 || n_black < W / 2 * H / 4)
+                fail_msg("%dx%d %s eye %d: %d own-colour and %d black pixels; the view "
+                         "missed the seam edge", w, h, tb ? "tb" : "sbs", eye, n_own, n_black);
+        }
+        glDeleteTextures(1, &tex);
+    }
+}
+
+static void flat_seam_even_and_odd_sizes(void **state)
+{
+    (void)state;
+    check_seam_at_size(1920, 1080, false);
+    check_seam_at_size(1919, 1080, false);
+    check_seam_at_size(1920, 1081, false);
+    check_seam_at_size(1920, 2160, true);
+    check_seam_at_size(1920, 1081, true);
+    check_seam_at_size(1919, 1080, true);
+}
+
+/* The odd-size frames also give each eye only its own colour straight ahead. */
+static void flat_odd_sizes_keep_eyes_apart(void **state)
+{
+    (void)state;
+    const xrd_filter filters[] = {XRD_FILTER_BILINEAR, XRD_FILTER_BICUBIC};
+    const struct { int w, h; bool tb; } cases[] = {{1919, 1080, false}, {1920, 1081, true}};
+    for (size_t c = 0; c < 2; c++) {
+        int n = cases[c].tb ? cases[c].h : cases[c].w;
+        /* middle texel blue: it must not reach the left (red) viewport */
+        GLuint tex = make_split_tex(cases[c].w, cases[c].h, cases[c].tb, n / 2);
+        xrd_layout layout = cases[c].tb ? XRD_LAYOUT_TB_LR : XRD_LAYOUT_SBS_LR;
+        double f = (double)cases[c].w / cases[c].h;
+        xrd_view_geom g;
+        flat_geom(XRD_ZOOM_SCREEN, 1.f,
+                  xrd_picture_aspect(layout, xrd_packing_resolve(layout, XRD_PACKING_AUTO, f), f),
+                  &g);
+        for (size_t fi = 0; fi < 2; fi++) {
+            xrd_renderer_set_filter(g_r, filters[fi]);
+            draw_flat(tex, XRD_QUAT_IDENTITY, layout, false, &g);
+            int max_blue, n_red, n_black;
+            viewport_stats(0, 2, 0, &max_blue, &n_red, &n_black);
+            if (max_blue > 8)
+                fail_msg("%dx%d: blue up to %d/255 in the left viewport", cases[c].w,
+                         cases[c].h, max_blue);
+            assert_true(n_red > 0);
+        }
+        glDeleteTextures(1, &tex);
+    }
+}
+
+/* Top-bottom is the same code path for VR180. */
+static void hequirect_tb_lr(void **state)
+{
+    (void)state;
+    GLuint tex = make_split_tex(64, 72, true, 36);
+    draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_TB_LR, false, false);
+    expect_viewport_colour(0, 255, 0, 0);
+    expect_viewport_colour(1, 0, 0, 255);
+    draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_TB_RL, false, false);
+    expect_viewport_colour(0, 0, 0, 255);
+    expect_viewport_colour(1, 255, 0, 0);
+    draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_TB_LR, true, false);
+    expect_viewport_colour(0, 0, 0, 255);
+    expect_viewport_colour(1, 255, 0, 0);
+    glDeleteTextures(1, &tex);
+}
+
 static void no_gl_error(void **state)
 {
     (void)state;
@@ -995,6 +1321,13 @@ int main(void)
         cmocka_unit_test_teardown(tenbit_precision_survives_dither, reset_view),
         cmocka_unit_test_teardown(dither_is_bounded, reset_view),
         cmocka_unit_test_teardown(dither_keeps_black_black, reset_view),
+        cmocka_unit_test_teardown(flat_mono_centre_edge_and_outside, reset_view),
+        cmocka_unit_test_teardown(flat_behind_is_black, reset_view),
+        cmocka_unit_test_teardown(flat_half_sbs_eyes, reset_view),
+        cmocka_unit_test_teardown(flat_full_tb_eyes, reset_view),
+        cmocka_unit_test_teardown(flat_seam_even_and_odd_sizes, reset_view),
+        cmocka_unit_test_teardown(flat_odd_sizes_keep_eyes_apart, reset_view),
+        cmocka_unit_test_teardown(hequirect_tb_lr, reset_view),
         cmocka_unit_test(no_gl_error),
     };
     return cmocka_run_group_tests(tests, setup, teardown);
