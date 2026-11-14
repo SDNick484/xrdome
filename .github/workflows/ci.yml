@@ -1,7 +1,9 @@
 # CI: build xrdome and run the whole test suite, including the Xvfb smoke tests.
 #
 # Known difference: ubuntu-24.04 ships mpv 0.37 (libmpv-dev), while the owner runs
-# a newer libmpv (2.6.0) on Gentoo. That difference is accepted for now.
+# a newer libmpv (2.6.0) on Gentoo. That difference is accepted for now; the
+# arch job builds and tests against Arch Linux's current gcc, mpv, SDL and Mesa,
+# which are close to the owner's.
 name: ci
 
 on:
@@ -64,4 +66,64 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: testlog
+          path: build/meson-logs/testlog.txt
+
+  # GitHub's hosted Linux runners are Ubuntu only, so Arch runs in its container.
+  arch-build-test:
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # sdl2-compat is Arch's SDL2 (SDL2's API on SDL3; it provides sdl2).
+      # xorg-server-xvfb ships both Xvfb and xvfb-run. The container has no
+      # diffutils (the smoke tests use cmp) and no fonts (libass needs one for
+      # the subtitle checks), which Ubuntu's runner image has.
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            gcc meson ninja pkgconf python \
+            mpv sdl2-compat libepoxy mesa cmocka \
+            ffmpeg xorg-server-xvfb xorg-xauth xorg-xrandr \
+            diffutils ttf-dejavu
+
+      - name: Versions
+        run: |
+          gcc --version | head -n 1
+          mpv --version | head -n 2
+          pkg-config --modversion mpv sdl2
+
+      - name: Configure
+        run: meson setup build -Dwerror=true
+
+      - name: Build
+        run: meson compile -C build
+
+      - name: Test
+        run: meson test -C build --print-errorlogs
+
+      - name: Require the smoke tests to have run
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          want = {"smoke", "smoke_tracking", "smoke_sbs"}
+          seen = {}
+          with open("build/meson-logs/testlog.json") as f:
+              for line in f:
+                  line = line.strip()
+                  if line:
+                      t = json.loads(line)
+                      seen[t["name"].split(":")[-1]] = t["result"]
+          bad = {n: seen.get(n, "MISSING") for n in sorted(want) if seen.get(n) != "OK"}
+          for n, r in bad.items():
+              print(f"::error::{n}: {r} (expected OK)")
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: Upload test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testlog-arch
           path: build/meson-logs/testlog.txt
