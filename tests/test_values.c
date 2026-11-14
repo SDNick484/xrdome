@@ -92,13 +92,70 @@ static void layout_round_trip(void **state)
     assert_int_equal(l, XRD_LAYOUT_SBS_RL);
     assert_true(xrd_value_layout("mono", &l));
     assert_int_equal(l, XRD_LAYOUT_MONO);
+    assert_true(xrd_value_layout("tb-lr", &l));
+    assert_int_equal(l, XRD_LAYOUT_TB_LR);
+    assert_true(xrd_value_layout("tb-rl", &l));
+    assert_int_equal(l, XRD_LAYOUT_TB_RL);
     assert_false(xrd_value_layout("tb", &l));
+    assert_false(xrd_value_layout("auto", &l));
     assert_false(xrd_value_layout("", &l));
     assert_false(xrd_value_layout("MONO", &l));
     assert_string_equal(xrd_value_layout_name(XRD_LAYOUT_SBS_LR), "sbs-lr");
     assert_string_equal(xrd_value_layout_name(XRD_LAYOUT_SBS_RL), "sbs-rl");
     assert_string_equal(xrd_value_layout_name(XRD_LAYOUT_MONO), "mono");
+    assert_string_equal(xrd_value_layout_name(XRD_LAYOUT_TB_LR), "tb-lr");
+    assert_string_equal(xrd_value_layout_name(XRD_LAYOUT_TB_RL), "tb-rl");
     assert_null(xrd_value_layout_name((xrd_layout)99));
+}
+
+static void proj_round_trip(void **state)
+{
+    (void)state;
+    xrd_proj p;
+    assert_true(xrd_value_proj("hequirect", &p));
+    assert_int_equal(p, XRD_PROJ_HEQUIRECT);
+    assert_true(xrd_value_proj("flat", &p));
+    assert_int_equal(p, XRD_PROJ_FLAT);
+    assert_false(xrd_value_proj("", &p));
+    assert_false(xrd_value_proj("Flat", &p));
+    assert_false(xrd_value_proj("auto", &p));
+    assert_int_equal(p, XRD_PROJ_FLAT); /* untouched on failure */
+    assert_string_equal(xrd_value_proj_name(XRD_PROJ_HEQUIRECT), "hequirect");
+    assert_string_equal(xrd_value_proj_name(XRD_PROJ_FLAT), "flat");
+    assert_null(xrd_value_proj_name((xrd_proj)99));
+}
+
+static void packing_round_trip(void **state)
+{
+    (void)state;
+    xrd_packing k;
+    assert_true(xrd_value_packing("half", &k));
+    assert_int_equal(k, XRD_PACKING_HALF);
+    assert_true(xrd_value_packing("full", &k));
+    assert_int_equal(k, XRD_PACKING_FULL);
+    assert_false(xrd_value_packing("", &k));
+    assert_false(xrd_value_packing("Half", &k));
+    assert_false(xrd_value_packing("auto", &k));
+    assert_string_equal(xrd_value_packing_name(XRD_PACKING_AUTO), "auto");
+    assert_string_equal(xrd_value_packing_name(XRD_PACKING_HALF), "half");
+    assert_string_equal(xrd_value_packing_name(XRD_PACKING_FULL), "full");
+    assert_null(xrd_value_packing_name((xrd_packing)99));
+}
+
+static void zoom_mode_round_trip(void **state)
+{
+    (void)state;
+    xrd_zoom_mode m;
+    assert_true(xrd_value_zoom_mode("screen", &m));
+    assert_int_equal(m, XRD_ZOOM_SCREEN);
+    assert_true(xrd_value_zoom_mode("magnify", &m));
+    assert_int_equal(m, XRD_ZOOM_MAGNIFY);
+    assert_false(xrd_value_zoom_mode("", &m));
+    assert_false(xrd_value_zoom_mode("Screen", &m));
+    assert_false(xrd_value_zoom_mode("auto", &m));
+    assert_string_equal(xrd_value_zoom_mode_name(XRD_ZOOM_SCREEN), "screen");
+    assert_string_equal(xrd_value_zoom_mode_name(XRD_ZOOM_MAGNIFY), "magnify");
+    assert_null(xrd_value_zoom_mode_name((xrd_zoom_mode)99));
 }
 
 static void yesno(void **state)
@@ -121,6 +178,8 @@ int main(void)
         cmocka_unit_test(float_basic),       cmocka_unit_test(fov_accepts),
         cmocka_unit_test(fov_rejects),       cmocka_unit_test(layout_round_trip),
         cmocka_unit_test(yesno),
+        cmocka_unit_test(proj_round_trip), cmocka_unit_test(packing_round_trip),
+        cmocka_unit_test(zoom_mode_round_trip),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

@@ -113,7 +113,7 @@ static bool handle_key_action(const SDL_KeyboardEvent *k, xrd_controls *ctl, xrd
         break;
     case SDLK_m:
         if (!k->repeat)
-            xrd_controls_cycle_layout(ctl);
+            xrd_controls_cycle_layout(ctl, 0.0); /* frame_aspect arrives with the wiring issue */
         break;
     default:
         break;
@@ -151,6 +151,10 @@ static xrd_file_settings settings_from_config(const xrd_config *cfg)
     return s;
 }
 
+/* Record bits main.c does not act on yet; the wiring issue (#8) drops this mask so
+ * "settings:" lines stay as they were. */
+#define XRD_SET_FLAT_BITS (XRD_SET_PROJ | XRD_SET_FLAT_ZOOM | XRD_SET_PACKING | XRD_SET_ZOOM_MODE)
+
 /* Handles --forget and --no-memory, loads the file's record and applies it
  * under the command-line flags into cfg. Silent when the file has no key or
  * there is no state directory. */
@@ -187,7 +191,8 @@ static void memory_load_and_apply(xrd_memory *m, xrd_config *cfg)
     case XRD_FS_OK: {
         m->have_loaded = true;
         xrd_file_settings s = settings_from_config(cfg);
-        unsigned applied = xrd_filestate_apply(&m->loaded, cfg->explicit_flags, &s);
+        unsigned applied = xrd_filestate_apply(&m->loaded, cfg->explicit_flags, &s) &
+                           ~XRD_SET_FLAT_BITS;
         cfg->zoom = s.zoom;
         cfg->layout = s.layout;
         cfg->content_hfov = s.content_hfov;
@@ -232,7 +237,7 @@ static void memory_save(const xrd_memory *m, const xrd_config *cfg, const xrd_co
     char err[256] = "", text[160];
     if (xrd_filestate_save(m->dir, m->key, &out, cfg->file, err, sizeof err) != 0)
         fprintf(stderr, "xrdome: warning: cannot save settings: %s\n", err);
-    else if (xrd_filestate_describe(&out, out.set, text, sizeof text) > 0)
+    else if (xrd_filestate_describe(&out, out.set & ~XRD_SET_FLAT_BITS, text, sizeof text) > 0)
         fprintf(stderr, "settings: saved %s\n", text);
 }
 

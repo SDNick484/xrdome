@@ -89,7 +89,8 @@ int xrd_filestate_dir(char *buf, size_t len)
 
 /* ---- record parse and format ------------------------------------------ */
 
-typedef enum { KEY_ZOOM, KEY_LAYOUT, KEY_SWAP, KEY_CONTENT_FOV, KEY_CONVERGENCE } setting_key;
+typedef enum { KEY_ZOOM, KEY_LAYOUT, KEY_SWAP, KEY_CONTENT_FOV, KEY_CONVERGENCE,
+               KEY_PROJ, KEY_FLAT_ZOOM, KEY_PACKING, KEY_ZOOM_MODE } setting_key;
 
 /* One table of key names, shared by parse and format. */
 static const struct { const char *name; unsigned bit; } k_settings[] = {
@@ -98,6 +99,10 @@ static const struct { const char *name; unsigned bit; } k_settings[] = {
     [KEY_SWAP] = { "swap", XRD_SET_SWAP },
     [KEY_CONTENT_FOV] = { "content_fov", XRD_SET_CONTENT_FOV },
     [KEY_CONVERGENCE] = { "convergence", XRD_SET_CONVERGENCE },
+    [KEY_PROJ] = { "proj", XRD_SET_PROJ },
+    [KEY_FLAT_ZOOM] = { "flat_zoom", XRD_SET_FLAT_ZOOM },
+    [KEY_PACKING] = { "packing", XRD_SET_PACKING },
+    [KEY_ZOOM_MODE] = { "zoom_mode", XRD_SET_ZOOM_MODE },
 };
 #define N_SETTINGS (sizeof k_settings / sizeof k_settings[0])
 
@@ -137,6 +142,22 @@ static bool apply_setting(setting_key k, const char *val, xrd_filestate *st)
     case KEY_CONVERGENCE:
         if (xrd_value_ranged(val, -XRD_CONVERGENCE_MAX, XRD_CONVERGENCE_MAX,
                              &st->v.convergence) != XRD_VALUE_OK)
+            return false;
+        break;
+    case KEY_PROJ:
+        if (!xrd_value_proj(val, &st->v.proj))
+            return false;
+        break;
+    case KEY_FLAT_ZOOM:
+        if (xrd_value_ranged(val, XRD_ZOOM_MIN, XRD_ZOOM_MAX, &st->v.flat_zoom) != XRD_VALUE_OK)
+            return false;
+        break;
+    case KEY_PACKING: /* "auto" is not a record value */
+        if (!xrd_value_packing(val, &st->v.packing))
+            return false;
+        break;
+    case KEY_ZOOM_MODE:
+        if (!xrd_value_zoom_mode(val, &st->v.zoom_mode))
             return false;
         break;
     }
@@ -223,7 +244,8 @@ xrd_fs_status xrd_filestate_parse(const char *text, xrd_filestate *out, char *er
                     unsupported = true;
             }
         } else if (span_is(kb, ke, "proj")) {
-            if (!span_is(vb, ve, "hequirect"))
+            /* any other projection is a newer record: leave it alone */
+            if (!(val_fits && apply_setting(KEY_PROJ, val, &st)))
                 unsupported = true;
         } else if (span_is(kb, ke, "path") || span_is(kb, ke, "saved")) {
             /* labels for people; never used */
@@ -277,7 +299,8 @@ int xrd_filestate_format(const xrd_filestate *st, const char *path_label, const 
     put(&s, "# xrdome per-file settings\nversion = %d\npath = ", XRD_FILESTATE_VERSION);
     for (const unsigned char *c = (const unsigned char *)path_label; *c; c++)
         put(&s, "%c", (*c < 0x20 || *c == 0x7f) ? '?' : *c);
-    put(&s, "\nsaved = %s\nproj = hequirect\n", date);
+    put(&s, "\nsaved = %s\nproj = %s\n", date,
+        xrd_value_proj_name(st->v.proj) ? xrd_value_proj_name(st->v.proj) : "hequirect");
 
     if (st->set & k_settings[KEY_ZOOM].bit)
         put(&s, "%s = %.4f\n", k_settings[KEY_ZOOM].name, (double)st->v.zoom);
@@ -291,6 +314,15 @@ int xrd_filestate_format(const xrd_filestate *st, const char *path_label, const 
             (double)st->v.content_vfov);
     if (st->set & k_settings[KEY_CONVERGENCE].bit)
         put(&s, "%s = %.3f\n", k_settings[KEY_CONVERGENCE].name, (double)st->v.convergence);
+    if (st->set & k_settings[KEY_FLAT_ZOOM].bit)
+        put(&s, "%s = %.4f\n", k_settings[KEY_FLAT_ZOOM].name, (double)st->v.flat_zoom);
+    /* AUTO is not a record value: an unset packing is simply not written. */
+    if ((st->set & k_settings[KEY_PACKING].bit) && xrd_value_packing_name(st->v.packing) &&
+        st->v.packing != XRD_PACKING_AUTO)
+        put(&s, "%s = %s\n", k_settings[KEY_PACKING].name, xrd_value_packing_name(st->v.packing));
+    if ((st->set & k_settings[KEY_ZOOM_MODE].bit) && xrd_value_zoom_mode_name(st->v.zoom_mode))
+        put(&s, "%s = %s\n", k_settings[KEY_ZOOM_MODE].name,
+            xrd_value_zoom_mode_name(st->v.zoom_mode));
 
     if (s.pos >= len || s.pos > (size_t)INT_MAX)
         return -1;
@@ -460,6 +492,10 @@ static void copy_field(unsigned bit, const xrd_file_settings *from, xrd_file_set
         to->content_vfov = from->content_vfov;
         break;
     case XRD_SET_CONVERGENCE: to->convergence = from->convergence; break;
+    case XRD_SET_PROJ: to->proj = from->proj; break;
+    case XRD_SET_FLAT_ZOOM: to->flat_zoom = from->flat_zoom; break;
+    case XRD_SET_PACKING: to->packing = from->packing; break;
+    case XRD_SET_ZOOM_MODE: to->zoom_mode = from->zoom_mode; break;
     }
 }
 
@@ -475,6 +511,10 @@ static bool field_differs(unsigned bit, const xrd_file_settings *a, const xrd_fi
             || fabsf(a->content_vfov - b->content_vfov) > XRD_FS_TOL_FOV;
     case XRD_SET_CONVERGENCE:
         return fabsf(a->convergence - b->convergence) > XRD_FS_TOL_CONVERGENCE;
+    case XRD_SET_PROJ: return a->proj != b->proj;
+    case XRD_SET_FLAT_ZOOM: return fabsf(a->flat_zoom - b->flat_zoom) > XRD_FS_TOL_ZOOM;
+    case XRD_SET_PACKING: return a->packing != b->packing;
+    case XRD_SET_ZOOM_MODE: return a->zoom_mode != b->zoom_mode;
     }
     return false;
 }
@@ -546,8 +586,28 @@ int xrd_filestate_describe(const xrd_filestate *st, unsigned mask, char *buf, si
             (double)st->v.content_vfov);
         sep = " ";
     }
-    if (want & XRD_SET_CONVERGENCE)
+    if (want & XRD_SET_CONVERGENCE) {
         put(&s, "%sconvergence=%.1f", sep, (double)st->v.convergence);
+        sep = " ";
+    }
+    if (want & XRD_SET_PROJ) {
+        const char *name = xrd_value_proj_name(st->v.proj);
+        put(&s, "%sproj=%s", sep, name ? name : "?");
+        sep = " ";
+    }
+    if (want & XRD_SET_FLAT_ZOOM) {
+        put(&s, "%sflat-zoom=%.2f", sep, (double)st->v.flat_zoom);
+        sep = " ";
+    }
+    if (want & XRD_SET_PACKING) {
+        const char *name = xrd_value_packing_name(st->v.packing);
+        put(&s, "%spacking=%s", sep, name ? name : "?");
+        sep = " ";
+    }
+    if (want & XRD_SET_ZOOM_MODE) {
+        const char *name = xrd_value_zoom_mode_name(st->v.zoom_mode);
+        put(&s, "%szoom-mode=%s", sep, name ? name : "?");
+    }
 
     if (s.pos >= len || s.pos > (size_t)INT_MAX) {
         if (len > 0)

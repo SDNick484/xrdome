@@ -37,6 +37,7 @@ core_sources = files(
   'src/store/filestate.c',
   'src/detect/probe.c',
   'src/detect/detect.c',
+  'src/app/session.c',
 )
 
 # Test names: each entry NAME builds tests/test_NAME.c into test_NAME.
@@ -57,6 +58,7 @@ test_names = [
   'probe',
   'detect',
   'probe_run',
+  'session',
 ]
 
 inc = include_directories('src')

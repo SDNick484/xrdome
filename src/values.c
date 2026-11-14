@@ -56,6 +56,8 @@ static const char *const layout_names[] = {
     [XRD_LAYOUT_SBS_LR] = "sbs-lr",
     [XRD_LAYOUT_SBS_RL] = "sbs-rl",
     [XRD_LAYOUT_MONO] = "mono",
+    [XRD_LAYOUT_TB_LR] = "tb-lr",
+    [XRD_LAYOUT_TB_RL] = "tb-rl",
 };
 
 bool xrd_value_layout(const char *s, xrd_layout *out)
@@ -73,6 +75,74 @@ const char *xrd_value_layout_name(xrd_layout layout)
     if ((int)layout < 0 || (size_t)layout >= sizeof layout_names / sizeof layout_names[0])
         return NULL;
     return layout_names[layout];
+}
+
+static const char *const proj_names[] = {
+    [XRD_PROJ_HEQUIRECT] = "hequirect",
+    [XRD_PROJ_FLAT] = "flat",
+};
+
+bool xrd_value_proj(const char *s, xrd_proj *out)
+{
+    for (size_t i = 0; i < sizeof proj_names / sizeof proj_names[0]; i++)
+        if (!strcmp(s, proj_names[i])) {
+            *out = (xrd_proj)i;
+            return true;
+        }
+    return false;
+}
+
+const char *xrd_value_proj_name(xrd_proj p)
+{
+    if ((int)p < 0 || (size_t)p >= sizeof proj_names / sizeof proj_names[0])
+        return NULL;
+    return proj_names[p];
+}
+
+static const char *const packing_names[] = {
+    [XRD_PACKING_AUTO] = "auto",
+    [XRD_PACKING_HALF] = "half",
+    [XRD_PACKING_FULL] = "full",
+};
+
+bool xrd_value_packing(const char *s, xrd_packing *out)
+{
+    if (!strcmp(s, "half"))
+        *out = XRD_PACKING_HALF;
+    else if (!strcmp(s, "full"))
+        *out = XRD_PACKING_FULL;
+    else
+        return false;
+    return true;
+}
+
+const char *xrd_value_packing_name(xrd_packing p)
+{
+    if ((int)p < 0 || (size_t)p >= sizeof packing_names / sizeof packing_names[0])
+        return NULL;
+    return packing_names[p];
+}
+
+static const char *const zoom_mode_names[] = {
+    [XRD_ZOOM_SCREEN] = "screen",
+    [XRD_ZOOM_MAGNIFY] = "magnify",
+};
+
+bool xrd_value_zoom_mode(const char *s, xrd_zoom_mode *out)
+{
+    for (size_t i = 0; i < sizeof zoom_mode_names / sizeof zoom_mode_names[0]; i++)
+        if (!strcmp(s, zoom_mode_names[i])) {
+            *out = (xrd_zoom_mode)i;
+            return true;
+        }
+    return false;
+}
+
+const char *xrd_value_zoom_mode_name(xrd_zoom_mode m)
+{
+    if ((int)m < 0 || (size_t)m >= sizeof zoom_mode_names / sizeof zoom_mode_names[0])
+        return NULL;
+    return zoom_mode_names[m];
 }
 
 bool xrd_value_yesno(const char *s, bool *out)

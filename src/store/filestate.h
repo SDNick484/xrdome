@@ -8,7 +8,9 @@
 #include "render/projection.h"
 
 enum { XRD_SET_ZOOM = 1u << 0, XRD_SET_LAYOUT = 1u << 1, XRD_SET_SWAP = 1u << 2,
-       XRD_SET_CONTENT_FOV = 1u << 3, XRD_SET_CONVERGENCE = 1u << 4 };
+       XRD_SET_CONTENT_FOV = 1u << 3, XRD_SET_CONVERGENCE = 1u << 4,
+       XRD_SET_PROJ = 1u << 5, XRD_SET_FLAT_ZOOM = 1u << 6, XRD_SET_PACKING = 1u << 7,
+       XRD_SET_ZOOM_MODE = 1u << 8 };
 
 typedef struct {
     float zoom;
@@ -16,6 +18,10 @@ typedef struct {
     bool swap;
     float content_hfov, content_vfov;
     float convergence;
+    xrd_proj proj;
+    float flat_zoom;
+    xrd_packing packing;
+    xrd_zoom_mode zoom_mode;
 } xrd_file_settings;
 
 typedef struct {
@@ -42,7 +48,7 @@ int xrd_filestate_dir(char *buf, size_t len);
 typedef enum { XRD_FS_OK, XRD_FS_NONE, XRD_FS_UNSUPPORTED, XRD_FS_BAD } xrd_fs_status;
 
 /* Parses record text. OK fills *out; UNSUPPORTED (version > 1, or proj other
- * than hequirect) and BAD leave *out with set == 0. err gets "line N: ..." for BAD. */
+ * than hequirect or flat) and BAD leave *out with set == 0. err gets "line N: ..." for BAD. */
 xrd_fs_status xrd_filestate_parse(const char *text, xrd_filestate *out, char *err, size_t errlen);
 
 /* Writes the record text (spec 5.3). Returns length, or -1 if it does not fit. */
@@ -83,9 +89,11 @@ void xrd_filestate_collect(const xrd_filestate *loaded, unsigned explicit_flags,
                            xrd_filestate *out);
 /* Same set bits, and set fields equal within the tolerances. */
 bool xrd_filestate_equal(const xrd_filestate *a, const xrd_filestate *b);
-/* "zoom=0.75 layout=sbs-rl swap=yes content-fov=120x90 convergence=1.5" for the
- * fields in (st->set & mask), in that order, space separated. Returns length,
- * 0 for none, -1 if it does not fit. Formats: zoom %.2f, fov %gx%g, convergence %.1f. */
+/* "zoom=0.75 layout=sbs-rl swap=yes content-fov=120x90 convergence=1.5 proj=flat
+ * flat-zoom=1.65 packing=half zoom-mode=magnify" for the fields in
+ * (st->set & mask), in that order, space separated. Returns length, 0 for
+ * none, -1 if it does not fit. Formats: zoom and flat-zoom %.2f, fov %gx%g,
+ * convergence %.1f. */
 int xrd_filestate_describe(const xrd_filestate *st, unsigned mask, char *buf, size_t len);
 
 #endif
