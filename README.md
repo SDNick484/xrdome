@@ -590,6 +590,25 @@ old. It exists to compare `pose_to_swap_us` in the timing log with and without t
 not meant for normal playback. `swap_us` in the log is the time spent in the swap call (plus the
 `glFinish` when the flag is on).
 
+## Install on Gentoo
+
+`packaging/gentoo/` holds a live ebuild, `media-video/xrdome-9999`, that builds `main` from GitHub
+with meson and installs `/usr/bin/xrdome`. It is not in any overlay yet; add it to a local one:
+
+```
+# as root
+eselect repository create local            # skip if you already have a local overlay
+mkdir -p /var/db/repos/local/media-video/xrdome
+cp packaging/gentoo/media-video/xrdome/* /var/db/repos/local/media-video/xrdome/
+echo 'media-video/xrdome **' >> /etc/portage/package.accept_keywords/xrdome
+emerge --ask media-video/xrdome
+```
+
+`media-video/mpv` needs `libmpv`, `media-libs/libsdl2` needs `X` and `opengl`. Re-run `emerge` to
+rebuild from the newest `main`. `packaging/gentoo/README.md` has the details and the test flag.
+The ebuild was parsed and its dependencies resolved with `emerge --pretend`; it has not been
+built with `emerge` yet.
+
 ## System setup
 
 Head tracking comes from [XRLinuxDriver](https://github.com/wheaney/XRLinuxDriver), run by hand.
@@ -703,3 +722,9 @@ Hardware-check notes for tracking:
   `interval_us` is about 16.7 ms, re-run with `--sync-after-swap` and compare.
 - Time how long the player takes to exit after the glasses are unplugged.
 - Use a file the machine can decode at full rate.
+
+## Licence
+
+GPL-2.0-or-later, the same terms as mpv built with its GPL files (see `Copyright` in the
+[mpv repository](https://github.com/mpv-player/mpv)); xrdome links libmpv. The full text is in
+`LICENSE`.

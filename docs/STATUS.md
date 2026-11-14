@@ -146,6 +146,24 @@ Still unverified (spec section 11):
 - That FFmpeg does not decode both eyes of MVC (not relied on; MVC is a non-goal).
 - Rotated video (phone footage with a rotation tag): expected to work through mpv, not tested.
 
+## Packaging and licence (issue #21)
+
+- Licence: GPL-2.0-or-later (owner: "match mpv", 2026-11-14). mpv's `Copyright` file says mpv as a
+  whole is GPLv2+ by default and LGPLv2.1+ only when built with `-Dgpl=false`; its `meson.build`
+  has `license: ['GPL2+', 'LGPL2.1+']`. The owner's mpv is a GPL build and xrdome links libmpv,
+  so xrdome is GPLv2+. `LICENSE` is the GPLv2 text (Gentoo's `licenses/GPL-2`, which differs from
+  mpv's `LICENSE.GPL` only in form-feed characters; gnu.org was unreachable from the sandbox).
+  `license : 'GPL-2.0-or-later'` is in `project()`; no per-file headers.
+- `packaging/gentoo/media-video/xrdome/` has `xrdome-9999.ebuild` (EAPI 8, `git-r3 meson`, no
+  KEYWORDS, `IUSE=test`) and `metadata.xml`; `packaging/gentoo/README.md` says how to add it to a
+  local overlay. In-repo because the ebuild is tiny (owner, 2026-11-14). cmocka is a build
+  dependency even without the `test` flag because `meson.build` requires it.
+- Verified on the laptop: `ebuild manifest` parses it in a throwaway overlay under the scratchpad,
+  `emerge --pretend media-video/xrdome::local` resolves it, `meson install --prefix=/usr --destdir` (what the meson eclass uses) puts
+  `usr/bin/xrdome` and nothing else in the destdir.
+- Not verified: an actual `emerge` build (needs root), `pkgcheck scan` (not installed). The owner
+  runs the install commands from the README.
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship
@@ -192,8 +210,6 @@ Still unverified (spec section 11):
 - Untested: unplug behaviour during playback (a disconnect between runs happened on 2026-11-13,
   see Findings), automatic 8-bit FBO fallback.
 - Unanalysed: the remaining 0.6-1.3% late frames.
-- LICENSE not chosen. The owner's mpv is a GPLv2 build (owner, 2026-11-14), so xrdome, which
-  links libmpv, needs a GPLv2-compatible licence.
 - Per-file settings: the items listed as not covered above.
 - Recenter: `Shift+R` levels a tilted picture (2026-11-14). A gravity-level start or a
   "level" key is optional now.
@@ -205,4 +221,4 @@ Still unverified (spec section 11):
   mipmaps on content with fine detail; a real half-SBS film, and `M` into half SBS from mono;
   subtitles on the glasses; top-bottom and full SBS if such files turn up.
 - Candidate next features, in suggested order: per-eye HUD (takes over `?` and `I`, which print
-  to the terminal for now), Viture SDK backend, GTK launcher, Gentoo overlay ebuild.
+  to the terminal for now), Viture SDK backend, GTK launcher.

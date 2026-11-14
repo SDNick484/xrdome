@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>SDNick484@users.noreply.github.com</email>
+		<name>Nick Andrade</name>
+	</maintainer>
+	<upstream>
+		<remote-id type="github">SDNick484/xrdome</remote-id>
+	</upstream>
+</pkgmetadata>
