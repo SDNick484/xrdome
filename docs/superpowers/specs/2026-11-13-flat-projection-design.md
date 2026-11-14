@@ -1,7 +1,7 @@
 # xrdome: flat projection and format auto-detection (design spec)
 
 Date: 2026-11-13
-Status: draft, awaiting the owner's approval (reviewed once by a fresh reader; three points settled as calls in 5.7, 5.8 and 5.9)
+Status: approved 2026-11-13 (reviewed once by a fresh reader; three points settled as calls in 5.7, 5.8 and 5.9)
 Branch: `feature/flat-projection` (from `main` at `3358de5`)
 Builds on: `docs/superpowers/specs/2026-11-11-xrdome-design.md` and
 `docs/superpowers/specs/2026-11-12-per-file-settings-design.md`
