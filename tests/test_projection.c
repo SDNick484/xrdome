@@ -640,6 +640,193 @@ static void flat_top_edge_does_not_bow(void **state)
     }
 }
 
+/* ---- curved flat screen (--screen-curve) ---- */
+
+/* The direction from the eye to the point at angle phi about the axis of a
+ * curve-R cylinder (curve - 1 behind the eye), at height y. */
+static void arc_dir(double r, double phi, double y, float d[3])
+{
+    d[0] = (float)(r * sin(phi));
+    d[1] = (float)y;
+    d[2] = (float)((r - 1.0) - r * cos(phi));
+}
+
+/* off (0) is the plane: the same answer and the same uv bits. */
+static void curve_off_is_the_plane(void **state)
+{
+    (void)state;
+    const float vals[] = {0.f, 0.1f, -0.3f, 0.52f, 1.f, -2.f, 1e-30f, NAN, INFINITY};
+    const size_t n = sizeof vals / sizeof vals[0];
+    const float zs[] = {-1.f, -0.2f, -7.f, 0.f, -0.f, 1.f, 1e-30f, NAN};
+    const float screens[][2] = {{0.515f, 0.2897f}, {0.2f, 0.4f}, {0.f, 0.3f}, {NAN, 0.3f}};
+    for (size_t s = 0; s < 4; s++)
+        for (size_t i = 0; i < n; i++)
+            for (size_t j = 0; j < n; j++)
+                for (size_t k = 0; k < sizeof zs / sizeof zs[0]; k++) {
+                    const float d[3] = {vals[i], vals[j], zs[k]};
+                    float a[2] = {-7.f, -7.f}, b[2] = {-7.f, -7.f};
+                    bool pa = xrd_flat_dir_to_uv(d, screens[s][0], screens[s][1], a);
+                    bool pb = xrd_flat_curve_dir_to_uv(d, screens[s][0], screens[s][1], 0.f, b);
+                    assert_true(pa == pb);
+                    assert_memory_equal(a, b, sizeof a);
+                }
+}
+
+static void curve_uv_centre_edges_top_bottom(void **state)
+{
+    (void)state;
+    const float hw = 0.515f, hh = 0.2897f;
+    const float curves[] = {1.f, 2.f, 10.f};
+    for (size_t c = 0; c < 3; c++) {
+        const double r = curves[c], phi_e = hw / r;
+        float uv[2], d[3];
+        const float fwd[3] = {0.f, 0.f, -1.f};
+        assert_true(xrd_flat_curve_dir_to_uv(fwd, hw, hh, curves[c], uv));
+        assert_float_equal(uv[0], 0.5f, 1e-6);
+        assert_float_equal(uv[1], 0.5f, 1e-6);
+        /* the arc's ends, at mid height, then at the top and bottom */
+        const double ys[] = {0.0, hh, -hh};
+        const float vs[] = {0.5f, 1.f, 0.f};
+        for (size_t i = 0; i < 3; i++) {
+            arc_dir(r, phi_e, ys[i], d);
+            assert_true(xrd_flat_curve_dir_to_uv(d, hw, hh, curves[c], uv));
+            assert_float_equal(uv[0], 1.f, 1e-5);
+            assert_float_equal(uv[1], vs[i], 1e-5);
+            arc_dir(r, -phi_e, ys[i], d);
+            assert_true(xrd_flat_curve_dir_to_uv(d, hw, hh, curves[c], uv));
+            assert_float_equal(uv[0], 0.f, 1e-5);
+            assert_float_equal(uv[1], vs[i], 1e-5);
+        }
+        /* a quarter of the way along the arc, at the top: the screen keeps its
+         * height in every column, so v = 1 there too */
+        arc_dir(r, 0.5 * phi_e, hh, d);
+        assert_true(xrd_flat_curve_dir_to_uv(d, hw, hh, curves[c], uv));
+        assert_float_equal(uv[0], 0.75f, 1e-5);
+        assert_float_equal(uv[1], 1.f, 1e-5);
+        /* just past the ends and the top */
+        arc_dir(r, 1.001 * phi_e, 0.0, d);
+        assert_false(xrd_flat_curve_dir_to_uv(d, hw, hh, curves[c], uv));
+        arc_dir(r, -1.001 * phi_e, 0.0, d);
+        assert_false(xrd_flat_curve_dir_to_uv(d, hw, hh, curves[c], uv));
+        arc_dir(r, 0.5 * phi_e, 1.001 * hh, d);
+        assert_false(xrd_flat_curve_dir_to_uv(d, hw, hh, curves[c], uv));
+        /* not normalised: the same direction, longer */
+        arc_dir(r, 0.5 * phi_e, 0.0, d);
+        const float far[3] = {7.f * d[0], 7.f * d[1], 7.f * d[2]};
+        assert_true(xrd_flat_curve_dir_to_uv(far, hw, hh, curves[c], uv));
+        assert_float_equal(uv[0], 0.75f, 1e-5);
+    }
+    /* radius 1: u is the direction's own yaw, whatever the pitch */
+    float uv[2];
+    const float d30[3] = {(float)sin(0.3), 0.1f, (float)-cos(0.3)};
+    assert_true(xrd_flat_curve_dir_to_uv(d30, 0.5f, 0.3f, 1.f, uv));
+    assert_float_equal(uv[0], 0.3 / 1.0 + 0.5, 1e-6);
+    assert_float_equal(uv[1], 0.1 / 0.6 + 0.5, 1e-6);
+}
+
+static void curve_behind_and_degenerate(void **state)
+{
+    (void)state;
+    float uv[2], d[3];
+    /* an arc that reaches past 90 degrees (2 radians each side at radius 1):
+     * beside and behind the viewer it is still not drawn */
+    arc_dir(1.0, 1.7, 0.0, d);
+    assert_true(d[2] > 0.f);
+    assert_false(xrd_flat_curve_dir_to_uv(d, 2.f, 0.3f, 1.f, uv));
+    const float side[3] = {1.f, 0.f, 0.f};
+    assert_false(xrd_flat_curve_dir_to_uv(side, 2.f, 0.3f, 1.f, uv));
+    const float behind[3] = {0.f, 0.f, 1.f};
+    assert_false(xrd_flat_curve_dir_to_uv(behind, 2.f, 0.3f, 1.f, uv));
+    arc_dir(1.0, 1.5, 0.0, d); /* still in front: drawn */
+    assert_true(xrd_flat_curve_dir_to_uv(d, 2.f, 0.3f, 1.f, uv));
+    assert_float_equal(uv[0], 1.5 / 4.0 + 0.5, 1e-5);
+    /* straight up and down, the zero vector, NaN and infinity */
+    const float dirs[][3] = {{0.f, 1.f, 0.f}, {0.f, -1.f, -1e-30f}, {0.f, 0.f, 0.f},
+                             {0.f, 0.f, -0.f}, {NAN, 0.f, -1.f}, {0.f, 0.f, NAN},
+                             {INFINITY, 0.f, -1.f}, {0.f, 0.f, 1e-30f}};
+    for (size_t i = 0; i < sizeof dirs / sizeof dirs[0]; i++)
+        assert_false(xrd_flat_curve_dir_to_uv(dirs[i], 0.5f, 0.3f, 1.f, uv));
+    /* a junk screen or radius is never hit */
+    const float fwd[3] = {0.f, 0.f, -1.f};
+    assert_false(xrd_flat_curve_dir_to_uv(fwd, 0.f, 0.3f, 1.f, uv));
+    assert_false(xrd_flat_curve_dir_to_uv(fwd, 0.5f, NAN, 1.f, uv));
+    assert_false(xrd_flat_curve_dir_to_uv(fwd, INFINITY, 0.3f, 1.f, uv));
+    const float curves[] = {0.999f, 0.5f, -1.f, 10.001f, NAN, INFINITY};
+    for (size_t i = 0; i < sizeof curves / sizeof curves[0]; i++)
+        assert_false(xrd_flat_curve_dir_to_uv(fwd, 0.5f, 0.3f, curves[i], uv));
+    assert_true(xrd_flat_curve_dir_to_uv(fwd, 0.5f, 0.3f, XRD_SCREEN_CURVE_MAX, uv));
+}
+
+/* Seen through a pinhole, a curved screen's columns stay straight (u is the
+ * same all down an image column) and its top edge bows away from the centre
+ * (the plane's top edge, v = 1 all along, falls inside the curved screen at
+ * the sides), at every head yaw. Rays as in flat_top_edge_does_not_bow. */
+static void curve_columns_straight_top_bows(void **state)
+{
+    (void)state;
+    xrd_view_geom g;
+    xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_SCREEN, VIT_DIAG, VIT_ASPECT, 1.5f, 16.0 / 9.0, &g);
+    /* the screen reaches 29.5 degrees each side; every ray here hits it */
+    const double yaws[] = {0.0, 10.0, -12.0};
+    for (size_t yi = 0; yi < 3; yi++) {
+        xrd_quat head = xrd_quat_from_ypr_deg(yaws[yi], 0, 0);
+        const float xs[] = {-0.15f, 0.05f, 0.2f};
+        for (size_t i = 0; i < 3; i++) {
+            float u0 = -1.f;
+            for (int k = -4; k <= 4; k++) {
+                const float local[3] = {xs[i], 0.06f * (float)k, -1.f};
+                float d[3], uv[2];
+                xrd_quat_rotate(head, local, d);
+                assert_true(xrd_flat_curve_dir_to_uv(d, g.half_w, g.half_h, 1.f, uv));
+                if (k == -4)
+                    u0 = uv[0];
+                else if (fabs(uv[0] - u0) > 1e-5)
+                    fail_msg("yaw %.0f x %.2f: u %.7f at row %d, %.7f at the bottom",
+                             yaws[yi], (double)xs[i], (double)uv[0], k, (double)u0);
+            }
+        }
+    }
+    /* straight ahead, the plane's top edge: v = 1 only at the centre column.
+     * At radius 1 a column at view tangent x is sqrt(1 + x^2) away along the
+     * ray, so the plane's top edge is at v = 0.5 + 0.5 / sqrt(1 + x^2). */
+    const float xs[] = {0.f, 0.2f, 0.4f};
+    for (size_t i = 0; i < 3; i++) {
+        const float x = xs[i] * g.half_w;
+        const float d[3] = {x, g.half_h, -1.f};
+        float uv[2];
+        assert_true(xrd_flat_curve_dir_to_uv(d, g.half_w, g.half_h, 1.f, uv));
+        assert_float_equal(uv[1], 0.5 + 0.5 / sqrt(1.0 + (double)x * x), 1e-6);
+        if (i > 0 && !(uv[1] < 0.999f))
+            fail_msg("x %.1f: v = %.5f on the plane's top edge, want below 1", (double)xs[i],
+                     (double)uv[1]);
+    }
+}
+
+static void curve_half_angle(void **state)
+{
+    (void)state;
+    assert_float_equal(xrd_flat_half_angle(0.5f, 0.f), atan(0.5), 1e-9);
+    assert_float_equal(xrd_flat_half_angle(0.5f, 1.f), 0.5, 1e-7); /* every column at 1 */
+    /* radius 2: the direction of the arc's end, which maps to u = 1 */
+    double ang = xrd_flat_half_angle(0.5f, 2.f);
+    const float d[3] = {(float)sin(ang), 0.f, (float)-cos(ang)};
+    float uv[2];
+    assert_true(xrd_flat_curve_dir_to_uv(d, 0.5f, 0.3f, 2.f, uv));
+    assert_float_equal(uv[0], 1.f, 1e-5);
+    /* wider than the plane at the same width, narrower than radius 1 */
+    assert_true(ang > atan(0.5) && ang < 0.5);
+    /* an arc past 90 degrees stops there */
+    assert_float_equal(xrd_flat_half_angle(2.f, 1.f), 3.14159265358979323846 / 2, 1e-12);
+    assert_float_equal(xrd_flat_half_angle(9.f, 1.f), 3.14159265358979323846 / 2, 1e-12);
+    /* radius 2: the end comes level with the eye at 60 degrees about the axis */
+    assert_float_equal(xrd_flat_half_angle(2.2f, 2.f), 3.14159265358979323846 / 2, 1e-12);
+    assert_true(xrd_flat_half_angle(2.0f, 2.f) < 3.14159265358979323846 / 2);
+    assert_true(xrd_flat_half_angle(0.f, 1.f) == 0.0);
+    assert_true(xrd_flat_half_angle(NAN, 0.f) == 0.0);
+    assert_true(xrd_flat_half_angle(0.5f, 0.5f) == 0.0);
+    assert_true(xrd_flat_half_angle(0.5f, NAN) == 0.0);
+}
+
 /* ---- minification ratio (spec 5.6) ---- */
 
 static void minify_flat_screen(void **state)
@@ -712,6 +899,43 @@ static void minify_junk_is_zero(void **state)
     assert_true(xrd_minify_ratio(XRD_PROJ_HEQUIRECT, &g, 2160, 2160, 1920, 1080, 180.f, NAN) == 0.f);
 }
 
+/* xrd_minify_ratio serves a curved screen too: at the view centre, straight
+ * ahead, u and v change per unit of view tangent at the plane's rates
+ * (1 / (2 half_w), 1 / (2 half_h)), measured on xrd_flat_curve_dir_to_uv by
+ * central differences; away from the centre they only fall, so the centre
+ * is where the picture is shrunk most. */
+static void minify_curved_centre_is_the_plane(void **state)
+{
+    (void)state;
+    xrd_view_geom g;
+    xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_SCREEN, VIT_DIAG, VIT_ASPECT, 2.5f, 16.0 / 9.0, &g);
+    const double du0 = 1.0 / (2.0 * g.half_w), dv0 = 1.0 / (2.0 * g.half_h);
+    const float curves[] = {1.f, 2.f, 10.f};
+    const float e = 1e-3f;
+    for (size_t c = 0; c < 3; c++) {
+        const float xs[] = {0.f, 0.2f, 0.6f};
+        for (size_t i = 0; i < 3; i++) {
+            float a[2], b[2];
+            const float l[3] = {xs[i] - e, 0.f, -1.f}, r[3] = {xs[i] + e, 0.f, -1.f};
+            assert_true(xrd_flat_curve_dir_to_uv(l, g.half_w, g.half_h, curves[c], a));
+            assert_true(xrd_flat_curve_dir_to_uv(r, g.half_w, g.half_h, curves[c], b));
+            double du = (b[0] - a[0]) / (2.0 * e);
+            const float dn[3] = {xs[i], -e, -1.f}, up[3] = {xs[i], e, -1.f};
+            assert_true(xrd_flat_curve_dir_to_uv(dn, g.half_w, g.half_h, curves[c], a));
+            assert_true(xrd_flat_curve_dir_to_uv(up, g.half_w, g.half_h, curves[c], b));
+            double dv = (b[1] - a[1]) / (2.0 * e);
+            if (i == 0) {
+                if (fabs(du / du0 - 1.0) > 1e-3 || fabs(dv / dv0 - 1.0) > 1e-3)
+                    fail_msg("curve %.0f centre: du %.5f dv %.5f, plane %.5f %.5f",
+                             (double)curves[c], du, dv, du0, dv0);
+            } else if (!(du < du0 && dv < dv0 * (1.0 + 1e-3))) {
+                fail_msg("curve %.0f x %.1f: du %.5f dv %.5f above the centre's %.5f %.5f",
+                         (double)curves[c], (double)xs[i], du, dv, du0, dv0);
+            }
+        }
+    }
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -755,10 +979,16 @@ int main(void)
         cmocka_unit_test(flat_uv_centre_and_edges),
         cmocka_unit_test(flat_uv_behind_and_degenerate),
         cmocka_unit_test(flat_top_edge_does_not_bow),
+        cmocka_unit_test(curve_off_is_the_plane),
+        cmocka_unit_test(curve_uv_centre_edges_top_bottom),
+        cmocka_unit_test(curve_behind_and_degenerate),
+        cmocka_unit_test(curve_columns_straight_top_bows),
+        cmocka_unit_test(curve_half_angle),
         cmocka_unit_test(minify_flat_screen),
         cmocka_unit_test(minify_flat_takes_larger_axis),
         cmocka_unit_test(minify_hequirect),
         cmocka_unit_test(minify_junk_is_zero),
+        cmocka_unit_test(minify_curved_centre_is_the_plane),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

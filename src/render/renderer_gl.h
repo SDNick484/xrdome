@@ -50,6 +50,7 @@ typedef struct {
     bool swap_eyes;
     xrd_view_geom geom;
     bool trilinear;   /* sample through the mipmap chain; the caller guarantees it is valid */
+    float screen_curve; /* flat: 0 for the plane, else the radius of xrd_flat_curve_dir_to_uv */
 } xrd_draw_params;
 
 /* Draws both eyes into the currently bound framebuffer: left eye in the left half.
@@ -57,7 +58,8 @@ typedef struct {
  *
  * dp->proj selects the mapping: XRD_PROJ_HEQUIRECT is the half-equirect lookup
  * of xrd_dir_to_uv_fov (with the content FOV), XRD_PROJ_FLAT the screen of
- * xrd_flat_dir_to_uv with dp->geom.half_w / half_h. Directions that miss the
+ * xrd_flat_dir_to_uv with dp->geom.half_w / half_h, or with dp->screen_curve
+ * != 0 the curved screen of xrd_flat_curve_dir_to_uv. Directions that miss the
  * picture draw black. dp->layout and dp->swap_eyes pick each eye's sub-image
  * (xrd_eye_uv_transform); when a split axis has an odd number of texels, the
  * middle texel column (sbs) or row (tb) belongs to neither eye, so no filter

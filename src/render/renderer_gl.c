@@ -10,8 +10,8 @@
 struct xrd_renderer {
     GLuint prog;
     GLuint vao;
-    GLint u_video, u_rot, u_tan_half, u_proj, u_inv_fov, u_reject, u_flat_half, u_eye_scale,
-        u_eye_offset, u_bicubic, u_dither, u_trilinear, u_max_level;
+    GLint u_video, u_rot, u_tan_half, u_proj, u_inv_fov, u_reject, u_flat_half, u_flat_curve,
+        u_eye_scale, u_eye_offset, u_bicubic, u_dither, u_trilinear, u_max_level;
     float hfov_deg, vfov_deg;
     float convergence_deg;
     xrd_filter filter;
@@ -87,6 +87,7 @@ xrd_renderer *xrd_renderer_new(char *err, size_t errlen)
     r->vfov_deg = 180.f;
     r->u_proj = glGetUniformLocation(prog, "u_proj");
     r->u_flat_half = glGetUniformLocation(prog, "u_flat_half");
+    r->u_flat_curve = glGetUniformLocation(prog, "u_flat_curve");
     r->u_eye_scale = glGetUniformLocation(prog, "u_eye_scale");
     r->u_eye_offset = glGetUniformLocation(prog, "u_eye_offset");
     r->u_bicubic = glGetUniformLocation(prog, "u_bicubic");
@@ -159,6 +160,8 @@ void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
     glUniform1i(r->u_proj, dp->proj == XRD_PROJ_FLAT ? 1 : 0);
     /* The shader draws black for a flat screen whose extents are not > 0. */
     glUniform2f(r->u_flat_half, dp->geom.half_w, dp->geom.half_h);
+    /* and for a curve that is neither 0 (the plane) nor in range */
+    glUniform1f(r->u_flat_curve, dp->screen_curve);
     const double deg = 3.14159265358979323846 / 180.0;
     glUniform2f(r->u_reject, r->hfov_deg < XRD_FULL_FOV_DEG ? 1.f : 0.f, r->vfov_deg < XRD_FULL_FOV_DEG ? 1.f : 0.f);
     glUniform2f(r->u_inv_fov, (float)(1.0 / (r->hfov_deg * deg)), (float)(1.0 / (r->vfov_deg * deg)));

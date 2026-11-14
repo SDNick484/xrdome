@@ -61,6 +61,36 @@ void xrd_view_geometry(xrd_proj proj, xrd_zoom_mode mode, float fov_diag_deg, fl
  * clamped to [0,1]; v = 1 is the top edge of the screen. */
 bool xrd_flat_dir_to_uv(const float d[3], float half_w, float half_h, float uv[2]);
 
+/* --screen-curve: the curved screen's radius, in screen distances. */
+#define XRD_SCREEN_CURVE_MIN 1.0f
+#define XRD_SCREEN_CURVE_MAX 10.0f
+
+/* The flat screen bent into a section of a vertical cylinder (--screen-curve).
+ * curve is the cylinder's radius in screen distances. The cylinder touches the
+ * plane z = -1 along the screen's centre column, so its axis is vertical, on
+ * the line from the eye through the screen's centre, curve - 1 behind the eye:
+ * at 1 the axis passes through the eye and every column is at distance 1, and
+ * a larger curve bends the screen less. The arc is 2 half_w long, the flat
+ * screen's width, and u runs along it: u = 0.5 + curve * phi / (2 half_w),
+ * phi the hit's angle about the axis. Columns stay straight and upright:
+ * v = 0.5 + y / (2 half_h), y the hit's height.
+ * curve == 0 is the plane: the result is exactly xrd_flat_dir_to_uv's.
+ * Otherwise false, as there, when d[2] >= 0 (nothing beside or behind the
+ * viewer is drawn, even where the arc would reach), d is degenerate, half_w or
+ * half_h is not finite and > 0, or the hit is outside the screen (1e-6
+ * tolerance counts the edge as inside); and when curve is outside
+ * [XRD_SCREEN_CURVE_MIN, XRD_SCREEN_CURVE_MAX]. On success uv is clamped to
+ * [0,1]. Mirrors the shader's flat branch with u_flat_curve: keep in step. */
+bool xrd_flat_curve_dir_to_uv(const float d[3], float half_w, float half_h, float curve,
+                              float uv[2]);
+
+/* Angle in radians from straight ahead to the left or right edge of a flat
+ * screen half_w wide, as seen from the eye: atan(half_w) for the plane (curve
+ * 0), and for a curved one (xrd_flat_curve_dir_to_uv) the direction of the
+ * arc's end, at most pi/2 (nothing beside the viewer is drawn). 0 when half_w
+ * is not finite and > 0 or curve is neither 0 nor in range. */
+double xrd_flat_half_angle(float half_w, float curve);
+
 /* Replaces xrd_eye_u_transform: tex = uv * scale + offset per axis.
  * tb-lr: the left eye is the top half (offset[1] = 0.5, t = 1 is the top).
  * eye is 0 for the left viewport, 1 for the right; swap exchanges the halves.
@@ -72,7 +102,9 @@ void xrd_eye_uv_transform(xrd_layout layout, int eye, bool swap,
  * the two axes; > 1 means the picture is being shrunk. eye_src_w/h is one
  * eye's sub-image in texels. content_*fov_deg are used for hequirect only.
  * Returns 0 when an input makes the ratio meaningless (a size or extent that
- * is not > 0, or not finite). */
+ * is not > 0, or not finite). A curved flat screen (xrd_flat_curve_dir_to_uv)
+ * has the plane's ratio at the centre: the cylinder touches the plane there
+ * and its arc length and height grow at the plane's rate, so g serves both. */
 float xrd_minify_ratio(xrd_proj proj, const xrd_view_geom *g, int eye_src_w, int eye_src_h,
                        int out_eye_w, int out_eye_h,
                        float content_hfov_deg, float content_vfov_deg);

@@ -166,6 +166,62 @@ bool xrd_flat_dir_to_uv(const float d[3], float half_w, float half_h, float uv[2
     return true;
 }
 
+static bool curve_in_range(float curve)
+{
+    return curve >= XRD_SCREEN_CURVE_MIN && curve <= XRD_SCREEN_CURVE_MAX;
+}
+
+/* Mirrors the flat branch of vr180.frag with u_flat_curve != 0: keep in step. */
+bool xrd_flat_curve_dir_to_uv(const float d[3], float half_w, float half_h, float curve,
+                              float uv[2])
+{
+    if (curve == 0.f)
+        return xrd_flat_dir_to_uv(d, half_w, half_h, uv);
+    if (!curve_in_range(curve))
+        return false;
+    if (!(isfinite(half_w) && half_w > 0.f && isfinite(half_h) && half_h > 0.f))
+        return false;
+    double x = d[0], y = d[1], z = d[2];
+    if (!isfinite(x) || !isfinite(y) || !isfinite(z))
+        return false;
+    if (!(z < 0.0)) /* behind, beside, or the zero vector */
+        return false;
+    /* In the horizontal plane: the unit direction (hx, hz), the axis at
+     * (0, a), and t the distance to the cylinder, the positive root of
+     * t^2 - 2 a hz t + a^2 - R^2 = 0. The product of the roots is
+     * -(R^2 - a^2) = -(2R - 1), so t = (2R - 1) / (s - a hz) with s the
+     * discriminant's root: no cancellation, as a >= 0 and hz < 0. */
+    double hl = sqrt(x * x + z * z);
+    double hx = x / hl, hz = z / hl;
+    double r = curve, a = r - 1.0, k = 2.0 * r - 1.0;
+    double t = k / (sqrt(hz * hz * a * a + k) - hz * a);
+    double phi = atan2(t * hx, a - t * hz);
+    double u = r * phi / (2.0 * half_w) + 0.5;
+    double v = y * t / hl / (2.0 * half_h) + 0.5;
+    const double eps = 1e-6;
+    if (!isfinite(u) || !isfinite(v) || u < -eps || u > 1.0 + eps || v < -eps || v > 1.0 + eps)
+        return false;
+    uv[0] = (float)(u < 0.0 ? 0.0 : (u > 1.0 ? 1.0 : u));
+    uv[1] = (float)(v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v));
+    return true;
+}
+
+double xrd_flat_half_angle(float half_w, float curve)
+{
+    if (!(isfinite(half_w) && half_w > 0.f))
+        return 0.0;
+    if (curve == 0.f)
+        return atan((double)half_w);
+    if (!curve_in_range(curve))
+        return 0.0;
+    /* The arc's end, seen from the eye, the axis curve - 1 behind it. */
+    double r = curve, phi = (double)half_w / r;
+    double ex = r * sin(phi), ez = (r - 1.0) - r * cos(phi);
+    if (phi >= XRD_PI / 2.0 || !(ez < 0.0)) /* the end is beside or behind the viewer */
+        return XRD_PI / 2.0;
+    return atan2(ex, -ez);
+}
+
 static bool pos_finite(double v)
 {
     return isfinite(v) && v > 0.0;
