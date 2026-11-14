@@ -10,6 +10,10 @@ typedef struct xrd_renderer xrd_renderer;
 
 typedef enum { XRD_FILTER_BILINEAR, XRD_FILTER_BICUBIC } xrd_filter;
 
+/* Highest mipmap level the eye pass samples with xrd_draw_params.trilinear;
+ * the video texture's chain holds levels 0 to this. */
+#define XRD_MIP_MAX_LEVEL 3
+
 /* Needs a current GL 3.3 core context. Returns NULL and fills err on failure. */
 xrd_renderer *xrd_renderer_new(char *err, size_t errlen);
 void xrd_renderer_free(xrd_renderer *r);
@@ -61,11 +65,23 @@ typedef struct {
  *
  * Contract:
  *  - video_tex must not be 0. It is GL-oriented (t = 1 is the image top). Its
- *    owner must set GL_LINEAR mag filter and GL_CLAMP_TO_EDGE on both axes;
- *    when dp->trilinear is false the texture's min filter must be GL_LINEAR.
+ *    owner must set GL_LINEAR mag filter and GL_CLAMP_TO_EDGE on both axes.
  *  - dp must not be NULL. dp->geom.tan_h/tan_v must be computed with the
  *    per-eye aspect (out_w / 2) / out_h (xrd_view_geometry does).
- *  - dp->trilinear is accepted and not used yet: the eye pass samples level 0.
+ *  - dp->trilinear: the eye pass samples trilinearly (GL_LINEAR_MIPMAP_LINEAR
+ *    at a level from the screen-space derivatives, clamped to 0 to
+ *    XRD_MIP_MAX_LEVEL) and Catmull-Rom is not used. The texture's min filter
+ *    must then be GL_LINEAR_MIPMAP_LINEAR and levels 1 to XRD_MIP_MAX_LEVEL
+ *    must have been generated (glGenerateMipmap) from the current level 0. On
+ *    a split axis the lookup is clamped away from the eye's edges by a margin
+ *    that grows with the highest level read, so no level mixes in texels of
+ *    the other eye or the middle texel of an odd axis, for any generation
+ *    filter that draws a new texel only from source texels within its
+ *    footprint widened by one source texel each side (box, bilinear blit,
+ *    4-tap tent). The margin is up to 22.5 level-0 texels at level 3, under
+ *    3 display pixels at 8x shrink.
+ *    Without trilinear only level 0 is read, whatever the min filter (the
+ *    texture must still be complete for it).
  *  - draw disables GL_SCISSOR_TEST, GL_BLEND, GL_CULL_FACE, GL_DEPTH_TEST,
  *    GL_STENCIL_TEST and GL_FRAMEBUFFER_SRGB and enables all colour writes.
  *  - draw changes the bound program, VAO, active texture unit, the unit-0 2D

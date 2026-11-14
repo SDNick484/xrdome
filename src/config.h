@@ -47,6 +47,9 @@ typedef struct {
     /* development only (smoke test), not documented: */
     int frames;            /* --frames N: exit 0 after N presented frames
                               once a video frame has been rendered; 0 = off */
+    bool mipmap_force;     /* --mipmap-force: mipmaps and trilinear sampling always on */
+    bool mipmap_check;     /* --mipmap-check: exit 1 if a trilinear draw would sample a
+                              chain not regenerated for the frame in the texture */
     char dump_frame[4096]; /* --dump-frame PATH: PPM of the last frame; needs --frames */
 } xrd_config;
 

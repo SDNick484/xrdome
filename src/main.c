@@ -378,6 +378,12 @@ int main(int argc, char **argv)
     xrd_renderer_set_dither(r, cfg.dither);
     if (cfg.frames > 0)
         xrd_player_hold_at_end(p);
+    /* Development (--mipmap-force) until the shrink decision is wired up. */
+    if (cfg.mipmap_force)
+        xrd_player_set_mipmaps(p, true);
+    int mip_draws = 0;      /* --mipmap-check: trilinear draws checked */
+    char mip_sizes[256] = ""; /* --mipmap-check: texture sizes drawn trilinearly, in order */
+    int mip_w = 0, mip_h = 0;
 
     xrd_controls_init(&ctl, cfg.zoom, cfg.layout);
     xrd_controls_init_display(&ctl, cfg.convergence, cfg.filter);
@@ -448,8 +454,11 @@ int main(int argc, char **argv)
             for (int i = 0; i < cfg.mpv_opt_count; i++)
                 fprintf(stderr, " %s", cfg.mpv_opts[i]);
             fputc('\n', stderr);
-            fprintf(stderr, "video texture: %s dither=%s\n",
-                    xrd_texture_bits_name(xrd_player_texture_bits(p)), cfg.dither ? "on" : "off");
+            int vw, vh;
+            xrd_player_video_size(p, &vw, &vh);
+            fprintf(stderr, "video texture: %s %dx%d dither=%s mipmap=%s\n",
+                    xrd_texture_bits_name(xrd_player_texture_bits(p)), vw, vh,
+                    cfg.dither ? "on" : "off", cfg.mipmap_force ? "on" : "off");
             if (strcmp(hw, "vaapi") != 0) {
                 snprintf(err, sizeof err, "hardware decoding is '%s', not vaapi",
                          hw[0] ? hw : "unknown");
@@ -489,8 +498,26 @@ int main(int argc, char **argv)
                 .layout = ctl.layout,
                 .swap_eyes = ctl.swap_eyes,
                 .geom = {.tan_h = tan_h, .tan_v = tan_v},
-                .trilinear = false,
+                .trilinear = cfg.mipmap_force,
             };
+            if (dp.trilinear && cfg.mipmap_check) {
+                int vw, vh;
+                xrd_player_video_size(p, &vw, &vh);
+                if (!xrd_player_mipmapped(p)) {
+                    fprintf(stderr, "xrdome: --mipmap-check: trilinear draw %d samples a %dx%d "
+                                    "texture whose mipmaps were not generated for its frame\n",
+                            mip_draws + 1, vw, vh);
+                    goto out;
+                }
+                if (vw != mip_w || vh != mip_h) {
+                    size_t n = strlen(mip_sizes);
+                    snprintf(mip_sizes + n, sizeof mip_sizes - n, "%s%dx%d", n ? " then " : "",
+                             vw, vh);
+                    mip_w = vw;
+                    mip_h = vh;
+                }
+                mip_draws++;
+            }
             xrd_renderer_draw(r, tex, rot, &dp, out_w, out_h);
         } else {
             glClearColor(0.f, 0.f, 0.f, 1.f);
@@ -525,6 +552,9 @@ int main(int argc, char **argv)
         prev_swap_ns = now + pace;
     }
 
+    if (cfg.mipmap_check)
+        fprintf(stderr, "mipmap check: %d trilinear draws, texture %s\n", mip_draws,
+                mip_sizes[0] ? mip_sizes : "none");
     if (cfg.frames > 0 && presented < cfg.frames && !done) {
         snprintf(err, sizeof err, "--frames %d: exited after %d presented frames", cfg.frames,
                  presented);

@@ -1258,6 +1258,369 @@ static void flat_odd_sizes_keep_eyes_apart(void **state)
     }
 }
 
+/* ---- trilinear sampling (mipmaps) ---- */
+
+/* Generates levels 1..XRD_MIP_MAX_LEVEL of tex and samples it trilinearly, as
+ * the player does while shrinking. */
+static void mipmap_tex(GLuint tex)
+{
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, XRD_MIP_MAX_LEVEL);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    assert_int_equal(glGetError(), GL_NO_ERROR);
+}
+
+/* A device-sized target, two 1920 x 1080 eyes as on the Viture Pro XR, so a
+ * zoom shrinks a frame as much as it would on the glasses (flat zoom 0.25
+ * shrinks a 3840x2160 half-SBS frame 8x vertically). Same eye aspect as W x H. */
+#define BIG_W 3840
+#define BIG_H 1080
+static GLuint g_big_fbo, g_big_color;
+static uint8_t *g_big;
+
+static void big_begin(void)
+{
+    g_big = malloc((size_t)BIG_W * BIG_H * 4);
+    assert_non_null(g_big);
+    glGenTextures(1, &g_big_color);
+    glBindTexture(GL_TEXTURE_2D, g_big_color);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, BIG_W, BIG_H, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glGenFramebuffers(1, &g_big_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_big_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_big_color, 0);
+    assert_int_equal(glCheckFramebufferStatus(GL_FRAMEBUFFER), GL_FRAMEBUFFER_COMPLETE);
+}
+
+static void big_end(void)
+{
+    glDeleteFramebuffers(1, &g_big_fbo);
+    glDeleteTextures(1, &g_big_color);
+    free(g_big);
+    g_big = NULL;
+}
+
+/* draw_dp into the device-sized target. */
+static void draw_big(GLuint tex, const xrd_view_geom *g, xrd_layout layout, bool trilinear)
+{
+    float rot[9];
+    xrd_quat_to_mat3(XRD_QUAT_IDENTITY, rot);
+    const xrd_draw_params dp = {.proj = XRD_PROJ_FLAT, .layout = layout, .swap_eyes = false,
+                                .geom = *g, .trilinear = trilinear};
+    glBindFramebuffer(GL_FRAMEBUFFER, g_big_fbo);
+    glViewport(0, 0, BIG_W, BIG_H);
+    glClearColor(1.f, 0.f, 1.f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    xrd_renderer_draw(g_r, tex, rot, &dp, BIG_W, BIG_H);
+    assert_int_equal(glGetError(), GL_NO_ERROR);
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    glReadPixels(0, 0, BIG_W, BIG_H, GL_RGBA, GL_UNSIGNED_BYTE, g_big);
+    assert_int_equal(glGetError(), GL_NO_ERROR);
+}
+
+/* viewport_stats for the device-sized target. */
+static void big_stats(int eye, int c, int lit, int *max_c, int *n_lit)
+{
+    *max_c = 0;
+    *n_lit = 0;
+    for (int y = 0; y < BIG_H; y++)
+        for (int x = eye * (BIG_W / 2); x < (eye + 1) * (BIG_W / 2); x++) {
+            const uint8_t *p = &g_big[((size_t)y * BIG_W + x) * 4];
+            if (p[c] > *max_c)
+                *max_c = p[c];
+            *n_lit += p[lit] > 200;
+        }
+}
+
+/* Review Focus 4 at every mipmap level. Each frame's first eye is red and
+ * its second blue, the middle texel of an odd split axis coloured as either
+ * eye in turn; at flat zooms 0.25 to 0.5 the whole picture, both seam-side
+ * edges included, is shrunk 2x to 8x into a 1920 x 1080 viewport. With
+ * trilinear (and, for comparison, bilinear and Catmull-Rom on level 0) the
+ * left viewport shows no blue and the right one no red above 8/255. */
+static void trilinear_keeps_eyes_apart_when_shrinking(void **state)
+{
+    (void)state;
+    const struct { int w, h; xrd_layout layout; } frames[] = {
+        {3840, 2160, XRD_LAYOUT_SBS_LR}, /* half SBS */
+        {3840, 2160, XRD_LAYOUT_TB_LR},  /* half top-bottom */
+        {1920, 2160, XRD_LAYOUT_TB_LR},  /* full top-bottom */
+        {1919, 1080, XRD_LAYOUT_SBS_LR}, /* odd split axes */
+        {1920, 1081, XRD_LAYOUT_TB_LR},
+    };
+    const float zooms[] = {0.25f, 0.35f, 0.5f};
+    const struct { bool tri; xrd_filter f; const char *name; } modes[] = {
+        {true, XRD_FILTER_BICUBIC, "trilinear"},
+        {false, XRD_FILTER_BILINEAR, "bilinear"},
+        {false, XRD_FILTER_BICUBIC, "Catmull-Rom"},
+    };
+    big_begin();
+    for (size_t fr = 0; fr < sizeof frames / sizeof frames[0]; fr++) {
+        int w = frames[fr].w, h = frames[fr].h;
+        bool tb = xrd_layout_is_tb(frames[fr].layout);
+        int n = tb ? h : w;
+        double f = (double)w / h;
+        double a = xrd_picture_aspect(
+            frames[fr].layout, xrd_packing_resolve(frames[fr].layout, XRD_PACKING_AUTO, f), f);
+        for (int which = 0; which < (n % 2 ? 2 : 1); which++) {
+            /* which 0: the middle texel blue; which 1: red */
+            GLuint tex = make_split_tex(w, h, tb, which == 0 ? n / 2 : (n + 1) / 2);
+            mipmap_tex(tex);
+            for (size_t z = 0; z < sizeof zooms / sizeof zooms[0]; z++) {
+                xrd_view_geom g;
+                flat_geom(XRD_ZOOM_SCREEN, zooms[z], a, &g);
+                for (size_t m = 0; m < sizeof modes / sizeof modes[0]; m++) {
+                    xrd_renderer_set_filter(g_r, modes[m].f);
+                    draw_big(tex, &g, frames[fr].layout, modes[m].tri);
+                    for (int eye = 0; eye < 2; eye++) {
+                        int max_other, n_own;
+                        big_stats(eye, eye == 0 ? 2 : 0, eye == 0 ? 0 : 2, &max_other, &n_own);
+                        if (max_other > 8)
+                            fail_msg("%dx%d %s, middle texel %s, zoom %.2f, %s: %s viewport "
+                                     "has the other eye's colour up to %d/255",
+                                     w, h, tb ? "tb-lr" : "sbs-lr", which ? "red" : "blue",
+                                     (double)zooms[z], modes[m].name, eye ? "right" : "left",
+                                     max_other);
+                        if (n_own < 1000)
+                            fail_msg("%dx%d zoom %.2f %s: only %d own-colour pixels in the %s "
+                                     "viewport", w, h, (double)zooms[z], modes[m].name, n_own,
+                                     eye ? "right" : "left");
+                    }
+                }
+            }
+            glDeleteTextures(1, &tex);
+        }
+    }
+    big_end();
+}
+
+/* One axis of the widest generation filter the margin allows: dst texel j
+ * of n_d (footprint [j r, (j + 1) r) in source texels, r = n_s / n_d) is the
+ * plain mean of every source texel whose centre lies strictly within that
+ * footprint widened by one source texel each side. first[j] and count[j] list
+ * those texels. */
+static void wide_taps(int n_s, int n_d, int *first, int *count)
+{
+    double r = (double)n_s / n_d;
+    for (int j = 0; j < n_d; j++) {
+        double lo = j * r - 1.0, hi = (j + 1) * r + 1.0;
+        int a = (int)ceil(lo - 0.5), b = (int)floor(hi - 0.5);
+        if (a + 0.5 <= lo)
+            a++;
+        if (b + 0.5 >= hi)
+            b--;
+        if (a < 0)
+            a = 0;
+        if (b > n_s - 1)
+            b = n_s - 1;
+        first[j] = a;
+        count[j] = b - a + 1;
+    }
+}
+
+/* Uploads levels 1..XRD_MIP_MAX_LEVEL of an RGBA8 w x h frame (rgba, level 0
+ * already in tex) computed on the CPU with the wide filter above, as a driver
+ * filtering more widely than llvmpipe might. */
+static void wide_mipmap_tex(GLuint tex, const uint8_t *rgba, int w, int h)
+{
+    float *src = malloc((size_t)w * h * 4 * sizeof *src);
+    assert_non_null(src);
+    for (size_t i = 0; i < (size_t)w * h * 4; i++)
+        src[i] = rgba[i];
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    for (int level = 1; level <= XRD_MIP_MAX_LEVEL; level++) {
+        int dw = w / 2 > 1 ? w / 2 : 1, dh = h / 2 > 1 ? h / 2 : 1;
+        int *fx = malloc(sizeof(int) * (size_t)dw), *cx = malloc(sizeof(int) * (size_t)dw);
+        int *fy = malloc(sizeof(int) * (size_t)dh), *cy = malloc(sizeof(int) * (size_t)dh);
+        float *dst = malloc((size_t)dw * dh * 4 * sizeof *dst);
+        uint8_t *up = malloc((size_t)dw * dh * 4);
+        assert_true(fx && cx && fy && cy && dst && up);
+        wide_taps(w, dw, fx, cx);
+        wide_taps(h, dh, fy, cy);
+        for (int y = 0; y < dh; y++)
+            for (int x = 0; x < dw; x++)
+                for (int c = 0; c < 4; c++) {
+                    double sum = 0.0;
+                    for (int sy = fy[y]; sy < fy[y] + cy[y]; sy++)
+                        for (int sx = fx[x]; sx < fx[x] + cx[x]; sx++)
+                            sum += src[((size_t)sy * w + sx) * 4 + c];
+                    float v = (float)(sum / (cx[x] * cy[y]));
+                    dst[((size_t)y * dw + x) * 4 + c] = v;
+                    up[((size_t)y * dw + x) * 4 + c] = (uint8_t)lrintf(v);
+                }
+        glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA8, dw, dh, 0, GL_RGBA, GL_UNSIGNED_BYTE, up);
+        free(fx);
+        free(cx);
+        free(fy);
+        free(cy);
+        free(up);
+        free(src);
+        src = dst;
+        w = dw;
+        h = dh;
+    }
+    free(src);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, XRD_MIP_MAX_LEVEL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    assert_int_equal(glGetError(), GL_NO_ERROR);
+}
+
+/* Review Focus 4 does not rest on llvmpipe's box filter: with a chain made
+ * by the widest filter the margin allows, trilinear still keeps the eyes
+ * apart at 2x to 8x shrink. */
+static void trilinear_margin_covers_a_wide_mipmap_filter(void **state)
+{
+    (void)state;
+    const struct { int w, h; xrd_layout layout; } frames[] = {
+        {3840, 2160, XRD_LAYOUT_SBS_LR},
+        {1919, 1080, XRD_LAYOUT_SBS_LR},
+        {1920, 1081, XRD_LAYOUT_TB_LR},
+    };
+    const float zooms[] = {0.25f, 0.35f, 0.5f};
+    big_begin();
+    for (size_t fr = 0; fr < sizeof frames / sizeof frames[0]; fr++) {
+        int w = frames[fr].w, h = frames[fr].h;
+        bool tb = xrd_layout_is_tb(frames[fr].layout);
+        int n = tb ? h : w;
+        double f = (double)w / h;
+        double a = xrd_picture_aspect(
+            frames[fr].layout, xrd_packing_resolve(frames[fr].layout, XRD_PACKING_AUTO, f), f);
+        for (int which = 0; which < (n % 2 ? 2 : 1); which++) {
+            int split = which == 0 ? n / 2 : (n + 1) / 2;
+            uint8_t *px = malloc((size_t)w * h * 4);
+            assert_non_null(px);
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++) {
+                    bool red = (tb ? h - 1 - y : x) < split;
+                    uint8_t *p = &px[((size_t)y * w + x) * 4];
+                    p[0] = red ? 255 : 0;
+                    p[1] = 0;
+                    p[2] = red ? 0 : 255;
+                    p[3] = 255;
+                }
+            GLuint tex = make_tex(w, h, px);
+            wide_mipmap_tex(tex, px, w, h);
+            free(px);
+            for (size_t z = 0; z < sizeof zooms / sizeof zooms[0]; z++) {
+                xrd_view_geom g;
+                flat_geom(XRD_ZOOM_SCREEN, zooms[z], a, &g);
+                draw_big(tex, &g, frames[fr].layout, true);
+                for (int eye = 0; eye < 2; eye++) {
+                    int max_other, n_own;
+                    big_stats(eye, eye == 0 ? 2 : 0, eye == 0 ? 0 : 2, &max_other, &n_own);
+                    if (max_other > 0)
+                        fail_msg("%dx%d %s, middle texel %s, zoom %.2f, wide filter: %s "
+                                 "viewport has the other eye's colour up to %d/255",
+                                 w, h, tb ? "tb-lr" : "sbs-lr", which ? "red" : "blue",
+                                 (double)zooms[z], eye ? "right" : "left", max_other);
+                    assert_true(n_own >= 1000);
+                }
+            }
+            glDeleteTextures(1, &tex);
+        }
+    }
+    big_end();
+}
+
+/* 1-texel black and white checkerboard, 2000 x 1125 (16:9), mipmapped. */
+#define CHECK_W 2000
+#define CHECK_H 1125
+
+/* Largest distance from mid grey (127.5) over any channel, in a 200 x 120
+ * pixel block at the centre of the left viewport. */
+static double centre_grey_error(void)
+{
+    double worst = 0.0;
+    for (int y = BIG_H / 2 - 60; y < BIG_H / 2 + 60; y++)
+        for (int x = BIG_W / 4 - 100; x < BIG_W / 4 + 100; x++)
+            for (int c = 0; c < 3; c++) {
+                double e = fabs(g_big[((size_t)y * BIG_W + x) * 4 + c] - 127.5);
+                if (e > worst)
+                    worst = e;
+            }
+    return worst;
+}
+
+static void trilinear_averages_checkerboard_at_4x_shrink(void **state)
+{
+    (void)state;
+    uint8_t *px = malloc((size_t)CHECK_W * CHECK_H * 4);
+    assert_non_null(px);
+    for (int y = 0; y < CHECK_H; y++)
+        for (int x = 0; x < CHECK_W; x++) {
+            uint8_t v = (x + y) % 2 ? 255 : 0;
+            uint8_t *p = &px[((size_t)y * CHECK_W + x) * 4];
+            p[0] = p[1] = p[2] = v;
+            p[3] = 255;
+        }
+    GLuint tex = make_tex(CHECK_W, CHECK_H, px);
+    free(px);
+    mipmap_tex(tex);
+    big_begin();
+    /* zoom 0.25: the picture is 480 x 270 pixels, 4.17 texels per pixel */
+    xrd_view_geom g;
+    flat_geom(XRD_ZOOM_SCREEN, 0.25f, (double)CHECK_W / CHECK_H, &g);
+    assert_float_equal(xrd_minify_ratio(XRD_PROJ_FLAT, &g, CHECK_W, CHECK_H, BIG_W / 2, BIG_H,
+                                        180.f, 180.f),
+                       4.17, 0.01);
+    draw_big(tex, &g, XRD_LAYOUT_MONO, true);
+    double tri = centre_grey_error();
+    xrd_renderer_set_filter(g_r, XRD_FILTER_BILINEAR);
+    draw_big(tex, &g, XRD_LAYOUT_MONO, false);
+    double off = centre_grey_error();
+    big_end();
+    glDeleteTextures(1, &tex);
+    if (tri > 16.0)
+        fail_msg("trilinear: up to %.1f/255 from mid grey, want <= 16", tri);
+    if (off <= 16.0)
+        fail_msg("without trilinear: only %.1f/255 from mid grey; the test does not alias", off);
+}
+
+/* Enlarging, trilinear reads level 0 exactly as bilinear does: same pixels
+ * at the seam edge of every split, even and odd (no wider margin there). The
+ * frame is noise, so a margin of even one more texel changes the picture. */
+static void trilinear_enlarging_matches_bilinear(void **state)
+{
+    (void)state;
+    const struct { int w, h; bool tb; } cases[] = {
+        {1920, 1080, false}, {1919, 1080, false}, {1920, 1081, true}};
+    static uint8_t bil[W * H * 4];
+    for (size_t c = 0; c < sizeof cases / sizeof cases[0]; c++) {
+        int w = cases[c].w, h = cases[c].h;
+        bool tb = cases[c].tb;
+        xrd_layout layout = tb ? XRD_LAYOUT_TB_LR : XRD_LAYOUT_SBS_LR;
+        uint8_t *px = malloc((size_t)w * h * 4);
+        assert_non_null(px);
+        uint32_t seed = 12345u;
+        for (size_t i = 0; i < (size_t)w * h * 4; i++) {
+            seed = seed * 1664525u + 1013904223u;
+            px[i] = (i % 4 == 3) ? 255 : (uint8_t)(seed >> 24);
+        }
+        GLuint tex = make_tex(w, h, px);
+        free(px);
+        mipmap_tex(tex);
+        xrd_view_geom g;
+        flat_geom(XRD_ZOOM_MAGNIFY, 20.f,
+                  xrd_picture_aspect(layout, tb ? XRD_PACKING_FULL : XRD_PACKING_HALF,
+                                     (double)w / h),
+                  &g);
+        double to_edge = atan(tb ? g.half_h : g.half_w) * 180.0 / 3.14159265358979323846;
+        xrd_quat q = tb ? xrd_quat_from_ypr_deg(0, -to_edge, 0)
+                        : xrd_quat_from_ypr_deg(-to_edge, 0, 0);
+        xrd_draw_params dp = {.proj = XRD_PROJ_FLAT, .layout = layout, .geom = g};
+        xrd_renderer_set_filter(g_r, XRD_FILTER_BILINEAR);
+        draw_dp(tex, q, &dp);
+        memcpy(bil, g_img, sizeof bil);
+        dp.trilinear = true;
+        draw_dp(tex, q, &dp);
+        if (memcmp(bil, g_img, sizeof bil) != 0)
+            fail_msg("%dx%d %s: trilinear differs from bilinear when enlarging 20x", w, h,
+                     tb ? "tb-lr" : "sbs-lr");
+        glDeleteTextures(1, &tex);
+    }
+}
+
 /* Top-bottom is the same code path for VR180. */
 static void hequirect_tb_lr(void **state)
 {
@@ -1328,6 +1691,10 @@ int main(void)
         cmocka_unit_test_teardown(flat_seam_even_and_odd_sizes, reset_view),
         cmocka_unit_test_teardown(flat_odd_sizes_keep_eyes_apart, reset_view),
         cmocka_unit_test_teardown(hequirect_tb_lr, reset_view),
+        cmocka_unit_test_teardown(trilinear_keeps_eyes_apart_when_shrinking, reset_view),
+        cmocka_unit_test_teardown(trilinear_margin_covers_a_wide_mipmap_filter, reset_view),
+        cmocka_unit_test_teardown(trilinear_averages_checkerboard_at_4x_shrink, reset_view),
+        cmocka_unit_test_teardown(trilinear_enlarging_matches_bilinear, reset_view),
         cmocka_unit_test(no_gl_error),
     };
     return cmocka_run_group_tests(tests, setup, teardown);

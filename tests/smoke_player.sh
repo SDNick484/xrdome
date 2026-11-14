@@ -109,9 +109,10 @@ grep -q '^timing: [0-9]* frames, [0-9]* missed vsyncs' "$work/play.err"; check "
 ! grep '^mpv: ' "$work/play.err" | grep -qv '^mpv: \[[^]]*\] .\|^mpv: profile='
 check "mpv lines are 'mpv: [prefix] text' or 'mpv: profile='" $?
 
-# The default video texture is 10-bit and the eye pass dithers.
-grep -q '^video texture: rgb10_a2 dither=on$' "$work/play.err"
-check "stderr reports video texture rgb10_a2 dither=on" $?
+# The default video texture is 10-bit, the coded frame size, and the eye pass
+# dithers; no mipmaps unless asked for.
+grep -q '^video texture: rgb10_a2 4096x2048 dither=on mipmap=off$' "$work/play.err"
+check "stderr reports video texture rgb10_a2 4096x2048 dither=on mipmap=off" $?
 
 check_frame "$work/out.ppm"
 check "dumped frame: colours and orientation" $?
@@ -122,7 +123,7 @@ xvfb "$xrdome" --no-memory --windowed --pose null --fbo-format rgba8 --dither of
 st=$?
 cat "$work/rgba8.err"
 check "--fbo-format rgba8 --dither off exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
-grep -q '^video texture: rgba8 dither=off$' "$work/rgba8.err"
+grep -q '^video texture: rgba8 4096x2048 dither=off mipmap=off$' "$work/rgba8.err"
 check "--fbo-format rgba8 --dither off reported" $?
 check_frame "$work/out8.ppm"
 check "--fbo-format rgba8 --dither off: colours and orientation" $?
@@ -278,6 +279,63 @@ st=$?
 check "flat video exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
 [ "$(grep -c '^xrdome: warning: video is 1920x1080, .*ordinary flat video.*--layout mono --content-fov 60x34' "$work/flat.err")" -eq 1 ]
 check "flat video: one warning naming flat video and the mono flags" $?
+
+# 5. Coded-size texture (spec 5.10). A stereo-tagged Matroska file declares
+# one eye's display size, so mpv's own display size for this 1920x1080 frame
+# is 1920x2160. The texture is the coded 1920x1080 and the picture fills it.
+"$make_pattern" 2 "$work/stereo.mkv" libx264 960x1080 || { echo "FAIL: make stereo.mkv"; exit 1; }
+xvfb "$xrdome" --no-memory --windowed --pose null --frames 30 --dump-frame "$work/stereo.ppm" \
+     "$work/stereo.mkv" >"$work/stereo.err" 2>&1
+st=$?
+cat "$work/stereo.err"
+check "stereo-tagged mkv exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+grep -qx 'video texture: rgb10_a2 1920x1080 dither=on mipmap=off' "$work/stereo.err"
+check "stereo-tagged mkv: video texture rgb10_a2 1920x1080" $?
+check_frame "$work/stereo.ppm"
+check "stereo-tagged mkv: the picture fills the texture (colours and orientation)" $?
+# Control: with mpv's container aspect back on, the same file is squeezed into
+# the middle of the texture and the frame check fails, so this file does make
+# mpv's display size differ from the coded size.
+xvfb "$xrdome" --no-memory --windowed --pose null --frames 30 --dump-frame "$work/stereo_ar.ppm" \
+     --mpv-opt video-aspect-override=-1 "$work/stereo.mkv" >"$work/stereo_ar.err" 2>&1
+st=$?
+check "stereo-tagged mkv with container aspect exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+[ -s "$work/stereo_ar.ppm" ] && ! check_frame "$work/stereo_ar.ppm" >/dev/null
+check "control: with mpv's container aspect the stereo mkv frame check fails" $?
+
+# 6. Mipmaps forced on (development flag): every draw samples trilinearly and
+# the VR180 pattern still passes the frame check.
+xvfb "$xrdome" --no-memory --windowed --pose null --mipmap-force --mipmap-check --frames 30 \
+     --dump-frame "$work/mip.ppm" "$work/pattern.mp4" >"$work/mip.err" 2>&1
+st=$?
+cat "$work/mip.err"
+check "--mipmap-force exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+grep -qx 'video texture: rgb10_a2 4096x2048 dither=on mipmap=on' "$work/mip.err"
+check "--mipmap-force: video texture reports mipmap=on" $?
+grep -qx 'mipmap check: [1-9][0-9]* trilinear draws, texture 4096x2048' "$work/mip.err"
+check "--mipmap-force: trilinear draws checked" $?
+check_frame "$work/mip.ppm"
+check "--mipmap-force: colours and orientation" $?
+
+# 7. Review Focus 5: the video size changes mid-file (1280x720, then
+# 1920x1080). --mipmap-check exits 1 before any trilinear draw from a chain
+# not regenerated for the frame in the texture; both sizes must be drawn.
+for seg in 1:1280x720 2:1920x1080; do
+    ffmpeg -nostdin -v error -y -f lavfi -i "testsrc=s=${seg#*:}:r=30" -t 1 -c:v libx264 \
+        -preset ultrafast -pix_fmt yuv420p "$work/seg${seg%%:*}.ts" ||
+        { echo "FAIL: make seg${seg%%:*}.ts"; exit 1; }
+done
+printf "file '%s'\nfile '%s'\n" "$work/seg1.ts" "$work/seg2.ts" >"$work/segs.txt"
+ffmpeg -nostdin -v error -y -f concat -safe 0 -i "$work/segs.txt" -c copy "$work/sizes.ts" ||
+    { echo "FAIL: make sizes.ts"; exit 1; }
+xvfb "$xrdome" --no-memory --windowed --pose null --mipmap-force --mipmap-check \
+     "$work/sizes.ts" >"$work/sizes.err" 2>&1
+st=$?
+cat "$work/sizes.err"
+check "size change with --mipmap-check exits 0 (got $st)" "$([ "$st" -eq 0 ]; echo $?)"
+grep -qx 'mipmap check: [1-9][0-9]* trilinear draws, texture 1280x720 then 1920x1080' \
+    "$work/sizes.err"
+check "size change: trilinear draws at 1280x720 then 1920x1080, all checked" $?
 
 # ---- per-file settings memory (M1 to M10) ----
 cp "$work/pattern.mp4" "$work/mem.mp4"

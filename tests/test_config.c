@@ -1027,6 +1027,33 @@ static void args_dev_dump_requires_frames(void **state)
     assert_non_null(strstr(err, "--frames"));
 }
 
+static void args_dev_mipmap_flags(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    xrd_config c;
+    xrd_config_defaults(&c);
+    assert_false(c.mipmap_force);
+    assert_false(c.mipmap_check);
+
+    char *a[] = {"xrdome", "--mipmap-force", "--mipmap-check", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, a, err, sizeof err), 0);
+    assert_true(c.mipmap_force);
+    assert_true(c.mipmap_check);
+    assert_int_equal(c.explicit_flags, 0u);
+
+    xrd_config_defaults(&c);
+    char *f[] = {"xrdome", "--mipmap-force", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 3, f, err, sizeof err), 0);
+    assert_true(c.mipmap_force);
+    assert_false(c.mipmap_check);
+
+    /* development flags take no value */
+    xrd_config_defaults(&c);
+    char *v[] = {"xrdome", "--mipmap-force=on", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 3, v, err, sizeof err), -1);
+}
+
 static unsigned load_flags(int argc, char **argv)
 {
     char err[256] = "";
@@ -1169,6 +1196,7 @@ int main(void)
         cmocka_unit_test(args_dev_frames_and_dump),
         cmocka_unit_test(args_dev_frames_bad_values),
         cmocka_unit_test(args_dev_dump_requires_frames),
+        cmocka_unit_test(args_dev_mipmap_flags),
         cmocka_unit_test(args_sync_after_swap_flag),
         cmocka_unit_test(args_explicit_flags),
         cmocka_unit_test(explicit_default_value_counts),

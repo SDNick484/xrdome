@@ -11,7 +11,7 @@ struct xrd_renderer {
     GLuint prog;
     GLuint vao;
     GLint u_video, u_rot, u_tan_half, u_proj, u_inv_fov, u_reject, u_flat_half, u_eye_scale,
-        u_eye_offset, u_bicubic, u_dither;
+        u_eye_offset, u_bicubic, u_dither, u_trilinear, u_max_level;
     float hfov_deg, vfov_deg;
     float convergence_deg;
     xrd_filter filter;
@@ -93,6 +93,8 @@ xrd_renderer *xrd_renderer_new(char *err, size_t errlen)
     r->convergence_deg = 0.f;
     r->filter = XRD_FILTER_BILINEAR;
     r->u_dither = glGetUniformLocation(prog, "u_dither");
+    r->u_trilinear = glGetUniformLocation(prog, "u_trilinear");
+    r->u_max_level = glGetUniformLocation(prog, "u_max_level");
     r->dither = false;
     return r;
 }
@@ -160,7 +162,10 @@ void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
     const double deg = 3.14159265358979323846 / 180.0;
     glUniform2f(r->u_reject, r->hfov_deg < XRD_FULL_FOV_DEG ? 1.f : 0.f, r->vfov_deg < XRD_FULL_FOV_DEG ? 1.f : 0.f);
     glUniform2f(r->u_inv_fov, (float)(1.0 / (r->hfov_deg * deg)), (float)(1.0 / (r->vfov_deg * deg)));
-    glUniform1i(r->u_bicubic, r->filter == XRD_FILTER_BICUBIC);
+    /* Trilinear replaces Catmull-Rom: it is used only while shrinking. */
+    glUniform1i(r->u_trilinear, dp->trilinear);
+    glUniform1i(r->u_max_level, XRD_MIP_MAX_LEVEL);
+    glUniform1i(r->u_bicubic, !dp->trilinear && r->filter == XRD_FILTER_BICUBIC);
     glUniform1i(r->u_dither, r->dither);
 
     int half = out_w / 2;

@@ -213,6 +213,111 @@ static void reconfig_step(void **state)
     assert_int_equal(xrd_reconfig_step_for(false, -1), XRD_RECONFIG_FAIL);
 }
 
+/* ---- coded-size texture ---- */
+
+static void expect_texture_size(int w, int h, int rotate, int want_w, int want_h)
+{
+    int tw = -1, th = -1;
+    xrd_video_texture_size(w, h, rotate, &tw, &th);
+    if (tw != want_w || th != want_h)
+        fail_msg("%dx%d rotated %d: %dx%d, want %dx%d", w, h, rotate, tw, th, want_w, want_h);
+}
+
+static void texture_size_is_coded_size(void **state)
+{
+    (void)state;
+    /* the coded frame, whatever aspect the container declares */
+    expect_texture_size(1920, 1080, 0, 1920, 1080);
+    expect_texture_size(1919, 1080, 0, 1919, 1080);
+    expect_texture_size(1920, 1081, 180, 1920, 1081);
+}
+
+static void texture_size_follows_rotation(void **state)
+{
+    (void)state;
+    expect_texture_size(1920, 1080, 90, 1080, 1920);
+    expect_texture_size(1920, 1080, 270, 1080, 1920);
+    expect_texture_size(1920, 1080, -90, 1080, 1920);
+    expect_texture_size(1920, 1080, 450, 1080, 1920);
+    expect_texture_size(1920, 1080, 360, 1920, 1080);
+    expect_texture_size(1920, 1080, -180, 1920, 1080);
+}
+
+/* ---- mipmap state (Review Focus 5) ---- */
+
+static void mip_off_never_generates(void **state)
+{
+    (void)state;
+    xrd_mip_state s = {0};
+    assert_false(xrd_mip_on_frame(&s));
+    assert_false(s.valid);
+    xrd_mip_on_resize(&s);
+    assert_false(xrd_mip_on_frame(&s));
+    assert_false(s.valid);
+    assert_false(xrd_mip_on_want(&s, false, true));
+    assert_false(s.valid);
+}
+
+static void mip_on_regenerates_every_frame(void **state)
+{
+    (void)state;
+    xrd_mip_state s = {0};
+    /* requested before the first frame: nothing to generate from yet */
+    assert_false(xrd_mip_on_want(&s, true, false));
+    assert_false(s.valid);
+    for (int i = 0; i < 3; i++) {
+        assert_true(xrd_mip_on_frame(&s));
+        assert_true(s.valid);
+    }
+}
+
+static void mip_resize_invalidates_until_next_frame(void **state)
+{
+    (void)state;
+    xrd_mip_state s = {0};
+    xrd_mip_on_want(&s, true, false);
+    assert_true(xrd_mip_on_frame(&s));
+    assert_true(s.valid);
+    /* 1280x720 to 1920x1080 mid-file: the old chain has the old size */
+    xrd_mip_on_resize(&s);
+    assert_false(s.valid);
+    /* asking again does not pretend the chain is back */
+    assert_false(xrd_mip_on_want(&s, true, false));
+    assert_false(s.valid);
+    assert_true(xrd_mip_on_frame(&s));
+    assert_true(s.valid);
+}
+
+static void mip_turned_on_over_a_frame_generates_at_once(void **state)
+{
+    (void)state;
+    /* A layout or projection switch (or a zoom) that starts shrinking while
+     * paused: no new frame comes, so the chain is generated from the one in
+     * the texture right away. */
+    xrd_mip_state s = {0};
+    assert_false(xrd_mip_on_frame(&s));
+    assert_true(xrd_mip_on_want(&s, true, true));
+    assert_true(s.valid);
+    /* asking again while valid generates nothing more */
+    assert_false(xrd_mip_on_want(&s, true, true));
+    assert_true(s.valid);
+}
+
+static void mip_turned_off_invalidates(void **state)
+{
+    (void)state;
+    xrd_mip_state s = {0};
+    assert_true(xrd_mip_on_want(&s, true, true));
+    assert_false(xrd_mip_on_want(&s, false, true));
+    assert_false(s.valid);
+    /* frames while off leave level 0 ahead of the old chain */
+    assert_false(xrd_mip_on_frame(&s));
+    assert_false(s.valid);
+    /* on again over that frame: generated at once, not trusted as it was */
+    assert_true(xrd_mip_on_want(&s, true, true));
+    assert_true(s.valid);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -234,6 +339,13 @@ int main(void)
         cmocka_unit_test(fbo_format_zero_is_rgba8),
         cmocka_unit_test(texture_bits_name),
         cmocka_unit_test(reconfig_step),
+        cmocka_unit_test(texture_size_is_coded_size),
+        cmocka_unit_test(texture_size_follows_rotation),
+        cmocka_unit_test(mip_off_never_generates),
+        cmocka_unit_test(mip_on_regenerates_every_frame),
+        cmocka_unit_test(mip_resize_invalidates_until_next_frame),
+        cmocka_unit_test(mip_turned_on_over_a_frame_generates_at_once),
+        cmocka_unit_test(mip_turned_off_invalidates),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
