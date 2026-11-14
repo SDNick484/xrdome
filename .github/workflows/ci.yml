@@ -100,8 +100,14 @@ jobs:
       - name: Build
         run: meson compile -C build
 
+      # Arch's xvfb-run (T2 SDE's copy of a 2005 Debian script) sleeps a fixed
+      # 3 s after starting Xvfb; today's Debian script waits for Xvfb's ready
+      # signal. smoke starts xvfb-run
+      # about 80 times, which takes it past its 300 s limit (315 s in an
+      # archlinux:latest container, against 82 s for the Ubuntu steps on the
+      # same machine). The checks are the same; only the time limit doubles.
       - name: Test
-        run: meson test -C build --print-errorlogs
+        run: meson test -C build --print-errorlogs --timeout-multiplier 2
 
       - name: Require the smoke tests to have run
         run: |
