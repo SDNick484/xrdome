@@ -16,6 +16,9 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/xrdome-smoke.XXXXXX") || exit 1
 work=$(cd "$work" && pwd) # absolute: a relative XDG_STATE_HOME is ignored by xrdome
 trap 'rm -rf "$work"' EXIT
 export LIBGL_ALWAYS_SOFTWARE=1
+# Never the real XRLinuxDriver: runs without --windowed would otherwise read
+# /dev/shm/xr_driver_state and could ask live glasses to switch to SBS.
+export XRDOME_XR_DRIVER_DIR="$work/no-xr-driver"
 export XDG_STATE_HOME="$work/state"
 
 # xvfb-run merges the program's stderr into its stdout, so callers capture both.
@@ -274,6 +277,9 @@ st=$?
 cat "$work/nosbs.err"
 check "non-SBS output exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
 grep -q "^xrdome: .*switch the glasses to SBS" "$work/nosbs.err"; check "non-SBS message" $?
+# With --sbs-switch auto (the default) the run also says why it did not switch.
+grep -qx "xrdome: automatic SBS switch: XRLinuxDriver is not running (cannot read $work/no-xr-driver/xr_driver_state)" "$work/nosbs.err"
+check "non-SBS: no XR driver, so no automatic switch, and why" $?
 
 # 4. An ordinary flat video played as VR180 (--proj hequirect) gets one warning
 # that names it and points at P and --proj flat (spec 5.12).

@@ -279,6 +279,56 @@ static void flat_defaults(void **state)
     assert_int_equal((int)c.explicit_flags, 0);
 }
 
+static void sbs_switch_flag(void **state)
+{
+    (void)state;
+    xrd_config c;
+    char err[256] = "";
+    xrd_config_defaults(&c);
+    assert_true(c.sbs_switch); /* default auto */
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--sbs-switch", "off"), 0);
+    assert_false(c.sbs_switch);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--sbs-switch", "auto"), 0);
+    assert_true(c.sbs_switch);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--sbs-switch", "on"), -1);
+    assert_non_null(strstr(err, "--sbs-switch"));
+    assert_non_null(strstr(err, "expected auto or off"));
+    assert_int_equal((int)c.explicit_flags, 0); /* not a per-file setting */
+}
+
+static void sbs_switch_ini(void **state)
+{
+    (void)state;
+    char path[64], err[256] = "";
+    write_tmp(path, "[general]\nsbs_switch = off\n");
+    char *argv[] = {"xrdome", "movie.mp4", NULL};
+    xrd_config c;
+    int rc = xrd_config_load(&c, path, 2, argv, err, sizeof err);
+    assert_int_equal(rc, 0);
+    assert_false(c.sbs_switch);
+    /* The flag wins over the ini. */
+    char *argv2[] = {"xrdome", "--sbs-switch", "auto", "movie.mp4", NULL};
+    rc = xrd_config_load(&c, path, 4, argv2, err, sizeof err);
+    unlink(path);
+    assert_int_equal(rc, 0);
+    assert_true(c.sbs_switch);
+
+    write_tmp(path, "[general]\nsbs_switch = sometimes\n");
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), -1);
+    char want[80];
+    snprintf(want, sizeof want, "%s:2:", path);
+    assert_non_null(strstr(err, want));
+    assert_non_null(strstr(err, "sbs_switch"));
+    unlink(path);
+    /* Only in [general]. */
+    write_tmp(path, "[device.viture-pro]\nsbs_switch = off\n");
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), -1);
+    assert_non_null(strstr(err, "unknown key"));
+    unlink(path);
+}
+
 static void flat_flag_proj(void **state)
 {
     (void)state;
@@ -1385,6 +1435,8 @@ int main(void)
         cmocka_unit_test(args_memory_flags),
         cmocka_unit_test(resume_flags_and_ini),
         cmocka_unit_test(ini_rejects_new_keys),
+        cmocka_unit_test(sbs_switch_flag),
+        cmocka_unit_test(sbs_switch_ini),
     };
     save_env(NULL);
     int failed = cmocka_run_group_tests(tests, NULL, NULL);

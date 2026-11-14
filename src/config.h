@@ -21,6 +21,8 @@ typedef struct {
     float content_vfov;    /* default 180 */
     bool require_hwdec;
     bool windowed;         /* development: skip the 3840x1080 check, 1280x360 window */
+    bool sbs_switch;       /* --sbs-switch auto|off, [general] sbs_switch; default auto (true):
+                              ask XRLinuxDriver to switch 1080p glasses to SBS at start */
     char timing_log[4096]; /* empty = off */
     bool sync_after_swap;  /* diagnostic: glFinish() right after the swap */
     char mpv_profile[32];  /* --mpv-profile; default "fast"; "default" = apply no profile */

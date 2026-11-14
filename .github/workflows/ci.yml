@@ -1,4 +1,4 @@
-# CI: build xrdome and run the whole test suite, including both Xvfb smoke tests.
+# CI: build xrdome and run the whole test suite, including the Xvfb smoke tests.
 #
 # Known difference: ubuntu-24.04 ships mpv 0.37 (libmpv-dev), while the owner runs
 # a newer libmpv (2.6.0) on Gentoo. That difference is accepted for now.
@@ -26,7 +26,7 @@ jobs:
             gcc meson ninja-build pkg-config python3 \
             libmpv-dev libsdl2-dev libepoxy-dev libegl-dev libcmocka-dev \
             libegl-mesa0 libgl1-mesa-dri libglx-mesa0 \
-            ffmpeg xvfb xauth
+            ffmpeg xvfb xauth x11-xserver-utils
 
       # -Dwerror=true makes any warning in xrdome's own sources (src/, tests/)
       # fail the build; warnings in system headers are not reported by gcc.
@@ -40,12 +40,12 @@ jobs:
         run: meson test -C build --print-errorlogs
 
       # meson reports a skipped test (exit 77) as non-failing, and a skipped
-      # smoke test proves nothing, so require both to have really passed.
-      - name: Require both smoke tests to have run
+      # smoke test proves nothing, so require all three to have really passed.
+      - name: Require the smoke tests to have run
         run: |
           python3 - <<'PY'
           import json, sys
-          want = {"smoke", "smoke_tracking"}
+          want = {"smoke", "smoke_tracking", "smoke_sbs"}
           seen = {}
           with open("build/meson-logs/testlog.json") as f:
               for line in f:

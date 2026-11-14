@@ -34,6 +34,7 @@ core_sources = files(
   'src/render/renderer_gl.c',
   'src/display/output.c',
   'src/driver/xrdriver.c',
+  'src/display/sbs.c',
   'src/video/player_mpv.c',
   'src/app/controls.c',
   'src/store/filestate.c',
@@ -62,6 +63,7 @@ test_names = [
   'probe_run',
   'session',
   'xrdriver',
+  'sbs',
 ]
 
 inc = include_directories('src')
@@ -100,5 +102,11 @@ test('smoke', find_program('tests/smoke_player.sh'),
 # Head tracking end to end under Xvfb, fed by tools/ot_sweep.py over UDP.
 test('smoke_tracking', find_program('tests/smoke_tracking.sh'),
   args : [xrdome_exe, files('tools/make_pattern.sh'), files('tools/ot_sweep.py')],
+  is_parallel : false,
+  timeout : 300)
+
+# The automatic SBS switch under Xvfb, against tests/fake_xr_driver.py.
+test('smoke_sbs', find_program('tests/smoke_sbs.sh'),
+  args : [xrdome_exe, files('tools/make_pattern.sh'), files('tests/fake_xr_driver.py')],
   is_parallel : false,
   timeout : 300)

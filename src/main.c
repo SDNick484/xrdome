@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "app/controls.h"
 #include "app/session.h"
@@ -16,6 +17,7 @@
 #include "detect/detect.h"
 #include "detect/probe.h"
 #include "display/output.h"
+#include "display/sbs.h"
 #include "math/quat.h"
 #include "pose/pose.h"
 #include "render/projection.h"
@@ -621,6 +623,8 @@ int main(int argc, char **argv)
     int presented = 0; /* frames swapped since the first video frame (--frames) */
     bool done = false; /* --frames reached, or the glasses went away */
     bool rendered = false; /* a video frame was drawn (gates saving the settings) */
+    bool sbs_switched = false; /* xrdome switched the glasses to SBS: switch back at exit */
+    bool glasses_gone = false; /* the glasses' output disconnected during playback */
     xrd_controls ctl;      /* valid once rendered is set */
 
     trk = xrd_tracker_new(pose);
@@ -655,8 +659,23 @@ int main(int argc, char **argv)
         }
         int idx = -1;
         int sel = xrd_output_select(outs, n, cfg.output, &idx);
+        xrd_sbs_result sbs = {.outcome = XRD_SBS_NOT_ASKED};
+        bool sbs_tried = false;
+        if (sel != XRD_OUT_OK && cfg.sbs_switch &&
+            xrd_output_sbs_candidate(outs, n, cfg.output, sel)) {
+            sbs_tried = true;
+            sel = xrd_sbs_switch(xrd_sbs_sdl_ops(), NULL, cfg.output, XRD_SBS_WAIT_MS, outs,
+                                 MAX_OUTPUTS, &n, &idx, &sbs);
+            if (sbs.outcome == XRD_SBS_SWITCHED) {
+                sbs_switched = true;
+                fprintf(stderr, "display: switched the glasses to SBS in %.1f s\n",
+                        (double)sbs.waited_ms / 1000.0);
+            }
+        }
         if (sel != XRD_OUT_OK) {
             fail("%s", xrd_output_strerror(sel, cfg.output));
+            if (sbs_tried)
+                fail("automatic SBS switch: %s", sbs.why);
             if (sel == XRD_OUT_NOT_FOUND) {
                 char list[1024];
                 xrd_output_list(outs, n, list, sizeof list);
@@ -785,7 +804,7 @@ int main(int argc, char **argv)
                 if ((int)ev.display.display == display) {
                     xrd_player_pause(p);
                     fprintf(stderr, "xrdome: warning: glasses disconnected, exiting\n");
-                    quit = done = true;
+                    quit = done = glasses_gone = true;
                 } else if ((int)ev.display.display < display) {
                     display--; /* SDL renumbers the displays after the removed one */
                 }
@@ -950,6 +969,16 @@ out:
         SDL_GL_DeleteContext(gl);
     if (win)
         SDL_DestroyWindow(win);
+    /* Switch back only what xrdome switched. Glasses that went away come back
+     * in 1080p by themselves; xrd_sbs_restore also skips a driver that is no
+     * longer running, whose next start would read the request. */
+    if (sbs_switched && !glasses_gone) {
+        char why[512];
+        if (xrd_sbs_restore((long long)time(NULL), why, sizeof why))
+            fprintf(stderr, "display: asked XRLinuxDriver to switch the glasses back to 1080p\n");
+        else
+            fprintf(stderr, "xrdome: warning: the glasses stay in SBS: %s\n", why);
+    }
     SDL_Quit();
     xrd_tracker_free(trk);
     xrd_pose_source_destroy(pose);

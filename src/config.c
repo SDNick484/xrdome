@@ -110,6 +110,20 @@ static int parse_onoff(const char *what, const char *s, bool yes_no, bool *out, 
     return 0;
 }
 
+/* "auto" or "off" into *on. what names the flag or key. */
+static int parse_sbs_switch(const char *what, const char *s, bool *on, char *err, size_t errlen)
+{
+    if (!strcmp(s, "auto"))
+        *on = true;
+    else if (!strcmp(s, "off"))
+        *on = false;
+    else {
+        set_err(err, errlen, "%s: unknown value '%s' (expected auto or off)", what, s);
+        return -1;
+    }
+    return 0;
+}
+
 /* "off" (0) or a radius in XRD_SCREEN_CURVE_MIN..MAX into *curve. what names
  * the flag or key. Leaves *curve untouched on error. */
 static int parse_screen_curve(const char *what, const char *s, float *curve, char *err,
@@ -179,6 +193,7 @@ void xrd_config_defaults(xrd_config *c)
     c->screen_locked = false;
     c->screen_curve = 0.f;
     c->mipmap = true;
+    c->sbs_switch = true;
     copy_str(c->ffprobe, sizeof c->ffprobe, "ffprobe");
 }
 
@@ -295,6 +310,8 @@ static int ini_read(xrd_config *c, const char *path, bool *device_found, char *e
             }
         } else if (sec == SEC_GENERAL && !strcmp(key, "screen_curve")) {
             rc = parse_screen_curve("screen_curve", val, &c->screen_curve, msg, sizeof msg);
+        } else if (sec == SEC_GENERAL && !strcmp(key, "sbs_switch")) {
+            rc = parse_sbs_switch("sbs_switch", val, &c->sbs_switch, msg, sizeof msg);
         } else if (sec == SEC_GENERAL && !strcmp(key, "ffprobe")) {
             rc = set_string("ffprobe", c->ffprobe, sizeof c->ffprobe, val, msg, sizeof msg);
         } else {
@@ -325,7 +342,8 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
            OPT_MIPMAP_FORCE, OPT_MIPMAP_CHECK, OPT_DUMP,
            OPT_MPV_PROFILE, OPT_MPV_OPT, OPT_MPV_LOG, OPT_CONVERGENCE, OPT_FILTER,
            OPT_FBO_FORMAT, OPT_DITHER, OPT_NO_MEMORY, OPT_FORGET, OPT_RESUME, OPT_NO_RESUME,
-           OPT_PACKING, OPT_ZOOM_MODE, OPT_SCREEN, OPT_MIPMAP, OPT_DEBAND, OPT_SCREEN_CURVE };
+           OPT_PACKING, OPT_ZOOM_MODE, OPT_SCREEN, OPT_MIPMAP, OPT_DEBAND, OPT_SCREEN_CURVE,
+           OPT_SBS_SWITCH };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
         {"layout", required_argument, NULL, OPT_LAYOUT},
@@ -359,6 +377,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"screen", required_argument, NULL, OPT_SCREEN},
         {"mipmap", required_argument, NULL, OPT_MIPMAP},
         {"screen-curve", required_argument, NULL, OPT_SCREEN_CURVE},
+        {"sbs-switch", required_argument, NULL, OPT_SBS_SWITCH},
         {NULL, 0, NULL, 0},
     };
 
@@ -568,6 +587,9 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
             break;
         case OPT_SCREEN_CURVE:
             rc = parse_screen_curve("--screen-curve", optarg, &c->screen_curve, err, errlen);
+            break;
+        case OPT_SBS_SWITCH:
+            rc = parse_sbs_switch("--sbs-switch", optarg, &c->sbs_switch, err, errlen);
             break;
         case ':':
             set_err(err, errlen, "option '%s' requires an argument", argv[optind - 1]);
