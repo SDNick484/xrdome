@@ -29,6 +29,8 @@ typedef struct {
     char mpv_opts[16][256]; /* --mpv-opt KEY=VALUE, in order */
     int mpv_opt_count;
     char mpv_log[8];       /* --mpv-log LEVEL; default "warn"; "no" = none */
+    char mpv_scale[32];    /* --mpv-scale NAME, [general] mpv_scale: mpv's scaler for an
+                              enlarged flat picture; "" = off (default) */
     float convergence;     /* --convergence DEG, -5 .. 5, default 0 */
     xrd_filter filter;     /* --filter bilinear|bicubic, default bicubic */
     xrd_fbo_format fbo_format; /* --fbo-format rgb10|rgba8, default rgb10 */

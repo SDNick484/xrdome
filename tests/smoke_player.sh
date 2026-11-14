@@ -363,6 +363,11 @@ check "size change: trilinear draws at 1280x720 then 1920x1080, all checked" $?
 #   eyes    left viewport red and right blue, with no pixel of the other eye
 #   subs    PPM has subtitle pixels in the lower part of each eye that PPM2 lacks
 #   nosubs  PPM and PPM2 do not differ in the lower part of each eye
+#   same    PPM and PPM2 show the same picture: under 0.5% of pixels differ by
+#           more than 48 in a channel
+#   subsat  PPM PPM2 PPM3 PPM4: the subtitle pixels (PPM against PPM2) cover the
+#           same box in each eye as those of PPM3 against PPM4, within 2% of
+#           the eye's width and height
 check_flat() {
 python3 -I - "$@" <<'PY'
 import sys
@@ -436,6 +441,29 @@ elif mode == "eyes":
         expect(f"{name} viewport mostly its own colour", v, v > .5)
         v = frac(img, e, 0, 1, 0, 1, other)
         expect(f"{name} viewport has none of the other eye", v, v == 0)
+elif mode == "same":
+    other = load(sys.argv[3])
+    assert other[:2] == img[:2], "frame sizes differ"
+    n = sum(max(abs(a - b) for a, b in zip(pix(img, x, y), pix(other, x, y))) > 48
+            for y in range(h) for x in range(w))
+    v = n / (w * h)
+    expect("pixels that differ", v, v < .005)
+elif mode == "subsat":
+    a2, b1, b2 = load(sys.argv[3]), load(sys.argv[4]), load(sys.argv[5])
+    assert a2[:2] == img[:2] == b1[:2] == b2[:2], "frame sizes differ"
+    def box(p1, p2, e):
+        xs, ys = [], []
+        for y in range(h):
+            for x in range(e * ew, (e + 1) * ew):
+                if max(abs(a - b) for a, b in zip(pix(p1, x, y), pix(p2, x, y))) > 48:
+                    xs.append((x - e * ew) / ew)
+                    ys.append(y / h)
+        return (min(xs), max(xs), min(ys), max(ys)) if xs else None
+    for e, name in eyes:
+        ba, bb = box(img, a2, e), box(b1, b2, e)
+        good = ba is not None and bb is not None and max(abs(p - q) for p, q in zip(ba, bb)) < .02
+        print(f"  {'ok  ' if good else 'FAIL'} {name} subtitle box {ba} against {bb}")
+        ok &= good
 elif mode in ("subs", "nosubs"):
     other = load(sys.argv[3])
     assert other[:2] == img[:2], "frame sizes differ"
@@ -662,6 +690,78 @@ cat "$work/c4b.err"
 check "C4 --screen-curve 0.5 exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
 grep -qx 'xrdome: --screen-curve: 0.5 is out of range (off, or 1 to 10)' "$work/c4b.err"
 check "C4 --screen-curve 0.5 names the flag and the range" $?
+
+# ---- --mpv-scale: mpv enlarges flat pictures into a texture of the display's size (V1 to V7) ----
+# The window's eye is 640x360, so a 480x270 picture is enlarged: 4/3 at zoom 1.0, 2x at 1.5.
+# Software GL runs mpv in gpu-dumb-mode, which ignores the scaler's name and enlarges
+# bilinearly; these cases check the texture's size and what reaches the eyes.
+"$make_pattern" --kind flat2d 2 "$work/small.mp4" libx264 480x270 || { echo "FAIL: make small"; exit 1; }
+"$make_pattern" --kind flat-hsbs 2 "$work/small.HSBS.mp4" libx264 240x270 ||
+    { echo "FAIL: make small.HSBS"; exit 1; }
+
+# V1. zoom 1.5: the texture is the picture's size on the display, 960x540, and the eyes show
+# the same picture as without --mpv-scale.
+flat v1 --frames 30 --zoom 1.5 --mpv-scale spline36 --dump-frame "$work/v1.ppm" "$work/small.mp4"
+grep -qx 'video texture: rgb10_a2 960x540 dither=on mipmap=off mpv-scale=spline36' "$work/v1.err"
+check "V1 zoom 1.5: video texture 960x540 by mpv spline36" $?
+no_xrdome_lines "$work/v1.err"; check "V1 no xrdome lines" $?
+flat v1o --frames 30 --zoom 1.5 --dump-frame "$work/v1o.ppm" "$work/small.mp4"
+grep -qx 'video texture: rgb10_a2 480x270 dither=on mipmap=off' "$work/v1o.err"
+check "V1 without --mpv-scale: the coded 480x270 texture" $?
+check_flat same "$work/v1.ppm" "$work/v1o.ppm"; check "V1 same picture as without --mpv-scale" $?
+
+# V2. zoom 1.0, from the ini key: 640x360, and mpv fills it exactly (no letterbox).
+mkdir -p "$work/cfgv/xrdome"
+printf '[general]\nmpv_scale = spline36\n' >"$work/cfgv/xrdome/config.ini"
+had_cfg=${XDG_CONFIG_HOME+set} old_cfg=${XDG_CONFIG_HOME-}
+XDG_CONFIG_HOME="$work/cfgv"
+export XDG_CONFIG_HOME
+flat v2 --frames 30 --zoom 1.0 --dump-frame "$work/v2.ppm" "$work/small.mp4"
+if [ -n "$had_cfg" ]; then XDG_CONFIG_HOME=$old_cfg; else unset XDG_CONFIG_HOME; fi
+grep -qx 'video texture: rgb10_a2 640x360 dither=on mipmap=off mpv-scale=spline36' "$work/v2.err"
+check "V2 mpv_scale ini key, zoom 1.0: video texture 640x360" $?
+check_flat fill "$work/v2.ppm"; check "V2 zoom 1.0: border on the eye edges, no black inside" $?
+
+# V3. A shrunk picture keeps today's path: the coded texture with mipmaps, every
+# trilinear draw checked.
+flat v3 --frames 30 --zoom 0.5 --mpv-scale spline36 --dump-frame "$work/v3.ppm" "$work/flat2d.mp4"
+grep -qx 'video texture: rgb10_a2 1920x1080 dither=on mipmap=on mpv-scale=unused' "$work/v3.err"
+check "V3 zoom 0.5: coded texture with mipmaps, mpv-scale unused" $?
+grep -qx 'mipmap check: [1-9][0-9]* trilinear draws, texture 1920x1080' "$work/v3.err"
+check "V3 every trilinear draw found its chain" $?
+check_flat corners "$work/v3.ppm"; check "V3 zoom 0.5: corners black" $?
+
+# V4. Half SBS keeps its layout: two 640x360 eyes side by side, each viewport only its own.
+flat v4 --frames 30 --zoom 1.0 --mpv-scale spline36 --dump-frame "$work/v4.ppm" "$work/small.HSBS.mp4"
+grep -qx 'video texture: rgb10_a2 1280x360 dither=on mipmap=off mpv-scale=spline36' "$work/v4.err"
+check "V4 half SBS: video texture 1280x360 (two eyes side by side)" $?
+check_flat eyes "$work/v4.ppm"; check "V4 left viewport red, right blue" $?
+
+# V5. Subtitles in flat 2D are drawn at the texture's size, where F6 has them.
+cp "$work/small.mp4" "$work/vsub.mp4"
+cp "$work/sub.srt" "$work/vsub.srt"
+flat v5 --frames 30 --zoom 1.0 --mpv-scale spline36 --dump-frame "$work/v5.ppm" "$work/vsub.mp4"
+flat v5n --frames 30 --zoom 1.0 --mpv-scale spline36 --mpv-opt sub-visibility=no \
+     --dump-frame "$work/v5n.ppm" "$work/vsub.mp4"
+check_flat subs "$work/v5.ppm" "$work/v5n.ppm"; check "V5 subtitles shown with --mpv-scale" $?
+check_flat subsat "$work/v5.ppm" "$work/v5n.ppm" "$work/f6.ppm" "$work/f6n.ppm"
+check "V5 subtitles where F6 has them" $?
+
+# V6. A name mpv does not know: exit 1, with mpv's reason and xrdome's line naming it.
+xvfb "$xrdome" --no-memory --windowed --pose null --frames 5 --mpv-scale bogus-scaler \
+     "$work/small.mp4" >"$work/v6.err" 2>&1
+st=$?
+cat "$work/v6.err"
+check "V6 unknown scaler exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
+grep -q "^xrdome: --mpv-scale bogus-scaler: mpv rejects it as a scaler" "$work/v6.err"
+check "V6 xrdome names the scaler" $?
+grep -q "^mpv: \[[^]]*\] .*bogus-scaler" "$work/v6.err"; check "V6 mpv's own reason is shown" $?
+
+# V7. VR180 keeps the coded texture.
+flat v7 --frames 30 --mpv-scale spline36 --dump-frame "$work/v7.ppm" "$work/pattern.mp4"
+grep -qx 'video texture: rgb10_a2 4096x2048 dither=on mipmap=off mpv-scale=unused' "$work/v7.err"
+check "V7 VR180: coded texture, mpv-scale unused" $?
+check_frame "$work/v7.ppm"; check "V7 colours and orientation" $?
 
 # ---- per-file settings memory (M1 to M10) ----
 cp "$work/pattern.mp4" "$work/mem.mp4"

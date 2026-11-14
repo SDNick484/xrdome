@@ -26,6 +26,7 @@
 #include "track/tracker.h"
 #include "util/timing.h"
 #include "values.h"
+#include "video/mpv_scale.h"
 #include "video/player_mpv.h"
 
 #define MAX_OUTPUTS 16
@@ -104,6 +105,9 @@ typedef struct {
     xrd_view_geom geom;      /* of the last frame drawn */
     bool mip_want;           /* mipmaps requested from the player */
     bool trilinear;          /* the last draw sampled trilinearly */
+    int max_tex;             /* GL_MAX_TEXTURE_SIZE */
+    xrd_size_debounce scale_db; /* --mpv-scale: the texture size asked of the player */
+    const char *scale_why;   /* --mpv-scale: why mpv is not enlarging, NULL while it is */
     unsigned long frames;    /* video frames presented */
 } xrd_app;
 
@@ -150,9 +154,32 @@ static void apply_format(const xrd_app *a)
     xrd_player_set_aspect_warning(a->p, c->proj == XRD_PROJ_HEQUIRECT);
 }
 
+/* --mpv-scale: the texture size for this frame (0 x 0 = the coded size) and
+ * why mpv is not the one enlarging, or NULL when it is. mip_want: mipmaps
+ * are in use (the picture is shrunk, or --mipmap-force). */
+static const char *mpv_scale_target(const xrd_app *a, int vw, int vh, bool mip_want, int *w,
+                                    int *h)
+{
+    const xrd_controls *c = a->ctl;
+    *w = *h = 0;
+    if (c->proj != XRD_PROJ_FLAT)
+        return "VR180";
+    if (mip_want)
+        return a->cfg->mipmap_force ? "mipmaps forced" : "picture shrunk";
+    int fw, fh;
+    if (!xrd_mpv_scale_size(&a->geom, c->layout, vw, vh, a->out_eye_w, a->out_eye_h, a->max_tex,
+                            &fw, &fh))
+        return "picture not enlarged";
+    *w = fw;
+    *h = fh;
+    return NULL;
+}
+
 /* View geometry for the current state and the eye size, and the mipmap
- * decision of spec 5.6: mipmaps while the picture is shrunk at the centre. */
-static void update_view(xrd_app *a, int out_w, int out_h)
+ * decision of spec 5.6: mipmaps while the picture is shrunk at the centre.
+ * With --mpv-scale, the size of the texture mpv renders into. Returns <0 when
+ * the player fails to resize (text via xrd_player_error). */
+static int update_view(xrd_app *a, int out_w, int out_h)
 {
     const xrd_controls *c = a->ctl;
     int vw = 0, vh = 0;
@@ -172,7 +199,30 @@ static void update_view(xrd_app *a, int out_w, int out_h)
         xrd_player_set_mipmaps(a->p, want);
         a->mip_want = want;
     }
+    if (a->cfg->mpv_scale[0]) {
+        int tw, th;
+        const char *why = mpv_scale_target(a, vw, vh, want, &tw, &th);
+        if (xrd_size_debounce_step(&a->scale_db, tw, th, xrd_now_ns(), XRD_MPV_SCALE_SETTLE_NS) &&
+            xrd_player_set_texture_size(a->p, a->scale_db.w, a->scale_db.h) < 0)
+            return -1;
+        a->scale_why = a->scale_db.w > 0 ? NULL : why ? why : "settling";
+    }
     a->trilinear = want && xrd_player_mipmapped(a->p);
+    return 0;
+}
+
+/* The video texture: line, after the first frame and, with --mpv-scale, each
+ * time the texture's size changes. */
+static void print_texture(const xrd_app *a)
+{
+    int tw, th;
+    xrd_player_texture_size(a->p, &tw, &th);
+    fprintf(stderr, "video texture: %s %dx%d dither=%s mipmap=%s",
+            xrd_texture_bits_name(xrd_player_texture_bits(a->p)), tw, th,
+            a->cfg->dither ? "on" : "off", a->mip_want ? "on" : "off");
+    if (a->cfg->mpv_scale[0])
+        fprintf(stderr, " mpv-scale=%s", a->scale_db.w > 0 ? xrd_player_scale(a->p) : "unused");
+    fputc('\n', stderr);
 }
 
 /* The source words of the detect: line, or "key" for a value a key changed. */
@@ -282,8 +332,21 @@ static void print_info(xrd_app *a)
     fprintf(stderr, "info: filter: %s, mipmaps %s\n",
             a->trilinear ? "trilinear" : c->filter == XRD_FILTER_BICUBIC ? "bicubic" : "bilinear",
             a->mip_want ? "on" : "off");
+    int tw, th;
+    xrd_player_texture_size(a->p, &tw, &th);
+    if (!a->cfg->mpv_scale[0]) {
+        fprintf(stderr, "info: mpv scale: off\n");
+    } else {
+        const char *name = xrd_player_scale(a->p);
+        const char *dumb = xrd_player_dumb_mode(a->p) ? " (gpu-dumb-mode: mpv enlarges bilinearly)"
+                                                      : "";
+        if (a->scale_why)
+            fprintf(stderr, "info: mpv scale: %s, not in use (%s)\n", name, a->scale_why);
+        else
+            fprintf(stderr, "info: mpv scale: %s, %dx%d to %dx%d%s\n", name, vw, vh, tw, th, dumb);
+    }
     fprintf(stderr, "info: texture: %s %dx%d dither=%s\n",
-            xrd_texture_bits_name(xrd_player_texture_bits(a->p)), vw, vh,
+            xrd_texture_bits_name(xrd_player_texture_bits(a->p)), tw, th,
             a->cfg->dither ? "on" : "off");
     fprintf(stderr, "info: deband: %s\n", xrd_player_deband(a->p) ? "on" : "off");
     fprintf(stderr, "info: frames: %lu presented, %u missed vsyncs\n", a->frames,
@@ -749,7 +812,8 @@ int main(int argc, char **argv)
     xrd_player_options popt = {.profile = cfg.mpv_profile, .opts = mpv_opts,
                                .opt_count = n_opts, .log_level = cfg.mpv_log,
                                .fbo_format = cfg.fbo_format, .deband = cfg.deband,
-                               .resume_at = mem.resume ? mem.resume_at : 0.0};
+                               .resume_at = mem.resume ? mem.resume_at : 0.0,
+                               .scale = cfg.mpv_scale[0] ? cfg.mpv_scale : NULL};
     p = xrd_player_open_ex(cfg.file, gl_get_proc, wm.info.x11.display, &popt, err, sizeof err);
     if (!p) {
         fail("%s", err);
@@ -760,6 +824,7 @@ int main(int argc, char **argv)
     app.trk = trk;
     app.p = p;
     app.timing = timing;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &app.max_tex);
     apply_format(&app); /* before the first xrd_player_update */
     xrd_renderer_set_content_fov(r, ss.s.content_hfov, ss.s.content_vfov);
     xrd_renderer_set_dither(r, cfg.dither);
@@ -768,6 +833,7 @@ int main(int argc, char **argv)
     int mip_draws = 0;      /* --mipmap-check: draws that wanted trilinear sampling */
     char mip_sizes[256] = ""; /* --mipmap-check: texture sizes drawn trilinearly, in order */
     int mip_w = 0, mip_h = 0;
+    int shown_w = 0, shown_h = 0; /* texture size of the last video texture: line */
 
     const bool mouse_look = strcmp(pose->name, "null") == 0;
     bool size_dirty = true; /* recompute the per-eye aspect and tans on the next frame */
@@ -835,8 +901,11 @@ int main(int argc, char **argv)
                 out_h = 1;
             size_dirty = false;
         }
-        if (tex) /* geometry and the mipmap decision for this frame */
-            update_view(&app, out_w, out_h);
+        /* geometry, the mipmap decision and the texture size for this frame */
+        if (tex && update_view(&app, out_w, out_h) < 0) {
+            fail("%s", xrd_player_error(p));
+            goto out;
+        }
 
         if (tex && !hwdec_checked) {
             const char *hw = xrd_player_hwdec(p);
@@ -846,11 +915,8 @@ int main(int argc, char **argv)
             for (int i = 0; i < cfg.mpv_opt_count; i++)
                 fprintf(stderr, " %s", cfg.mpv_opts[i]);
             fputc('\n', stderr);
-            int vw, vh;
-            xrd_player_video_size(p, &vw, &vh);
-            fprintf(stderr, "video texture: %s %dx%d dither=%s mipmap=%s\n",
-                    xrd_texture_bits_name(xrd_player_texture_bits(p)), vw, vh,
-                    cfg.dither ? "on" : "off", app.mip_want ? "on" : "off");
+            print_texture(&app);
+            xrd_player_texture_size(p, &shown_w, &shown_h);
             if (strcmp(hw, "vaapi") != 0) {
                 snprintf(err, sizeof err, "hardware decoding is '%s', not vaapi",
                          hw[0] ? hw : "unknown");
@@ -859,6 +925,14 @@ int main(int argc, char **argv)
                     goto out;
                 }
                 fprintf(stderr, "xrdome: warning: %s; decoding in software\n", err);
+            }
+        } else if (tex && cfg.mpv_scale[0]) {
+            int tw, th;
+            xrd_player_texture_size(p, &tw, &th);
+            if (tw != shown_w || th != shown_h) {
+                print_texture(&app);
+                shown_w = tw;
+                shown_h = th;
             }
         }
 
@@ -892,7 +966,7 @@ int main(int argc, char **argv)
              * so this checks the player's decisions, not the fallback. */
             if (app.mip_want && cfg.mipmap_check) {
                 int vw, vh;
-                xrd_player_video_size(p, &vw, &vh);
+                xrd_player_texture_size(p, &vw, &vh);
                 if (!dp.trilinear) {
                     fprintf(stderr, "xrdome: --mipmap-check: trilinear draw %d samples a %dx%d "
                                     "texture whose mipmaps were not generated for its frame\n",

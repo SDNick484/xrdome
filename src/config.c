@@ -71,6 +71,22 @@ static int set_string(const char *what, char *dst, size_t dstlen, const char *sr
     return 0;
 }
 
+/* --mpv-scale and mpv_scale: off, or an mpv scaler name (mpv checks the name
+ * when it starts). */
+static int parse_mpv_scale(const char *what, const char *s, char *dst, size_t dstlen,
+                           char *err, size_t errlen)
+{
+    if (s[0] == '\0') {
+        set_err(err, errlen, "%s: empty value (expected off or an mpv scaler name)", what);
+        return -1;
+    }
+    if (!strcmp(s, "off")) {
+        dst[0] = '\0';
+        return 0;
+    }
+    return set_string(what, dst, dstlen, s, err, errlen);
+}
+
 static int parse_layout(const char *s, xrd_layout *out, char *err, size_t errlen)
 {
     if (!xrd_value_layout(s, out)) {
@@ -314,6 +330,9 @@ static int ini_read(xrd_config *c, const char *path, bool *device_found, char *e
             rc = parse_sbs_switch("sbs_switch", val, &c->sbs_switch, msg, sizeof msg);
         } else if (sec == SEC_GENERAL && !strcmp(key, "ffprobe")) {
             rc = set_string("ffprobe", c->ffprobe, sizeof c->ffprobe, val, msg, sizeof msg);
+        } else if (sec == SEC_GENERAL && !strcmp(key, "mpv_scale")) {
+            rc = parse_mpv_scale("mpv_scale", val, c->mpv_scale, sizeof c->mpv_scale, msg,
+                                 sizeof msg);
         } else {
             snprintf(msg, sizeof msg, "unknown key '%s'", key);
             rc = -1;
@@ -343,7 +362,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
            OPT_MPV_PROFILE, OPT_MPV_OPT, OPT_MPV_LOG, OPT_CONVERGENCE, OPT_FILTER,
            OPT_FBO_FORMAT, OPT_DITHER, OPT_NO_MEMORY, OPT_FORGET, OPT_RESUME, OPT_NO_RESUME,
            OPT_PACKING, OPT_ZOOM_MODE, OPT_SCREEN, OPT_MIPMAP, OPT_DEBAND, OPT_SCREEN_CURVE,
-           OPT_SBS_SWITCH };
+           OPT_SBS_SWITCH, OPT_MPV_SCALE };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
         {"layout", required_argument, NULL, OPT_LAYOUT},
@@ -363,6 +382,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"mpv-profile", required_argument, NULL, OPT_MPV_PROFILE},
         {"mpv-opt", required_argument, NULL, OPT_MPV_OPT},
         {"mpv-log", required_argument, NULL, OPT_MPV_LOG},
+        {"mpv-scale", required_argument, NULL, OPT_MPV_SCALE},
         {"convergence", required_argument, NULL, OPT_CONVERGENCE},
         {"filter", required_argument, NULL, OPT_FILTER},
         {"fbo-format", required_argument, NULL, OPT_FBO_FORMAT},
@@ -497,6 +517,10 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
                 rc = -1;
             } else
                 copy_str(c->mpv_log, sizeof c->mpv_log, optarg);
+            break;
+        case OPT_MPV_SCALE:
+            rc = parse_mpv_scale("--mpv-scale", optarg, c->mpv_scale, sizeof c->mpv_scale, err,
+                                 errlen);
             break;
         case OPT_CONVERGENCE:
             rc = parse_ranged("--convergence", optarg, -XRD_CONVERGENCE_MAX, XRD_CONVERGENCE_MAX,

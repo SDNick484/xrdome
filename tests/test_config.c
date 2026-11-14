@@ -595,6 +595,76 @@ static void flat_ini_bad_values_name_file_and_line(void **state)
     }
 }
 
+static void mpv_scale_flag(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    xrd_config c;
+    xrd_config_defaults(&c);
+    assert_string_equal(c.mpv_scale, ""); /* off by default */
+
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--mpv-scale", "spline36"), 0);
+    assert_string_equal(c.mpv_scale, "spline36");
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--mpv-scale", "ewa_lanczossharp"), 0);
+    assert_string_equal(c.mpv_scale, "ewa_lanczossharp");
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--mpv-scale", "off"), 0);
+    assert_string_equal(c.mpv_scale, "");
+
+    /* the last one wins, and off turns an earlier one off */
+    char *a[] = {"xrdome", "--mpv-scale", "spline36", "--mpv-scale", "off", "a.mp4", NULL};
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_parse_args(&c, 6, a, err, sizeof err), 0);
+    assert_string_equal(c.mpv_scale, "");
+
+    /* names are mpv's to check; xrdome only refuses empty and too long ones */
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--mpv-scale", ""), -1);
+    assert_non_null(strstr(err, "--mpv-scale"));
+    char long_name[64];
+    memset(long_name, 's', sizeof long_name - 1);
+    long_name[sizeof long_name - 1] = '\0';
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--mpv-scale", long_name), -1);
+    assert_non_null(strstr(err, "--mpv-scale"));
+    assert_string_equal(c.mpv_scale, "");
+}
+
+static void mpv_scale_ini_key_and_flag(void **state)
+{
+    (void)state;
+    char path[64], err[256] = "";
+    write_tmp(path, "[general]\nmpv_scale = ewa_lanczossharp\n");
+    char *argv[] = {"xrdome", "movie.mp4", NULL};
+    xrd_config c;
+    assert_int_equal(xrd_config_load(&c, path, 2, argv, err, sizeof err), 0);
+    assert_string_equal(c.mpv_scale, "ewa_lanczossharp");
+    /* the flag wins, off included */
+    char *off[] = {"xrdome", "--mpv-scale", "off", "movie.mp4", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 4, off, err, sizeof err), 0);
+    assert_string_equal(c.mpv_scale, "");
+    char *spl[] = {"xrdome", "--mpv-scale", "spline36", "movie.mp4", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 4, spl, err, sizeof err), 0);
+    assert_string_equal(c.mpv_scale, "spline36");
+    unlink(path);
+
+    write_tmp(path, "[general]\nmpv_scale = off\n");
+    assert_int_equal(xrd_config_load(&c, path, 2, argv, err, sizeof err), 0);
+    assert_string_equal(c.mpv_scale, "");
+    unlink(path);
+
+    /* an empty value is an error naming the file, line and key; so is the key
+     * in a device section */
+    const char *bad[] = {"[general]\nmpv_scale =\n", "[device.viture-pro]\nmpv_scale = spline36\n"};
+    for (int i = 0; i < 2; i++) {
+        char want[80];
+        write_tmp(path, bad[i]);
+        xrd_config_defaults(&c);
+        assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), -1);
+        snprintf(want, sizeof want, "%s:2:", path);
+        assert_non_null(strstr(err, want));
+        assert_non_null(strstr(err, "mpv_scale"));
+        unlink(path);
+    }
+}
+
 static void args_sync_after_swap_flag(void **state)
 {
     (void)state;
@@ -1414,6 +1484,8 @@ int main(void)
         cmocka_unit_test(flat_ini_keys),
         cmocka_unit_test(flat_zoom_default_survives_zoom_flag),
         cmocka_unit_test(flat_ini_bad_values_name_file_and_line),
+        cmocka_unit_test(mpv_scale_flag),
+        cmocka_unit_test(mpv_scale_ini_key_and_flag),
         cmocka_unit_test(ini_content_fov_is_not_a_key),
         cmocka_unit_test(load_unknown_device_names_it),
         cmocka_unit_test(load_ini_defined_device_ok),

@@ -16,6 +16,8 @@ struct xrd_player {
     char file[4096];
     GLuint fbo, tex;
     int w, h;          /* FBO size, 0 until mpv reports the video size */
+    int vw, vh;        /* coded size after rotation, 0 until mpv reports it */
+    int req_w, req_h;  /* xrd_player_set_texture_size; 0 x 0 = the coded size */
     xrd_fbo_format fbo_format; /* requested; becomes RGBA8 after a fallback */
     int fbo_internal;  /* GL internal format of tex, 0 before the FBO exists */
     int fbo_depth;     /* bits per channel of tex: 10 or 8, 0 before the FBO exists */
@@ -35,6 +37,7 @@ struct xrd_player {
     float hfov_deg, vfov_deg;
     char hwdec[64];
     double resume_at;  /* xrd_player_options.resume_at, cleared once checked */
+    char scale[64];
     char err[512];
 };
 
@@ -224,6 +227,17 @@ bool xrd_mpv_opt_split(const char *s, char *key, size_t keylen, char *val, size_
     return true;
 }
 
+/* True when one of opt's --mpv-opt pairs sets key. */
+static bool opts_have_key(const xrd_player_options *opt, const char *key)
+{
+    for (int i = 0; i < opt->opt_count; i++) {
+        char k[256], v[256];
+        if (xrd_mpv_opt_split(opt->opts[i], k, sizeof k, v, sizeof v) && !strcmp(k, key))
+            return true;
+    }
+    return false;
+}
+
 xrd_player *xrd_player_open(const char *file, xrd_gl_get_proc get_proc, void *x11_display,
                             char *err, size_t errlen)
 {
@@ -302,6 +316,11 @@ xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void 
         fprintf(stderr, "note: software GL (%s), using mpv gpu-dumb-mode\n", gl_renderer);
     }
 
+    /* --mpv-scale: the picture must fill a texture of the display's size,
+     * which need not have the frame's shape, rather than be letterboxed. */
+    if (opt && opt->scale && set_opt(p, "keepaspect", "no", err, errlen))
+        goto fail;
+
     /* User overrides last: they win over the profile and the options above. */
     for (int i = 0; opt && i < opt->opt_count; i++) {
         char key[256], val[256];
@@ -320,6 +339,20 @@ xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void 
     if (rc < 0) {
         set_err(err, errlen, "mpv_initialize: %s", mpv_error_string(rc));
         goto fail;
+    }
+
+    /* --mpv-scale: mpv's scaler for the enlarged texture. cscale is left
+     * alone: unset (mpv's default and the fast profile) it follows scale.
+     * Set after mpv_initialize because only then does mpv log why it rejects
+     * a name (as "mpv: [cplayer] ..."); an --mpv-opt scale=... wins, as
+     * --mpv-opt does over every option of xrdome's. */
+    if (opt && opt->scale && !opts_have_key(opt, "scale")) {
+        int src = mpv_set_property_string(p->mpv, "scale", opt->scale);
+        if (src < 0) {
+            set_err(err, errlen, "--mpv-scale %s: mpv rejects it as a scaler "
+                    "(mpv --scale=help lists them)", opt->scale);
+            goto fail;
+        }
     }
 
     /* What the user's options (or mpv's default) say about subtitles; xrdome
@@ -481,18 +514,18 @@ static GLenum attach_texture(xrd_player *p, int internal, int w, int h)
 /* Prints the aspect warning once, while it is on and the size is known. */
 static void check_aspect(xrd_player *p)
 {
-    if (!p->aspect_warning || p->warned_aspect || p->w <= 0 || p->h <= 0)
+    if (!p->aspect_warning || p->warned_aspect || p->vw <= 0 || p->vh <= 0)
         return;
-    if (xrd_video_aspect_matches(p->w, p->h, p->layout, p->hfov_deg, p->vfov_deg))
+    if (xrd_video_aspect_matches(p->vw, p->vh, p->layout, p->hfov_deg, p->vfov_deg))
         return;
     char text[512];
-    if (xrd_aspect_warning_text(text, sizeof text, p->w, p->h, p->layout, p->hfov_deg,
+    if (xrd_aspect_warning_text(text, sizeof text, p->vw, p->vh, p->layout, p->hfov_deg,
                                 p->vfov_deg) > 0)
         fprintf(stderr, "xrdome: warning: %s\n", text);
     p->warned_aspect = true;
 }
 
-/* (Re)creates the FBO for a w x h video. Returns <0 with p->err set. */
+/* (Re)creates the FBO at w x h. Returns <0 with p->err set. */
 static int ensure_fbo(xrd_player *p, int w, int h)
 {
     if (w == p->w && h == p->h && p->fbo)
@@ -524,7 +557,6 @@ static int ensure_fbo(xrd_player *p, int w, int h)
     p->fbo_depth = depth;
     p->w = w;
     p->h = h;
-    check_aspect(p);
     p->have_frame = false; /* new size: wait for a frame drawn at it */
     p->frame_serial++;     /* level 0 is new: no chain matches it */
     xrd_mip_on_resize(&p->mip);
@@ -575,10 +607,14 @@ static int handle_events(xrd_player *p)
             }
             int tw, th;
             xrd_video_texture_size((int)w, (int)h, (int)(rot % 360), &tw, &th);
-            if (ensure_fbo(p, tw, th) < 0) {
+            p->vw = tw;
+            p->vh = th;
+            /* A requested size stays: mpv scales the new size into it. */
+            if (ensure_fbo(p, p->req_w > 0 ? p->req_w : tw, p->req_w > 0 ? p->req_h : th) < 0) {
                 p->finished = true;
                 return -1;
             }
+            check_aspect(p);
             break;
         }
         case MPV_EVENT_FILE_LOADED: {
@@ -617,42 +653,65 @@ static int handle_events(xrd_player *p)
     }
 }
 
+/* Has mpv render into the FBO: the next frame if one is due, otherwise the
+ * current one again. Returns <0 with p->err set. */
+static int render_frame(xrd_player *p)
+{
+    mpv_opengl_fbo fbo = {.fbo = (int)p->fbo, .w = p->w, .h = p->h,
+                          .internal_format = p->fbo_internal};
+    int flip_y = 1; /* GL orientation: t = 1 is the image top */
+    int depth = p->fbo_depth; /* what mpv targets (and dithers to, if enabled) */
+    /* Do not wait for the frame's display time inside render: the loop
+     * is paced by the swap, and a wait here would sit between the pose
+     * sample and the swap. */
+    int block = 0;
+    mpv_render_param params[] = {
+        {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
+        {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
+        {MPV_RENDER_PARAM_DEPTH, &depth},
+        {MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &block},
+        {MPV_RENDER_PARAM_INVALID, NULL},
+    };
+    int rc = mpv_render_context_render(p->rctx, params);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0); /* mpv leaves its target bound */
+    if (rc < 0) {
+        set_err(p->err, sizeof p->err, "mpv render: %s", mpv_error_string(rc));
+        return -1;
+    }
+    p->have_frame = true;
+    p->frame_serial++;
+    /* Right after the frame: the eye pass never sees level 0 ahead of
+     * its chain. */
+    if (xrd_mip_on_frame(&p->mip))
+        generate_mipmaps(p);
+    return 0;
+}
+
 int xrd_player_update(xrd_player *p)
 {
     if (handle_events(p) < 0)
         return -1;
 
     uint64_t flags = mpv_render_context_update(p->rctx);
-    if ((flags & MPV_RENDER_UPDATE_FRAME) && p->fbo) {
-        mpv_opengl_fbo fbo = {.fbo = (int)p->fbo, .w = p->w, .h = p->h,
-                              .internal_format = p->fbo_internal};
-        int flip_y = 1; /* GL orientation: t = 1 is the image top */
-        int depth = p->fbo_depth; /* what mpv targets (and dithers to, if enabled) */
-        /* Do not wait for the frame's display time inside render: the loop
-         * is paced by the swap, and a wait here would sit between the pose
-         * sample and the swap. */
-        int block = 0;
-        mpv_render_param params[] = {
-            {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
-            {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
-            {MPV_RENDER_PARAM_DEPTH, &depth},
-            {MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &block},
-            {MPV_RENDER_PARAM_INVALID, NULL},
-        };
-        int rc = mpv_render_context_render(p->rctx, params);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0); /* mpv leaves its target bound */
-        if (rc < 0) {
-            set_err(p->err, sizeof p->err, "mpv render: %s", mpv_error_string(rc));
-            return -1;
-        }
-        p->have_frame = true;
-        p->frame_serial++;
-        /* Right after the frame: the eye pass never sees level 0 ahead of
-         * its chain. */
-        if (xrd_mip_on_frame(&p->mip))
-            generate_mipmaps(p);
-    }
+    if ((flags & MPV_RENDER_UPDATE_FRAME) && p->fbo)
+        return render_frame(p);
     return 0;
+}
+
+int xrd_player_set_texture_size(xrd_player *p, int w, int h)
+{
+    p->req_w = w > 0 && h > 0 ? w : 0;
+    p->req_h = w > 0 && h > 0 ? h : 0;
+    if (!p->fbo)
+        return 0; /* applied when mpv reports the video size */
+    int tw = p->req_w > 0 ? p->req_w : p->vw, th = p->req_w > 0 ? p->req_h : p->vh;
+    if (tw == p->w && th == p->h)
+        return 0;
+    bool had_frame = p->have_frame;
+    if (ensure_fbo(p, tw, th) < 0)
+        return -1;
+    /* Level 0 is undefined now: fill it before anyone samples it. */
+    return had_frame ? render_frame(p) : 0;
 }
 
 void xrd_player_report_swap(xrd_player *p)
@@ -690,6 +749,12 @@ int xrd_player_texture_bits(const xrd_player *p)
 
 void xrd_player_video_size(const xrd_player *p, int *w, int *h)
 {
+    *w = p->vw;
+    *h = p->vh;
+}
+
+void xrd_player_texture_size(const xrd_player *p, int *w, int *h)
+{
     *w = p->w;
     *h = p->h;
 }
@@ -714,6 +779,22 @@ const char *xrd_player_hwdec(xrd_player *p)
     snprintf(p->hwdec, sizeof p->hwdec, "%s", s ? s : "");
     mpv_free(s);
     return p->hwdec;
+}
+
+const char *xrd_player_scale(xrd_player *p)
+{
+    char *s = mpv_get_property_string(p->mpv, "scale");
+    snprintf(p->scale, sizeof p->scale, "%s", s ? s : "");
+    mpv_free(s);
+    return p->scale;
+}
+
+bool xrd_player_dumb_mode(xrd_player *p)
+{
+    char *s = mpv_get_property_string(p->mpv, "gpu-dumb-mode");
+    bool yes = s && !strcmp(s, "yes");
+    mpv_free(s);
+    return yes;
 }
 
 bool xrd_player_finished(const xrd_player *p)
