@@ -1,4 +1,6 @@
+#ifndef _GNU_SOURCE /* sdl2-compat's pkg-config cflags already define it */
 #define _GNU_SOURCE /* strtof */
+#endif
 
 #include "values.h"
 

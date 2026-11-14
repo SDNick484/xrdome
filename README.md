@@ -39,7 +39,11 @@ meson compile -C build
 meson test -C build
 ```
 
-CI builds with warnings as errors and runs the whole suite, including both Xvfb smoke tests, on Ubuntu 24.04 (mpv 0.37).
+CI builds with warnings as errors and runs the whole suite, including the three Xvfb smoke tests,
+twice: on Ubuntu 24.04 (mpv 0.37) and in an Arch Linux container (`archlinux:latest`: current gcc,
+mpv, SDL through `sdl2-compat`, and Mesa), and fails if a smoke test skips. Arch's `xvfb-run` sleeps 3 s
+at every start (Debian's and Gentoo's wait for Xvfb to be ready), so the `smoke` test takes about
+five minutes there; the Arch job gives the tests twice meson's time limit for that reason.
 
 Make a test pattern (left eye red grid, right eye blue grid, yellow marks at the top):
 
