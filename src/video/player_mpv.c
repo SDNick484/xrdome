@@ -18,6 +18,12 @@ struct xrd_player {
     int fbo_internal;  /* GL internal format of tex, 0 before the FBO exists */
     int fbo_depth;     /* bits per channel of tex: 10 or 8, 0 before the FBO exists */
     bool have_frame;   /* a frame has been rendered into the FBO */
+    xrd_mip_state mip; /* decides when levels 1..XRD_MIP_MAX_LEVEL are generated */
+    /* Ground truth for xrd_player_mipmapped, kept apart from mip so that
+     * --mipmap-check tests the decisions: the serial of what level 0 holds
+     * (a new one for every frame mpv renders and every reallocation) and of
+     * what the chain was generated from (0 = none). */
+    unsigned long frame_serial, mip_serial;
     bool finished;
     bool warned_aspect;
     xrd_layout layout; /* what the aspect warning expects; see xrd_player_set_content */
@@ -73,6 +79,38 @@ xrd_reconfig_step xrd_reconfig_step_for(bool have_size, int vo_configured)
     if (have_size)
         return XRD_RECONFIG_RESIZE;
     return vo_configured == 0 ? XRD_RECONFIG_WAIT : XRD_RECONFIG_FAIL;
+}
+
+void xrd_video_texture_size(int w, int h, int rotate, int *tw, int *th)
+{
+    bool quarter = ((rotate % 180) + 180) % 180 == 90;
+    *tw = quarter ? h : w;
+    *th = quarter ? w : h;
+}
+
+void xrd_mip_on_resize(xrd_mip_state *s)
+{
+    s->valid = false;
+}
+
+bool xrd_mip_on_frame(xrd_mip_state *s)
+{
+    s->valid = s->want;
+    return s->want;
+}
+
+bool xrd_mip_on_want(xrd_mip_state *s, bool want, bool have_frame)
+{
+    bool was = s->want;
+    s->want = want;
+    if (!want) {
+        s->valid = false;
+        return false;
+    }
+    if (was || !have_frame)
+        return false; /* already kept valid per frame, or nothing to generate from yet */
+    s->valid = true;
+    return true;
 }
 
 int xrd_fbo_format_gl(xrd_fbo_format f, int *depth)
@@ -206,6 +244,17 @@ xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void 
     if (set_opt(p, "vo", "libmpv", err, errlen) || set_opt(p, "hwdec", "vaapi", err, errlen) ||
         set_opt(p, "osd-level", "0", err, errlen))
         goto fail;
+    /* Square pixels: mpv ignores every aspect the file declares, so it draws
+     * the coded frame filling a texture of the coded size (spec 5.10).
+     * Without it a stereo-tagged Matroska file, whose display size describes
+     * one eye, is stretched (1920x1080 SBS to 1920x2160 on mpv 0.37). xrdome
+     * works out the picture's shape itself. Newer mpv spells this
+     * video-aspect-method=ignore and deprecates video-aspect-override=0
+     * (with a warning on every file); older mpv (0.37) rejects "ignore"
+     * and takes the override. Either way --mpv-opt can undo it. */
+    if (mpv_set_option_string(p->mpv, "video-aspect-method", "ignore") < 0 &&
+        set_opt(p, "video-aspect-override", "0", err, errlen))
+        goto fail;
 
     /* Mesa llvmpipe (software GL, used for the headless smoke test) renders
      * mpv's default multi-pass path as all black or with zeroed chroma in
@@ -300,10 +349,15 @@ static GLenum attach_texture(xrd_player *p, int internal, int w, int h)
     glTexImage2D(GL_TEXTURE_2D, 0, internal, w, h, 0, GL_RGBA,
                  internal == GL_RGB10_A2 ? GL_UNSIGNED_INT_2_10_10_10_REV : GL_UNSIGNED_BYTE,
                  NULL);
+    /* GL_LINEAR until a chain has been generated for this size: levels 1 and
+     * up still have the old size, so a mipmapped min filter would leave the
+     * texture incomplete (it samples as black). */
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, XRD_MIP_MAX_LEVEL);
     glBindTexture(GL_TEXTURE_2D, 0);
 
     glBindFramebuffer(GL_FRAMEBUFFER, p->fbo);
@@ -358,7 +412,20 @@ static int ensure_fbo(xrd_player *p, int w, int h)
     p->w = w;
     p->h = h;
     p->have_frame = false; /* new size: wait for a frame drawn at it */
+    p->frame_serial++;     /* level 0 is new: no chain matches it */
+    xrd_mip_on_resize(&p->mip);
     return 0;
+}
+
+/* Regenerates levels 1..XRD_MIP_MAX_LEVEL from level 0 and switches the
+ * texture to trilinear minification. */
+static void generate_mipmaps(xrd_player *p)
+{
+    glBindTexture(GL_TEXTURE_2D, p->tex);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    p->mip_serial = p->frame_serial;
 }
 
 static int handle_events(xrd_player *p)
@@ -369,10 +436,15 @@ static int handle_events(xrd_player *p)
         case MPV_EVENT_NONE:
             return 0;
         case MPV_EVENT_VIDEO_RECONFIG: {
-            int64_t w = 0, h = 0;
-            int rc = mpv_get_property(p->mpv, "dwidth", MPV_FORMAT_INT64, &w);
+            /* The frame as mpv outputs it, not dwidth/dheight (its display
+             * size, which follows the container's aspect). */
+            int64_t w = 0, h = 0, rot = 0;
+            int rc = mpv_get_property(p->mpv, "video-out-params/w", MPV_FORMAT_INT64, &w);
             if (rc >= 0)
-                rc = mpv_get_property(p->mpv, "dheight", MPV_FORMAT_INT64, &h);
+                rc = mpv_get_property(p->mpv, "video-out-params/h", MPV_FORMAT_INT64, &h);
+            if (rc >= 0 && mpv_get_property(p->mpv, "video-out-params/rotate", MPV_FORMAT_INT64,
+                                            &rot) < 0)
+                rot = 0;
             if (rc < 0) {
                 int configured = -1;
                 if (mpv_get_property(p->mpv, "vo-configured", MPV_FORMAT_FLAG, &configured) < 0)
@@ -384,7 +456,9 @@ static int handle_events(xrd_player *p)
                 p->finished = true;
                 return -1;
             }
-            if (ensure_fbo(p, (int)w, (int)h) < 0) {
+            int tw, th;
+            xrd_video_texture_size((int)w, (int)h, (int)(rot % 360), &tw, &th);
+            if (ensure_fbo(p, tw, th) < 0) {
                 p->finished = true;
                 return -1;
             }
@@ -454,6 +528,11 @@ int xrd_player_update(xrd_player *p)
             return -1;
         }
         p->have_frame = true;
+        p->frame_serial++;
+        /* Right after the frame: the eye pass never sees level 0 ahead of
+         * its chain. */
+        if (xrd_mip_on_frame(&p->mip))
+            generate_mipmaps(p);
     }
     return 0;
 }
@@ -461,6 +540,24 @@ int xrd_player_update(xrd_player *p)
 void xrd_player_report_swap(xrd_player *p)
 {
     mpv_render_context_report_swap(p->rctx);
+}
+
+void xrd_player_set_mipmaps(xrd_player *p, bool want)
+{
+    if (xrd_mip_on_want(&p->mip, want, p->have_frame))
+        generate_mipmaps(p);
+    else if (!want && p->tex) {
+        glBindTexture(GL_TEXTURE_2D, p->tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+}
+
+bool xrd_player_mipmapped(const xrd_player *p)
+{
+    /* A reallocation gives level 0 a new serial, so a chain of the old size
+     * never counts. */
+    return p->mip.want && p->have_frame && p->mip_serial == p->frame_serial;
 }
 
 unsigned xrd_player_texture(const xrd_player *p)

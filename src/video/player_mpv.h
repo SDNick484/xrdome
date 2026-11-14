@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 #include "render/projection.h"
+#include "render/renderer_gl.h" /* XRD_MIP_MAX_LEVEL */
 
 typedef struct xrd_player xrd_player;
 typedef void *(*xrd_gl_get_proc)(void *ctx, const char *name);
@@ -58,7 +59,20 @@ unsigned    xrd_player_texture(const xrd_player *p);     /* 0 until the first fr
 /* Bits per colour channel of the video texture actually allocated: 10 for
  * GL_RGB10_A2, 8 for GL_RGBA8 (also after a fallback), 0 before the FBO exists. */
 int         xrd_player_texture_bits(const xrd_player *p);
+/* The video texture's size: the coded frame size after the rotation mpv
+ * applies (xrd_video_texture_size), whatever display aspect the container
+ * declares; mpv's picture fills the texture exactly. 0 x 0 before the FBO exists. */
 void        xrd_player_video_size(const xrd_player *p, int *w, int *h);
+/* While want is true, the chain (levels 0..XRD_MIP_MAX_LEVEL) is regenerated
+ * right after each video frame mpv renders, and the texture's min filter is
+ * GL_LINEAR_MIPMAP_LINEAR. While false: GL_LINEAR and no generation. Turning
+ * it on while a frame is in the texture generates the chain at once, so a
+ * paused video can be sampled trilinearly. Default false. */
+void        xrd_player_set_mipmaps(xrd_player *p, bool want);
+/* True when the texture's chain matches its current level 0 (generated for the
+ * frame now in the texture, at the current size). Only then may the eye pass
+ * sample it with xrd_draw_params.trilinear. */
+bool        xrd_player_mipmapped(const xrd_player *p);
 const char *xrd_player_hwdec(xrd_player *p);             /* mpv "hwdec-current", "" if unknown */
 bool        xrd_player_finished(const xrd_player *p);    /* end of file or load failure */
 const char *xrd_player_error(const xrd_player *p);
@@ -102,5 +116,25 @@ bool xrd_video_is_sbs_2to1(int w, int h);
  * (end of file), and another follows once it is configured. */
 typedef enum { XRD_RECONFIG_RESIZE, XRD_RECONFIG_WAIT, XRD_RECONFIG_FAIL } xrd_reconfig_step;
 xrd_reconfig_step xrd_reconfig_step_for(bool have_size, int vo_configured);
+/* The video texture size for a w x h frame (mpv's video-out-params w and h)
+ * that mpv shows rotated clockwise by rotate degrees (video-out-params rotate):
+ * w x h, or h x w for a quarter or three-quarter turn (any multiple of 90,
+ * negative or above 360 included). */
+void xrd_video_texture_size(int w, int h, int rotate, int *tw, int *th);
+
+/* Whether the video texture's mipmap chain matches its level 0. The player
+ * drives it from three events and generates the chain whenever an event
+ * returns true; valid is then true until the next frame or resize. */
+typedef struct {
+    bool want;  /* mipmaps requested (xrd_player_set_mipmaps) */
+    bool valid; /* the chain was generated from the frame now in level 0 */
+} xrd_mip_state;
+/* Level 0 was reallocated (new video size): the chain no longer matches. */
+void xrd_mip_on_resize(xrd_mip_state *s);
+/* mpv rendered a new frame into level 0. True: generate the chain now. */
+bool xrd_mip_on_frame(xrd_mip_state *s);
+/* Mipmaps were requested or dropped; have_frame: level 0 holds a frame at the
+ * current size. True: generate the chain now (want turned on over a frame). */
+bool xrd_mip_on_want(xrd_mip_state *s, bool want, bool have_frame);
 
 #endif

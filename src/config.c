@@ -270,7 +270,8 @@ int xrd_config_load_ini(xrd_config *c, const char *path, char *err, size_t errle
 int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_t errlen)
 {
     enum { OPT_PROJ = 256, OPT_LAYOUT, OPT_POSE, OPT_OUTPUT, OPT_DEVICE, OPT_ZOOM,
-           OPT_CONTENT_FOV, OPT_HWDEC, OPT_WINDOWED, OPT_TIMING, OPT_SYNC, OPT_FRAMES, OPT_DUMP,
+           OPT_CONTENT_FOV, OPT_HWDEC, OPT_WINDOWED, OPT_TIMING, OPT_SYNC, OPT_FRAMES,
+           OPT_MIPMAP_FORCE, OPT_MIPMAP_CHECK, OPT_DUMP,
            OPT_MPV_PROFILE, OPT_MPV_OPT, OPT_MPV_LOG, OPT_CONVERGENCE, OPT_FILTER,
            OPT_FBO_FORMAT, OPT_DITHER, OPT_NO_MEMORY, OPT_FORGET,
            OPT_PACKING, OPT_ZOOM_MODE, OPT_SCREEN, OPT_MIPMAP };
@@ -287,6 +288,8 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"timing-log", required_argument, NULL, OPT_TIMING},
         {"sync-after-swap", no_argument, NULL, OPT_SYNC},
         {"frames", required_argument, NULL, OPT_FRAMES},
+        {"mipmap-force", no_argument, NULL, OPT_MIPMAP_FORCE},
+        {"mipmap-check", no_argument, NULL, OPT_MIPMAP_CHECK},
         {"dump-frame", required_argument, NULL, OPT_DUMP},
         {"mpv-profile", required_argument, NULL, OPT_MPV_PROFILE},
         {"mpv-opt", required_argument, NULL, OPT_MPV_OPT},
@@ -379,6 +382,12 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
                 c->frames = (int)v;
             break;
         }
+        case OPT_MIPMAP_FORCE:
+            c->mipmap_force = true;
+            break;
+        case OPT_MIPMAP_CHECK:
+            c->mipmap_check = true;
+            break;
         case OPT_DUMP:
             rc = set_string("--dump-frame", c->dump_frame, sizeof c->dump_frame, optarg, err, errlen);
             break;
