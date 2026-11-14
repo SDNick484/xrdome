@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <cmocka.h>
 
+#include "math/quat.h"
 #include "render/projection.h"
 
 #define TOL 1e-3
@@ -289,43 +290,426 @@ static void fov_180_axis_never_rejects(void **state)
     assert_float_equal(uv[1], 1.0f, 0.f);
 }
 
-static void check_eye(xrd_layout l, int eye, bool swap, float es, float eo)
+/* ---- eye sub-image transform, both axes ---- */
+
+static void check_eye(xrd_layout l, int eye, bool swap, float sx, float ox, float sy, float oy)
 {
-    float s = -1.f, o = -1.f;
-    xrd_eye_u_transform(l, eye, swap, &s, &o);
-    assert_float_equal(s, es, TOL);
-    assert_float_equal(o, eo, TOL);
+    float s[2] = {-1.f, -1.f}, o[2] = {-1.f, -1.f};
+    xrd_eye_uv_transform(l, eye, swap, s, o);
+    if (s[0] != sx || o[0] != ox || s[1] != sy || o[1] != oy)
+        fail_msg("layout %d eye %d swap %d: scale (%g, %g) offset (%g, %g), want (%g, %g) (%g, %g)",
+                 (int)l, eye, (int)swap, (double)s[0], (double)s[1], (double)o[0], (double)o[1],
+                 (double)sx, (double)sy, (double)ox, (double)oy);
 }
 
 static void eye_sbs_lr(void **state)
 {
     (void)state;
-    check_eye(XRD_LAYOUT_SBS_LR, 0, false, 0.5f, 0.0f);
-    check_eye(XRD_LAYOUT_SBS_LR, 1, false, 0.5f, 0.5f);
+    check_eye(XRD_LAYOUT_SBS_LR, 0, false, 0.5f, 0.0f, 1.0f, 0.0f);
+    check_eye(XRD_LAYOUT_SBS_LR, 1, false, 0.5f, 0.5f, 1.0f, 0.0f);
+    check_eye(XRD_LAYOUT_SBS_LR, 0, true, 0.5f, 0.5f, 1.0f, 0.0f);
+    check_eye(XRD_LAYOUT_SBS_LR, 1, true, 0.5f, 0.0f, 1.0f, 0.0f);
 }
 
 static void eye_sbs_rl(void **state)
 {
     (void)state;
-    check_eye(XRD_LAYOUT_SBS_RL, 0, false, 0.5f, 0.5f);
-    check_eye(XRD_LAYOUT_SBS_RL, 1, false, 0.5f, 0.0f);
-}
-
-static void eye_swap(void **state)
-{
-    (void)state;
-    check_eye(XRD_LAYOUT_SBS_LR, 0, true, 0.5f, 0.5f);
-    check_eye(XRD_LAYOUT_SBS_LR, 1, true, 0.5f, 0.0f);
-    check_eye(XRD_LAYOUT_SBS_RL, 0, true, 0.5f, 0.0f);
+    check_eye(XRD_LAYOUT_SBS_RL, 0, false, 0.5f, 0.5f, 1.0f, 0.0f);
+    check_eye(XRD_LAYOUT_SBS_RL, 1, false, 0.5f, 0.0f, 1.0f, 0.0f);
+    check_eye(XRD_LAYOUT_SBS_RL, 0, true, 0.5f, 0.0f, 1.0f, 0.0f);
+    check_eye(XRD_LAYOUT_SBS_RL, 1, true, 0.5f, 0.5f, 1.0f, 0.0f);
 }
 
 static void eye_mono(void **state)
 {
     (void)state;
     for (int eye = 0; eye < 2; eye++) {
-        check_eye(XRD_LAYOUT_MONO, eye, false, 1.0f, 0.0f);
-        check_eye(XRD_LAYOUT_MONO, eye, true, 1.0f, 0.0f);
+        check_eye(XRD_LAYOUT_MONO, eye, false, 1.0f, 0.0f, 1.0f, 0.0f);
+        check_eye(XRD_LAYOUT_MONO, eye, true, 1.0f, 0.0f, 1.0f, 0.0f);
     }
+}
+
+/* tb-lr: the left eye is the top half, and t = 1 is the image top. */
+static void eye_tb_lr(void **state)
+{
+    (void)state;
+    check_eye(XRD_LAYOUT_TB_LR, 0, false, 1.0f, 0.0f, 0.5f, 0.5f);
+    check_eye(XRD_LAYOUT_TB_LR, 1, false, 1.0f, 0.0f, 0.5f, 0.0f);
+    check_eye(XRD_LAYOUT_TB_LR, 0, true, 1.0f, 0.0f, 0.5f, 0.0f);
+    check_eye(XRD_LAYOUT_TB_LR, 1, true, 1.0f, 0.0f, 0.5f, 0.5f);
+}
+
+static void eye_tb_rl(void **state)
+{
+    (void)state;
+    check_eye(XRD_LAYOUT_TB_RL, 0, false, 1.0f, 0.0f, 0.5f, 0.0f);
+    check_eye(XRD_LAYOUT_TB_RL, 1, false, 1.0f, 0.0f, 0.5f, 0.5f);
+    check_eye(XRD_LAYOUT_TB_RL, 0, true, 1.0f, 0.0f, 0.5f, 0.5f);
+    check_eye(XRD_LAYOUT_TB_RL, 1, true, 1.0f, 0.0f, 0.5f, 0.0f);
+}
+
+static void layout_axis_predicates(void **state)
+{
+    (void)state;
+    assert_true(xrd_layout_is_sbs(XRD_LAYOUT_SBS_LR));
+    assert_true(xrd_layout_is_sbs(XRD_LAYOUT_SBS_RL));
+    assert_false(xrd_layout_is_sbs(XRD_LAYOUT_MONO));
+    assert_false(xrd_layout_is_sbs(XRD_LAYOUT_TB_LR));
+    assert_false(xrd_layout_is_sbs(XRD_LAYOUT_TB_RL));
+    assert_true(xrd_layout_is_tb(XRD_LAYOUT_TB_LR));
+    assert_true(xrd_layout_is_tb(XRD_LAYOUT_TB_RL));
+    assert_false(xrd_layout_is_tb(XRD_LAYOUT_MONO));
+    assert_false(xrd_layout_is_tb(XRD_LAYOUT_SBS_LR));
+    assert_false(xrd_layout_is_tb(XRD_LAYOUT_SBS_RL));
+}
+
+/* ---- packing and picture aspect (spec 5.3) ---- */
+
+static void packing_auto_rows(void **state)
+{
+    (void)state;
+    assert_int_equal(xrd_packing_resolve(XRD_LAYOUT_SBS_LR, XRD_PACKING_AUTO, 1920.0 / 1080.0),
+                     XRD_PACKING_HALF);
+    assert_int_equal(xrd_packing_resolve(XRD_LAYOUT_SBS_LR, XRD_PACKING_AUTO, 3840.0 / 1080.0),
+                     XRD_PACKING_FULL);
+    assert_int_equal(xrd_packing_resolve(XRD_LAYOUT_SBS_RL, XRD_PACKING_AUTO, 3840.0 / 1080.0),
+                     XRD_PACKING_FULL);
+    assert_int_equal(xrd_packing_resolve(XRD_LAYOUT_TB_LR, XRD_PACKING_AUTO, 1920.0 / 1080.0),
+                     XRD_PACKING_HALF);
+    assert_int_equal(xrd_packing_resolve(XRD_LAYOUT_TB_LR, XRD_PACKING_AUTO, 1920.0 / 2160.0),
+                     XRD_PACKING_FULL);
+    assert_int_equal(xrd_packing_resolve(XRD_LAYOUT_TB_RL, XRD_PACKING_AUTO, 1920.0 / 2160.0),
+                     XRD_PACKING_FULL);
+    /* the thresholds themselves: sbs full at F >= 3.0, tb full below 1.5 */
+    assert_int_equal(xrd_packing_resolve(XRD_LAYOUT_SBS_LR, XRD_PACKING_AUTO, 3.0),
+                     XRD_PACKING_FULL);
+    assert_int_equal(xrd_packing_resolve(XRD_LAYOUT_SBS_LR, XRD_PACKING_AUTO, 2.999),
+                     XRD_PACKING_HALF);
+    assert_int_equal(xrd_packing_resolve(XRD_LAYOUT_TB_LR, XRD_PACKING_AUTO, 1.5),
+                     XRD_PACKING_HALF);
+    assert_int_equal(xrd_packing_resolve(XRD_LAYOUT_TB_LR, XRD_PACKING_AUTO, 1.499),
+                     XRD_PACKING_FULL);
+}
+
+static void packing_explicit_and_mono(void **state)
+{
+    (void)state;
+    const xrd_layout stereo[] = {XRD_LAYOUT_SBS_LR, XRD_LAYOUT_SBS_RL, XRD_LAYOUT_TB_LR,
+                                 XRD_LAYOUT_TB_RL};
+    const double shapes[] = {16.0 / 9.0, 32.0 / 9.0, 8.0 / 9.0, 0.0, NAN};
+    for (size_t i = 0; i < 4; i++)
+        for (size_t f = 0; f < 5; f++) {
+            assert_int_equal(xrd_packing_resolve(stereo[i], XRD_PACKING_HALF, shapes[f]),
+                             XRD_PACKING_HALF);
+            assert_int_equal(xrd_packing_resolve(stereo[i], XRD_PACKING_FULL, shapes[f]),
+                             XRD_PACKING_FULL);
+        }
+    const xrd_packing all[] = {XRD_PACKING_AUTO, XRD_PACKING_HALF, XRD_PACKING_FULL};
+    for (size_t k = 0; k < 3; k++)
+        for (size_t f = 0; f < 5; f++)
+            assert_int_equal(xrd_packing_resolve(XRD_LAYOUT_MONO, all[k], shapes[f]),
+                             XRD_PACKING_FULL);
+}
+
+static void picture_aspect_table(void **state)
+{
+    (void)state;
+    const double f = 1920.0 / 1080.0;
+    /* mono: A = F (no half packing exists; it is ignored) */
+    assert_float_equal(xrd_picture_aspect(XRD_LAYOUT_MONO, XRD_PACKING_FULL, f), f, 1e-12);
+    assert_float_equal(xrd_picture_aspect(XRD_LAYOUT_MONO, XRD_PACKING_HALF, f), f, 1e-12);
+    /* sbs: full F / 2, half F */
+    assert_float_equal(xrd_picture_aspect(XRD_LAYOUT_SBS_LR, XRD_PACKING_FULL, 2 * f), f, 1e-12);
+    assert_float_equal(xrd_picture_aspect(XRD_LAYOUT_SBS_RL, XRD_PACKING_HALF, f), f, 1e-12);
+    /* tb: full 2 F, half F */
+    assert_float_equal(xrd_picture_aspect(XRD_LAYOUT_TB_LR, XRD_PACKING_FULL, f / 2), f, 1e-12);
+    assert_float_equal(xrd_picture_aspect(XRD_LAYOUT_TB_RL, XRD_PACKING_HALF, f), f, 1e-12);
+}
+
+/* Review Focus 3: no aspect is NaN, infinite or zero. */
+static void picture_aspect_junk_is_16_9(void **state)
+{
+    (void)state;
+    const double junk[] = {0.0, -1.0, NAN, INFINITY, -INFINITY};
+    const xrd_layout layouts[] = {XRD_LAYOUT_SBS_LR, XRD_LAYOUT_SBS_RL, XRD_LAYOUT_MONO,
+                                  XRD_LAYOUT_TB_LR, XRD_LAYOUT_TB_RL};
+    const xrd_packing packs[] = {XRD_PACKING_AUTO, XRD_PACKING_HALF, XRD_PACKING_FULL};
+    for (size_t j = 0; j < sizeof junk / sizeof junk[0]; j++)
+        for (size_t l = 0; l < 5; l++)
+            for (size_t k = 0; k < 3; k++)
+                assert_float_equal(xrd_picture_aspect(layouts[l], packs[k], junk[j]),
+                                   16.0 / 9.0, 1e-12);
+    /* finite F whose doubling overflows is junk too */
+    double a = xrd_picture_aspect(XRD_LAYOUT_TB_LR, XRD_PACKING_FULL, 1e308);
+    assert_true(isfinite(a) && a > 0.0);
+    /* a denormal F that halves to zero */
+    a = xrd_picture_aspect(XRD_LAYOUT_SBS_LR, XRD_PACKING_FULL, 4.9e-324);
+    assert_true(isfinite(a) && a > 0.0);
+}
+
+/* ---- view geometry (spec 5.1, 5.2); Viture Pro XR: 43 degrees, 16:9 eyes ---- */
+
+#define VIT_DIAG 43.f
+#define VIT_ASPECT (16.f / 9.f)
+#define RAD2DEG (180.0 / 3.14159265358979323846)
+
+static void zoom1_tans(float *th0, float *tv0)
+{
+    xrd_fov_tan_half(VIT_DIAG, VIT_ASPECT, 1.f, th0, tv0);
+}
+
+static void flat_screen_sizes(void **state)
+{
+    (void)state;
+    float th0, tv0;
+    zoom1_tans(&th0, &tv0);
+    xrd_view_geom g;
+    xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_SCREEN, VIT_DIAG, VIT_ASPECT, 1.5f, 16.0 / 9.0, &g);
+    assert_float_equal(2 * atan(g.half_w) * RAD2DEG, 54.5, 0.1);
+    assert_float_equal(2 * atan(g.half_h) * RAD2DEG, 32.4, 0.1);
+    assert_float_equal(g.tan_h, th0, 1e-6);
+    assert_float_equal(g.tan_v, tv0, 1e-6);
+    xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_SCREEN, VIT_DIAG, VIT_ASPECT, 2.0f, 16.0 / 9.0, &g);
+    assert_float_equal(2 * atan(g.half_w) * RAD2DEG, 69.0, 0.1);
+    assert_float_equal(2 * atan(g.half_h) * RAD2DEG, 42.3, 0.1);
+    assert_float_equal(g.tan_h, th0, 1e-6);
+}
+
+/* At S = 1 the picture is contained: a wide film touches the sides, a 4:3
+ * picture touches the top and bottom. */
+static void flat_contain_at_s1(void **state)
+{
+    (void)state;
+    float th0, tv0;
+    zoom1_tans(&th0, &tv0);
+    xrd_view_geom g;
+    xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_SCREEN, VIT_DIAG, VIT_ASPECT, 1.f, 2.39, &g);
+    assert_float_equal(g.half_w, th0, 1e-6);
+    assert_true(g.half_h < tv0);
+    assert_float_equal(g.half_w / g.half_h, 2.39, 1e-5);
+    xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_SCREEN, VIT_DIAG, VIT_ASPECT, 1.f, 4.0 / 3.0, &g);
+    assert_float_equal(g.half_h, tv0, 1e-6);
+    assert_true(g.half_w < th0);
+    assert_float_equal(g.half_w / g.half_h, 4.0 / 3.0, 1e-5);
+}
+
+static void flat_magnify(void **state)
+{
+    (void)state;
+    float th0, tv0;
+    zoom1_tans(&th0, &tv0);
+    xrd_view_geom m, s;
+    xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_MAGNIFY, VIT_DIAG, VIT_ASPECT, 1.5f, 16.0 / 9.0, &m);
+    assert_float_equal(m.half_w, th0, 1e-6); /* S = 1 */
+    assert_float_equal(m.tan_h, th0 / 1.5, 1e-6);
+    assert_float_equal(m.tan_v, tv0 / 1.5, 1e-6);
+    xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_SCREEN, VIT_DIAG, VIT_ASPECT, 1.5f, 16.0 / 9.0, &s);
+    /* the same picture straight ahead in both modes */
+    assert_float_equal(m.half_w / m.tan_h, s.half_w / s.tan_h, 1e-5);
+    assert_float_equal(m.half_h / m.tan_v, s.half_h / s.tan_v, 1e-5);
+}
+
+static void hequirect_geometry(void **state)
+{
+    (void)state;
+    const float zooms[] = {0.25f, 1.f, 1.5f, 4.f};
+    for (size_t i = 0; i < 4; i++)
+        for (int mode = 0; mode < 2; mode++) {
+            float th, tv;
+            xrd_fov_tan_half(VIT_DIAG, VIT_ASPECT, zooms[i], &th, &tv);
+            xrd_view_geom g;
+            xrd_view_geometry(XRD_PROJ_HEQUIRECT, (xrd_zoom_mode)mode, VIT_DIAG, VIT_ASPECT,
+                              zooms[i], 16.0 / 9.0, &g);
+            assert_true(g.tan_h == th);
+            assert_true(g.tan_v == tv);
+            assert_true(g.half_w == 0.f);
+            assert_true(g.half_h == 0.f);
+        }
+}
+
+/* Review Focus 3: junk aspect or zoom never gives NaN, infinity or zero. */
+static void geometry_junk_inputs_stay_finite(void **state)
+{
+    (void)state;
+    const double aspects[] = {0.0, -2.0, NAN, INFINITY};
+    const float zooms[] = {0.f, -1.f, NAN, INFINITY, 1.5f};
+    for (size_t a = 0; a < 4; a++)
+        for (size_t z = 0; z < 5; z++)
+            for (int mode = 0; mode < 2; mode++) {
+                xrd_view_geom g;
+                xrd_view_geometry(XRD_PROJ_FLAT, (xrd_zoom_mode)mode, VIT_DIAG, VIT_ASPECT,
+                                  zooms[z], aspects[a], &g);
+                assert_true(isfinite(g.tan_h) && g.tan_h > 0.f);
+                assert_true(isfinite(g.tan_v) && g.tan_v > 0.f);
+                assert_true(isfinite(g.half_w) && g.half_w > 0.f);
+                assert_true(isfinite(g.half_h) && g.half_h > 0.f);
+                assert_float_equal(g.half_w / g.half_h, 16.0 / 9.0, 1e-5);
+            }
+}
+
+/* ---- flat mapping ---- */
+
+static void flat_uv_centre_and_edges(void **state)
+{
+    (void)state;
+    const float hw = 0.515f, hh = 0.2897f;
+    float uv[2];
+    const float fwd[3] = {0.f, 0.f, -1.f};
+    assert_true(xrd_flat_dir_to_uv(fwd, hw, hh, uv));
+    assert_float_equal(uv[0], 0.5f, 1e-6);
+    assert_float_equal(uv[1], 0.5f, 1e-6);
+
+    const float right[3] = {hw, 0.f, -1.f};
+    assert_true(xrd_flat_dir_to_uv(right, hw, hh, uv));
+    assert_float_equal(uv[0], 1.0f, 1e-6);
+    assert_float_equal(uv[1], 0.5f, 1e-6);
+    const float left[3] = {-hw, 0.f, -1.f};
+    assert_true(xrd_flat_dir_to_uv(left, hw, hh, uv));
+    assert_float_equal(uv[0], 0.0f, 1e-6);
+    const float top[3] = {0.f, hh, -1.f};
+    assert_true(xrd_flat_dir_to_uv(top, hw, hh, uv));
+    assert_float_equal(uv[1], 1.0f, 1e-6);
+    const float bottom[3] = {0.f, -hh, -1.f};
+    assert_true(xrd_flat_dir_to_uv(bottom, hw, hh, uv));
+    assert_float_equal(uv[1], 0.0f, 1e-6);
+
+    const float past_right[3] = {1.001f * hw, 0.f, -1.f};
+    assert_false(xrd_flat_dir_to_uv(past_right, hw, hh, uv));
+    const float past_top[3] = {0.f, 1.001f * hh, -1.f};
+    assert_false(xrd_flat_dir_to_uv(past_top, hw, hh, uv));
+
+    /* not normalised: the same direction, longer */
+    const float far[3] = {0.5f * hw * 7.f, 0.f, -7.f};
+    assert_true(xrd_flat_dir_to_uv(far, hw, hh, uv));
+    assert_float_equal(uv[0], 0.75f, 1e-6);
+}
+
+static void flat_uv_behind_and_degenerate(void **state)
+{
+    (void)state;
+    float uv[2];
+    const float side[3] = {1.f, 0.f, 0.f};
+    assert_false(xrd_flat_dir_to_uv(side, 0.5f, 0.3f, uv));
+    const float side0[3] = {0.f, 0.f, 0.f};
+    assert_false(xrd_flat_dir_to_uv(side0, 0.5f, 0.3f, uv));
+    const float minus0[3] = {0.f, 0.f, -0.f};
+    assert_false(xrd_flat_dir_to_uv(minus0, 0.5f, 0.3f, uv));
+    const float behind[3] = {0.f, 0.f, 1.f};
+    assert_false(xrd_flat_dir_to_uv(behind, 0.5f, 0.3f, uv));
+    const float tiny_behind[3] = {0.f, 0.f, 1e-30f};
+    assert_false(xrd_flat_dir_to_uv(tiny_behind, 0.5f, 0.3f, uv));
+    const float nan3[3] = {NAN, 0.f, -1.f};
+    assert_false(xrd_flat_dir_to_uv(nan3, 0.5f, 0.3f, uv));
+    const float nanz[3] = {0.f, 0.f, NAN};
+    assert_false(xrd_flat_dir_to_uv(nanz, 0.5f, 0.3f, uv));
+    const float inf3[3] = {INFINITY, 0.f, -1.f};
+    assert_false(xrd_flat_dir_to_uv(inf3, 0.5f, 0.3f, uv));
+    /* grazing: almost parallel to the plane, far outside any screen */
+    const float graze[3] = {1.f, 0.f, -1e-30f};
+    assert_false(xrd_flat_dir_to_uv(graze, 0.5f, 0.3f, uv));
+    /* a junk screen is never hit */
+    const float fwd[3] = {0.f, 0.f, -1.f};
+    assert_false(xrd_flat_dir_to_uv(fwd, 0.f, 0.3f, uv));
+    assert_false(xrd_flat_dir_to_uv(fwd, 0.5f, NAN, uv));
+    assert_false(xrd_flat_dir_to_uv(fwd, INFINITY, 0.3f, uv));
+}
+
+/* The screen is flat: its top edge maps to v = 1 all along, whatever the head
+ * yaw. The rays are built in head space as the eye pass would (through a
+ * yawed head), then rotated to the world, as u_rot does. */
+static void flat_top_edge_does_not_bow(void **state)
+{
+    (void)state;
+    xrd_view_geom g;
+    xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_SCREEN, VIT_DIAG, VIT_ASPECT, 1.5f, 16.0 / 9.0, &g);
+    const double yaws[] = {0.0, 10.0, 25.0};
+    const float xs[] = {-0.9f, 0.f, 0.6f};
+    for (size_t y = 0; y < 3; y++) {
+        xrd_quat head = xrd_quat_from_ypr_deg(yaws[y], 0, 0);
+        for (size_t i = 0; i < 3; i++) {
+            const float world[3] = {xs[i] * g.half_w, g.half_h, -1.f};
+            float local[3], d[3], uv[2];
+            xrd_quat_rotate(xrd_quat_conj(head), world, local);
+            xrd_quat_rotate(head, local, d);
+            assert_true(xrd_flat_dir_to_uv(d, g.half_w, g.half_h, uv));
+            if (fabs(uv[1] - 1.0) > 1e-5)
+                fail_msg("yaw %.0f x %.2f: v = %.7f, want 1", yaws[y], (double)xs[i],
+                         (double)uv[1]);
+            assert_float_equal(uv[0], xs[i] * 0.5 + 0.5, 1e-5);
+        }
+    }
+}
+
+/* ---- minification ratio (spec 5.6) ---- */
+
+static void minify_flat_screen(void **state)
+{
+    (void)state;
+    xrd_view_geom g;
+    const struct { float zoom; int w, h; double want; } rows[] = {
+        {1.5f, 3840, 2160, 1.333}, {1.0f, 3840, 2160, 2.0}, {0.5f, 3840, 2160, 4.0},
+        {1.5f, 1920, 1080, 0.667},
+    };
+    for (size_t i = 0; i < sizeof rows / sizeof rows[0]; i++) {
+        xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_SCREEN, VIT_DIAG, VIT_ASPECT, rows[i].zoom,
+                          16.0 / 9.0, &g);
+        float r = xrd_minify_ratio(XRD_PROJ_FLAT, &g, rows[i].w, rows[i].h, 1920, 1080, 180.f,
+                                   180.f);
+        if (fabs(r - rows[i].want) > 0.01)
+            fail_msg("zoom %.2f %dx%d: ratio %.4f, want %.3f", (double)rows[i].zoom, rows[i].w,
+                     rows[i].h, (double)r, rows[i].want);
+    }
+    /* magnify agrees with screen at the centre */
+    xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_MAGNIFY, VIT_DIAG, VIT_ASPECT, 1.5f, 16.0 / 9.0, &g);
+    assert_float_equal(xrd_minify_ratio(XRD_PROJ_FLAT, &g, 3840, 2160, 1920, 1080, 180.f, 180.f),
+                       1.333, 0.01);
+}
+
+static void minify_flat_takes_larger_axis(void **state)
+{
+    (void)state;
+    xrd_view_geom g;
+    xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_SCREEN, VIT_DIAG, VIT_ASPECT, 1.0f, 16.0 / 9.0, &g);
+    /* a half-SBS eye squeezed to 1920 x 2160 of a 3840 x 2160 frame: shrunk
+     * 2x vertically, 1x horizontally */
+    assert_float_equal(xrd_minify_ratio(XRD_PROJ_FLAT, &g, 1920, 2160, 1920, 1080, 180.f, 180.f),
+                       2.0, 0.01);
+    assert_float_equal(xrd_minify_ratio(XRD_PROJ_FLAT, &g, 3840, 1080, 1920, 1080, 180.f, 180.f),
+                       2.0, 0.01);
+}
+
+static void minify_hequirect(void **state)
+{
+    (void)state;
+    xrd_view_geom g;
+    xrd_view_geometry(XRD_PROJ_HEQUIRECT, XRD_ZOOM_SCREEN, VIT_DIAG, VIT_ASPECT, 1.f, 16.0 / 9.0,
+                      &g);
+    float r = xrd_minify_ratio(XRD_PROJ_HEQUIRECT, &g, 2160, 2160, 1920, 1080, 180.f, 180.f);
+    assert_float_equal(r, 0.24, 0.01);
+    /* a narrower content FOV packs more pixels per degree */
+    float r90 = xrd_minify_ratio(XRD_PROJ_HEQUIRECT, &g, 2160, 2160, 1920, 1080, 90.f, 90.f);
+    assert_float_equal(r90, 2.0 * r, 1e-4);
+}
+
+static void minify_junk_is_zero(void **state)
+{
+    (void)state;
+    xrd_view_geom g;
+    xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_SCREEN, VIT_DIAG, VIT_ASPECT, 1.f, 16.0 / 9.0, &g);
+    assert_true(xrd_minify_ratio(XRD_PROJ_FLAT, &g, 0, 2160, 1920, 1080, 180.f, 180.f) == 0.f);
+    assert_true(xrd_minify_ratio(XRD_PROJ_FLAT, &g, 3840, 2160, 0, 1080, 180.f, 180.f) == 0.f);
+    assert_true(xrd_minify_ratio(XRD_PROJ_FLAT, &g, 3840, 2160, 1920, -1, 180.f, 180.f) == 0.f);
+    assert_true(xrd_minify_ratio(XRD_PROJ_FLAT, NULL, 3840, 2160, 1920, 1080, 180.f, 180.f) == 0.f);
+    xrd_view_geom bad = g;
+    bad.half_w = 0.f;
+    assert_true(xrd_minify_ratio(XRD_PROJ_FLAT, &bad, 3840, 2160, 1920, 1080, 180.f, 180.f) == 0.f);
+    bad = g;
+    bad.tan_v = NAN;
+    assert_true(xrd_minify_ratio(XRD_PROJ_FLAT, &bad, 3840, 2160, 1920, 1080, 180.f, 180.f) == 0.f);
+    xrd_view_geometry(XRD_PROJ_HEQUIRECT, XRD_ZOOM_SCREEN, VIT_DIAG, VIT_ASPECT, 1.f, 16.0 / 9.0,
+                      &g);
+    assert_true(xrd_minify_ratio(XRD_PROJ_HEQUIRECT, &g, 2160, 2160, 1920, 1080, 0.f, 180.f) == 0.f);
+    assert_true(xrd_minify_ratio(XRD_PROJ_HEQUIRECT, &g, 2160, 2160, 1920, 1080, 180.f, NAN) == 0.f);
 }
 
 int main(void)
@@ -355,8 +739,26 @@ int main(void)
         cmocka_unit_test(fov_180_axis_never_rejects),
         cmocka_unit_test(eye_sbs_lr),
         cmocka_unit_test(eye_sbs_rl),
-        cmocka_unit_test(eye_swap),
         cmocka_unit_test(eye_mono),
+        cmocka_unit_test(eye_tb_lr),
+        cmocka_unit_test(eye_tb_rl),
+        cmocka_unit_test(layout_axis_predicates),
+        cmocka_unit_test(packing_auto_rows),
+        cmocka_unit_test(packing_explicit_and_mono),
+        cmocka_unit_test(picture_aspect_table),
+        cmocka_unit_test(picture_aspect_junk_is_16_9),
+        cmocka_unit_test(flat_screen_sizes),
+        cmocka_unit_test(flat_contain_at_s1),
+        cmocka_unit_test(flat_magnify),
+        cmocka_unit_test(hequirect_geometry),
+        cmocka_unit_test(geometry_junk_inputs_stay_finite),
+        cmocka_unit_test(flat_uv_centre_and_edges),
+        cmocka_unit_test(flat_uv_behind_and_degenerate),
+        cmocka_unit_test(flat_top_edge_does_not_bow),
+        cmocka_unit_test(minify_flat_screen),
+        cmocka_unit_test(minify_flat_takes_larger_axis),
+        cmocka_unit_test(minify_hequirect),
+        cmocka_unit_test(minify_junk_is_zero),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

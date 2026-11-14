@@ -157,10 +157,10 @@ void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
 
     int half = out_w / 2;
     for (int eye = 0; eye < 2; eye++) {
-        float scale, offset;
-        xrd_eye_u_transform(layout, eye, swap_eyes, &scale, &offset);
-        glUniform1f(r->u_u_scale, scale);
-        glUniform1f(r->u_u_offset, offset);
+        float scale[2], offset[2];
+        xrd_eye_uv_transform(layout, eye, swap_eyes, scale, offset);
+        glUniform1f(r->u_u_scale, scale[0]);
+        glUniform1f(r->u_u_offset, offset[0]);
         /* Convergence, in head space after the view rotation: positive yaw
          * turns left, so the left viewport turns right by half (-c/2) and
          * the right viewport left (+c/2). */
