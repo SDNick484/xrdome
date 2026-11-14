@@ -83,6 +83,42 @@ static void aspect_rejects_bad_sizes(void **state)
     assert_false(xrd_video_aspect_matches(4096, 0, XRD_LAYOUT_MONO, 180.f, 180.f));
 }
 
+static void aspect_tb_compares_one_eye(void **state)
+{
+    (void)state;
+    /* top-bottom: each eye is the full width and half the height */
+    assert_true(xrd_video_aspect_matches(2048, 4096, XRD_LAYOUT_TB_LR, 180.f, 180.f));
+    assert_true(xrd_video_aspect_matches(2048, 4096, XRD_LAYOUT_TB_RL, 180.f, 180.f));
+    assert_false(xrd_video_aspect_matches(4096, 2048, XRD_LAYOUT_TB_LR, 180.f, 180.f));
+    assert_true(xrd_video_aspect_matches(1920, 2160, XRD_LAYOUT_TB_LR, 160.f, 90.f));
+}
+
+/* Spec 5.12, byte for byte with its example substituted. */
+static void aspect_warning_text(void **state)
+{
+    (void)state;
+    char buf[512];
+    int n = xrd_aspect_warning_text(buf, sizeof buf, 1920, 1080, XRD_LAYOUT_SBS_LR, 180.f, 180.f);
+    const char *want = "video is 1920x1080, which is not the aspect of a side-by-side VR video "
+                       "covering 180x180 degrees. If it is an ordinary flat video, press P or use "
+                       "--proj flat. If it is VR video covering less than 180 degrees, set "
+                       "--content-fov. Playing it as given.";
+    assert_string_equal(buf, want);
+    assert_int_equal(n, (int)strlen(want));
+
+    xrd_aspect_warning_text(buf, sizeof buf, 1920, 1080, XRD_LAYOUT_SBS_RL, 120.f, 90.f);
+    assert_non_null(strstr(buf, "a side-by-side VR video covering 120x90 degrees."));
+    xrd_aspect_warning_text(buf, sizeof buf, 1920, 1080, XRD_LAYOUT_MONO, 180.f, 180.f);
+    assert_non_null(strstr(buf, "a mono VR video covering 180x180 degrees."));
+    xrd_aspect_warning_text(buf, sizeof buf, 1920, 1080, XRD_LAYOUT_TB_LR, 180.f, 180.f);
+    assert_non_null(strstr(buf, "a top-bottom VR video covering"));
+    assert_null(strchr(buf, '\n'));
+
+    char small[16];
+    assert_int_equal(xrd_aspect_warning_text(small, sizeof small, 1920, 1080, XRD_LAYOUT_SBS_LR,
+                                             180.f, 180.f), -1);
+}
+
 static void sbs_2to1(void **state)
 {
     (void)state;
@@ -328,6 +364,8 @@ int main(void)
         cmocka_unit_test(aspect_tolerance_is_five_percent),
         cmocka_unit_test(aspect_mono_compares_whole_frame),
         cmocka_unit_test(aspect_rejects_bad_sizes),
+        cmocka_unit_test(aspect_tb_compares_one_eye),
+        cmocka_unit_test(aspect_warning_text),
         cmocka_unit_test(sbs_2to1),
         cmocka_unit_test(opt_split_basic),
         cmocka_unit_test(opt_split_rejects),
