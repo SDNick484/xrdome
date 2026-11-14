@@ -4,6 +4,8 @@
 #include <math.h>
 #include <stdbool.h>
 #include <cmocka.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "app/controls.h"
 #include "math/quat.h"
@@ -340,6 +342,45 @@ static void filter_toggles(void **state)
     assert_int_equal(c.filter, XRD_FILTER_BICUBIC);
 }
 
+/* The ? list has the README's Keys table's keys, in its order. */
+static void key_list_matches_readme(void **state)
+{
+    (void)state;
+    FILE *f = fopen(XRD_TESTS_DIR "/../README.md", "r");
+    assert_non_null(f);
+    char line[512];
+    bool in_section = false, in_table = false;
+    size_t n = 0;
+    while (fgets(line, sizeof line, f)) {
+        if (strncmp(line, "### ", 4) == 0) {
+            if (in_section)
+                break;
+            in_section = strcmp(line, "### Keys\n") == 0;
+            continue;
+        }
+        if (!in_section)
+            continue;
+        if (line[0] != '|') {
+            if (in_table)
+                break;
+            continue;
+        }
+        in_table = true;
+        if (strncmp(line, "| Key |", 7) == 0 || strncmp(line, "|---", 4) == 0)
+            continue;
+        const char *end = strstr(line + 2, " |");
+        assert_non_null(end);
+        size_t len = (size_t)(end - (line + 2));
+        assert_true(n < xrd_key_list_len);
+        assert_int_equal(strlen(xrd_key_list[n].key), len);
+        assert_memory_equal(xrd_key_list[n].key, line + 2, len);
+        n++;
+    }
+    fclose(f);
+    assert_true(in_table);
+    assert_int_equal(n, xrd_key_list_len);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -362,6 +403,7 @@ int main(void)
         cmocka_unit_test(recenter_zeroes_mouse_angles_only),
         cmocka_unit_test(init_display_defaults_and_values),
         cmocka_unit_test(filter_toggles),
+        cmocka_unit_test(key_list_matches_readme),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

@@ -173,3 +173,24 @@ xrd_quat xrd_controls_mouse_quat(const xrd_controls *c)
 {
     return xrd_quat_from_ypr_deg(c->mouse_yaw_deg, c->mouse_pitch_deg, 0.0);
 }
+
+const xrd_key_help xrd_key_list[] = {
+    {"Space", "pause / resume"},
+    {"Left / Right", "seek -10 s / +10 s"},
+    {"Up / Down", "seek +60 s / -60 s"},
+    {"R", "recenter, yaw only"},
+    {"Shift+R", "recenter, full"},
+    {"[ / ]", "zoom out / in"},
+    {"F", "bicubic / bilinear sampling"},
+    {"S", "swap eyes"},
+    {"M", "cycle layout (flat: 2D, half SBS, full SBS, half TB, full TB)"},
+    {"P", "projection: flat / VR180"},
+    {"Z", "zoom mode: screen / magnify (flat)"},
+    {"L", "screen: fixed / head-locked (flat)"},
+    {"B", "debanding on / off"},
+    {"C", "screen: flat / curved (flat, screen zoom mode)"},
+    {"?", "this list"},
+    {"I", "playback information"},
+    {"Q", "quit"},
+};
+const size_t xrd_key_list_len = sizeof xrd_key_list / sizeof xrd_key_list[0];
