@@ -182,8 +182,8 @@ Still unverified (spec section 11):
 - Recentering and head tilt (owner's report): the video plays at whatever angle the head had at
   start, and `R` centres it without correcting the tilt. This matches the code: the first pose
   becomes the full reference, and `R` is yaw only, so it keeps that reference's roll.
-  `Shift+R` (full recenter with the head level) should correct it; the owner did not report
-  trying it. A gravity-level start or a "level" key would need the driver's world frame
+  `Shift+R` (full recenter with the head level) corrects it: confirmed by the owner on
+  2026-11-14 ("works great"). A gravity-level start or a "level" key would need the driver's world frame
   calibrated (see README, Tracking notes).
 
 ## Open
@@ -192,11 +192,11 @@ Still unverified (spec section 11):
 - Untested: unplug behaviour during playback (a disconnect between runs happened on 2026-11-13,
   see Findings), automatic 8-bit FBO fallback.
 - Unanalysed: the remaining 0.6-1.3% late frames.
-- LICENSE not chosen. Depends on whether the installed mpv is a GPL build:
-  `grep -n -i gpl "$(equery which media-video/mpv)"`.
+- LICENSE not chosen. The owner's mpv is a GPLv2 build (owner, 2026-11-14), so xrdome, which
+  links libmpv, needs a GPLv2-compatible licence.
 - Per-file settings: the items listed as not covered above.
-- Recenter: confirm `Shift+R` levels a tilted picture; decide on a gravity-level start or a
-  "level" key.
+- Recenter: `Shift+R` levels a tilted picture (2026-11-14). A gravity-level start or a
+  "level" key is optional now.
 - `no pose data` after a glasses reconnect: once (2026-11-13) it was XRLinuxDriver crashing at
   connect, and restarting the driver restored it; the earlier case was not checked.
 - The player does not switch the glasses to side-by-side mode itself; after a reconnect the
