@@ -35,6 +35,8 @@ core_sources = files(
   'src/video/player_mpv.c',
   'src/app/controls.c',
   'src/store/filestate.c',
+  'src/detect/probe.c',
+  'src/detect/detect.c',
 )
 
 # Test names: each entry NAME builds tests/test_NAME.c into test_NAME.
@@ -52,6 +54,9 @@ test_names = [
   'controls',
   'filestate',
   'values',
+  'probe',
+  'detect',
+  'probe_run',
 ]
 
 inc = include_directories('src')
@@ -60,9 +65,16 @@ xrdcore = static_library('xrdcore', core_sources, shaders_gen,
   include_directories : inc,
   dependencies : [m_dep, threads_dep, epoxy_dep, sdl2_dep, mpv_dep])
 
+# Paths the probe tests read fixtures and the fake ffprobe from.
+fixture_args = [
+  '-DXRD_FIXTURE_DIR="' + (meson.current_source_dir() / 'tests/fixtures/ffprobe') + '"',
+  '-DXRD_TESTS_DIR="' + (meson.current_source_dir() / 'tests') + '"',
+]
+
 foreach t : test_names
   exe = executable('test_' + t, 'tests/test_' + t + '.c',
     include_directories : inc,
+    c_args : fixture_args,
     link_with : xrdcore,
     dependencies : [cmocka_dep, m_dep, threads_dep, epoxy_dep, egl_dep, sdl2_dep, mpv_dep])
   test(t, exe, env : ['LIBGL_ALWAYS_SOFTWARE=1', 'EGL_PLATFORM=surfaceless'])

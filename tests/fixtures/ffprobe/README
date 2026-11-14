@@ -1,0 +1,44 @@
+Captured `ffprobe -v error -show_streams FILE` output, one file per case, read by
+tests/test_probe.c and tests/test_probe_run.c. Nothing here runs ffprobe at test
+time, so the tests do not depend on the installed FFmpeg version.
+
+All files below were produced on 2026-11-13 with FFmpeg / ffprobe 9.0.2 on
+Gentoo (libx264, libsvtav1 4.1.0). The source clips are ffmpeg's lavfi testsrc,
+short (0.1 to 1 s). None of the original media is kept; only the text is.
+
+owner_vr180_mkv.txt   NOT the owner's capture (that text was not in the repo).
+owner_vr180_mp4.txt   Stand-ins with the same shape and codec as the owner's files:
+                      `ffmpeg -f lavfi -i testsrc=s=2880x1440:d=0.2 -c:v libsvtav1 o.mkv`
+                      (AV1 Matroska) and `... s=4320x2160:d=0.1 -c:v libx264 o.mp4`
+                      (H.264 MP4). No side data, as in the owner's files.
+sbs_mkv.txt           `ffmpeg -f lavfi -i testsrc=s=1920x1080:d=1 -c:v libx264
+tb_mkv.txt             -metadata:s:v stereo_mode=left_right|top_bottom|right_left OUT.mkv`
+sbs_inverted_mkv.txt  (left_right, top_bottom, right_left). ffprobe prints
+                      Stereo 3D "side by side" / "top and bottom", inverted=0 or 1.
+sbs_mp4.txt           sbs_mkv remuxed: `ffmpeg -i sbs.mkv -c copy -strict unofficial
+                      sbs.mp4`, then the `vexu` box renamed to `free` in the bytes.
+                      With the box left in place FFmpeg 9.0.2 prints Stereo 3D
+                      `type=unspecified` instead of `side by side` (see next file);
+                      with st3d alone it prints `side by side`, which is what
+                      FFmpeg 6.1 prints for the same remux.
+sbs_mp4_vexu.txt      The same remux, untouched: type=unspecified. Parsed as
+                      XRD_STEREO_OTHER (one note), which is what spec 5.8 says to do
+                      with any Stereo 3D type it does not know.
+spherical_mp4.txt     No tool in this environment writes Spherical Mapping (no
+spherical_mkv.txt     mkvpropedit, no spatial-media), so inject_sv3d.py (this
+spherical_cubemap_mp4.txt   directory) adds an sv3d box to the H.264 MP4 `plain.mp4`
+                      made with `ffmpeg -f lavfi -i testsrc=s=1920x1080:d=1 -c:v
+                      libx264`: `inject_sv3d.py plain.mp4 spherical.mp4` (equi) and
+                      `... cube.mp4 cbmp` (cubemap). spherical_mkv is
+                      `ffmpeg -i spherical.mp4 -c copy spherical.mkv`, which writes
+                      a Matroska Projection element. ffprobe 9.0.2 prints
+                      side_data_type=Spherical Mapping, projection=equirectangular
+                      (cubemap for the last one) for all three. The strings for
+                      older FFmpeg are not verified here.
+coverart_first.txt    `ffmpeg -i art.jpg -i video.mp4 -map 0 -map 1 -c:v:0 copy
+                      -disposition:v:0 attached_pic cover.mp4`. The MP4 muxer
+                      puts the picture last, so the two [STREAM] blocks were swapped
+                      by hand and renumbered (index=0 is the attached picture).
+audio_only.txt        `ffmpeg -f lavfi -i sine=d=0.5 -c:a aac audio.mkv`.
+empty.txt             Zero bytes.
+truncated.txt         The first 700 bytes of sbs_mkv.txt (cut inside the first block).
