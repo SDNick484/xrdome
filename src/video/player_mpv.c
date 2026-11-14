@@ -550,6 +550,12 @@ static int handle_events(xrd_player *p)
         case MPV_EVENT_NONE:
             return 0;
         case MPV_EVENT_VIDEO_RECONFIG: {
+            /* vo-configured is read before the size: mpv's VO thread can
+             * finish configuring between the two reads, and an output seen
+             * configured after a failed size read is not one that failed. */
+            int configured = -1;
+            if (mpv_get_property(p->mpv, "vo-configured", MPV_FORMAT_FLAG, &configured) < 0)
+                configured = -1;
             /* The frame as mpv outputs it, not dwidth/dheight (its display
              * size, which follows the container's aspect). */
             int64_t w = 0, h = 0, rot = 0;
@@ -560,9 +566,6 @@ static int handle_events(xrd_player *p)
                                             &rot) < 0)
                 rot = 0;
             if (rc < 0) {
-                int configured = -1;
-                if (mpv_get_property(p->mpv, "vo-configured", MPV_FORMAT_FLAG, &configured) < 0)
-                    configured = -1;
                 if (xrd_reconfig_step_for(false, configured) == XRD_RECONFIG_WAIT)
                     break;
                 set_err(p->err, sizeof p->err, "cannot read the video size of '%s': %s",
