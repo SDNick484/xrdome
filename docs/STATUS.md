@@ -1,4 +1,4 @@
-# xrdome status and handoff (2026-11-13)
+# xrdome status and handoff (2026-11-14)
 
 Linux player for VR180 (half-equirectangular) and ordinary flat video on XR glasses with head
 tracking. Repo: https://github.com/SDNick484/xrdome; work lands on `main` through pull requests.
@@ -39,16 +39,16 @@ Not covered by this run: saving layout, swap-eyes, content FOV or convergence on
 (only zoom was exercised); `--forget`; corrupt and newer records; the unwritable-state-directory
 warning; save on unplug; the flat-video warning; the XREAL Air 2 Pro.
 
-## Flat projection and format detection (PRs #11, #12, #13, #15 and the PR closing issue #8)
+## Flat projection and format detection (PRs #11, #12, #13, #15 and #16)
 
 Spec `docs/superpowers/specs/2026-11-13-flat-projection-design.md`, plan
-`docs/superpowers/plans/2026-11-13-flat-projection.md` (Tasks 1-9 done; the hardware run is
-next). An ordinary film opens as a flat screen fixed in the room at 1.5 times the display, a
+`docs/superpowers/plans/2026-11-13-flat-projection.md` (Tasks 1-9 done; hardware run done,
+below). An ordinary film opens as a flat screen fixed in the room at 1.5 times the display, a
 VR180 file opens as before, both without flags; flat 2D, half and full SBS and top-bottom; zoom
 modes, screen lock, mipmaps while shrinking, subtitles in flat 2D, keys `P` `Z` `L` `?` `I` and
 Up/Down, the new `M` cycles; projection, flat zoom, packing and zoom mode remembered per file.
 
-**Nothing of this feature has been run on the glasses.**
+**Run on the glasses on 2026-11-14 (spec 8.4, all eight steps); see the hardware run below.**
 
 Decisions (beyond the spec's own calls):
 - `ffprobe` runs once before the window opens; a failed probe and the fallback it causes are one
@@ -89,29 +89,60 @@ implementing session: Gentoo, libmpv 2.6.0 / mpv 0.42, FFmpeg 9.0.2, software GL
   the test suite): their output lines as in the README; `P` on a 2:1 file with no hint gave
   `layout: mono` and saved only `proj=flat`.
 
-Awaiting the hardware run (spec 8.4; Viture Pro XR, on AC power, glasses switched to SBS by
-hand):
-- VR180 regression: `test.mkv` and `test2.mp4` with no flags print `detect: proj=hequirect
-  (frame shape)` and look as before.
-- A flat 1080p film with no flags: opens flat at 1.5, edges straight, the screen stays put when
-  the head turns, `[` `]` resize, `Z`, `L`, `R`.
-- A 4K flat file: `--mipmap on` against `--mipmap off` at the same `--zoom`, 3600 frames each
-  (target 0 missed vsyncs, or `on` within 0.5 percentage points of `off`); shimmer at
-  `--zoom 0.5` with `off` and not with `on`.
-- A half-SBS 3D film: `M` to half SBS, depth correct, `S` inverts it.
-- Records: a flat film restores `proj=flat` and its zoom; an existing VR180 record still
-  restores.
-- `ffprobe -show_streams` on a stereo-tagged and a spherical-tagged file with FFmpeg 9.0.2,
-  against the fixtures.
-- `?` and `I` print; Up and Down skip a minute.
-- Not planned unless such files turn up: top-bottom, full SBS, the XREAL Air 2 Pro.
+Hardware run 2026-11-13 evening to 2026-11-14 (issue #9): Viture Pro XR in SBS, ThinkPad P14s
+Gen 6 AMD on AC power (governor `performance`), Gentoo, libmpv 2.6.0, FFmpeg 9.0.2, XRLinuxDriver
+over OpenTrack UDP. Mipmap cost was measured on `main` at `8c20f05` (PRs #14 and #15); the rest on
+`main` at `53ab2c1` (PR #16). The owner ran the commands and reported what was seen; `detect:` lines
+for `test.mkv` and `test2.mp4` with `--no-memory` were captured by the session on the same laptop.
+
+Seen to work (spec 8.4 step numbers):
+1. Build with 0 compiler warnings (owner). The `meson test` summary line was not reported.
+2. VR180 regression: `test.mkv` (AV1 2880x1440) and `test2.mp4` (H.264 4320x2160) with
+   `--no-memory` print `detect: proj=hequirect (frame shape) layout=sbs-lr (frame shape)`. On
+   `8c20f05` the owner saw an 8K VR180 file (AV1 7680x3840) look right: eyes, centre seam, depth
+   and head tracking ("looked pretty good"). The look of `test.mkv` and `test2.mp4` on `53ab2c1`
+   was not asked about.
+3. Flat films with no flags open flat at 1.5: a 1080p AV1 film printed `projection: flat (frame
+   shape)`, `layout: mono (frame shape)`, VA-API decode, 0 missed vsyncs in 10754 frames with keys
+   pressed; a 4K AV1 film printed `detect: proj=flat (frame shape) layout=mono (frame shape)` and
+   `zoom: 1.50 ... screen 54.5 x 32.3 degrees`. On the 4K film (owner): edges straight; the screen
+   stays put when the head turns; `[` `]` resize it; `L` locks it to the head and unlocks; `R`
+   recentres; `Z` switches mode, with a bigger difference when already zoomed in than zoomed out.
+   The owner found bicubic "does seem to help a bit" on the 1080p film.
+4. Mipmap cost, 4K AV1 film, `--no-memory --zoom 1.0 --frames 3600`, no keys: `--mipmap off` 8
+   missed vsyncs of 3600 (0.22%), `--mipmap on` 13 (0.36%): within 0.5 percentage points; the
+   0-missed target was met by neither. On `8c20f05` with the 8K VR180 file (`--zoom 0.5`,
+   `--mipmap-force` against none): 113 (3.1%, one `Audio device underrun detected`) against 85
+   (2.4%), so making the chain every frame costs nothing measurable at 7680x3840. Mipmaps came on
+   by themselves for the 4K film at its default zoom (`filter: trilinear, mipmaps on`) and stayed
+   off for the 1080p film at zoom 1.40.
+5. Half SBS: a synthetic clip (1920x1080, two 960-wide eyes, boxes labelled NEAR, SCREEN and FAR at
+   crossed, zero and uncrossed disparity, each half labelled with its eye). Its name,
+   `depth_test_3d.mp4`, matched the `3d` hint: `detect: proj=flat (frame shape) layout=sbs-lr (file
+   name "3d") packing=half (auto)`, so it opened in 3D without `M`. Owner: NEAR closest and FAR
+   furthest; each eye sees its own label; `S` inverts the depth; `M` switches layouts.
+6. Records: the 4K film reopened with `detect: proj=flat (record)` and its zoom restored;
+   `test.mkv`, whose record was written before PR #16, reopened with `detect: proj=hequirect
+   (record)` and its zoom restored (owner: `settings: restored` lines correct).
+7. `ffprobe -show_streams` with the laptop's FFmpeg 9.0.2 on files made again from the fixture
+   README's recipes (Matroska `stereo_mode=left_right`; MP4 with an injected `sv3d` box): byte for
+   byte the same as `sbs_mkv.txt` and `spherical_mp4.txt`. The owner's own VR180 files (`test.mkv`,
+   `test2.mp4` and four downloaded 8K files) carry no stereo or spherical side data, so no file from a
+   camera or a site was compared.
+8. `?` and `I` print their lines; Up and Down skip forward and back (owner).
+
+Not covered by this run: shimmer (step 4: at `--zoom 0.5` the owner saw no clear difference between
+`--mipmap off` and `on` on the 4K film, which may lack fine high-contrast detail; neither confirmed
+nor contradicted); a real half-SBS film (only the synthetic clip); `M` cycling into half SBS from
+mono (the clip opened in 3D by name); subtitles on the glasses; top-bottom and full SBS; rotated
+video; the XREAL Air 2 Pro.
 
 Still unverified (spec section 11):
-- What `ffprobe` prints for Spherical Mapping side data, on any version; MP4 stereo metadata on
-  FFmpeg 9.0.2.
+- What `ffprobe` prints for Spherical Mapping side data from a real camera or site file, and on
+  versions other than 9.0.2 (9.0.2 on a synthetic `sv3d` box matches the fixtures); MP4 stereo
+  metadata on FFmpeg 9.0.2 beyond the remux in the fixtures.
 - Subtitles drawn by mpv's normal render path on the Radeon (seen only with software GL and
   `gpu-dumb-mode`).
-- Mipmap generation cost on the Radeon.
 - That FFmpeg does not decode both eyes of MVC (not relied on; MVC is a non-goal).
 - Rotated video (phone footage with a rotation tag): expected to work through mpv, not tested.
 
@@ -141,6 +172,13 @@ Still unverified (spec section 11):
   every time (owner's report). With the glasses in 1080p the player presents 0 frames.
 - After that reconnect xrdome printed `no pose data` on every run. Seen, not explained: the
   driver was not restarted to test whether that brings the pose back.
+- 2026-11-13 evening, `no pose data` again: no `xrDriver` process was running, and its
+  `driver.log` ended at the glasses' connect with `[E][libglasses] m_StateCallback is not
+  initialized` and `Segmentation fault occurred`. The build from before the flat feature
+  (`505aa1f`) showed the same, so it is not xrdome. Restarting the driver brought the pose back.
+  Seen once; whether the earlier case was the same crash is not known.
+- 8K AV1 VR180 (7680x3840, VA-API) on AC misses 2 to 3% of vsyncs at `--zoom 0.5`, with or
+  without mipmaps (one pair each, 2026-11-13). 4K AV1 flat at `--zoom 1.0`: 0.2 to 0.4%.
 - Recentering and head tilt (owner's report): the video plays at whatever angle the head had at
   start, and `R` centres it without correcting the tilt. This matches the code: the first pose
   becomes the full reference, and `R` is yaw only, so it keeps that reference's roll.
@@ -159,9 +197,12 @@ Still unverified (spec section 11):
 - Per-file settings: the items listed as not covered above.
 - Recenter: confirm `Shift+R` levels a tilted picture; decide on a gravity-level start or a
   "level" key.
-- `no pose data` after a glasses reconnect: find out what restores it.
+- `no pose data` after a glasses reconnect: once (2026-11-13) it was XRLinuxDriver crashing at
+  connect, and restarting the driver restored it; the earlier case was not checked.
 - The player does not switch the glasses to side-by-side mode itself; after a reconnect the
   owner has to do it by hand.
-- Flat projection and format detection: the hardware run (see that section above).
+- Flat projection and format detection, after the hardware run: shimmer with and without
+  mipmaps on content with fine detail; a real half-SBS film, and `M` into half SBS from mono;
+  subtitles on the glasses; top-bottom and full SBS if such files turn up.
 - Candidate next features, in suggested order: per-eye HUD (takes over `?` and `I`, which print
   to the terminal for now), Viture SDK backend, GTK launcher, Gentoo overlay ebuild.
