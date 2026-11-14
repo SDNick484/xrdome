@@ -279,6 +279,58 @@ Not checked, and needs the glasses or the maintainer: which SDK device type the 
 (Gen1 is assumed from the market name); whether film and brightness commands work while the IMU
 streams; whether the glasses keep the levels across a reconnect.
 
+## Curved screen (issue #20)
+
+`--screen-curve off|R`, `[general] screen_curve` and the `C` key bend the flat screen into part
+of an upright cylinder, so the edges of a large screen are as far away as its centre (like
+XRLinuxDriver's `--curved-display`). Default `off`, which draws exactly the plane as before.
+
+Decisions:
+- R is the cylinder's radius in screen distances, 1 to 10. The cylinder touches the flat screen
+  along its centre column, so its axis is on the line through the eye and the screen's centre,
+  R - 1 behind the eye: R = 1 puts the axis through the eye and every column at the same
+  distance, and a larger R bends less, towards the plane. A radius rather than an arc angle
+  because the arc's angle then follows from the zoom (the arc keeps the flat width), and one
+  number keeps the same shape at every zoom; radii under 1 (the eye outside the cylinder) are
+  refused.
+- The arc is as long as the flat screen is wide, and the height is unchanged: the same picture
+  at the same zoom, with u along the arc and v by height. Columns stay straight; the top and
+  bottom edges bow outwards. Seen from the eye a curved screen is a little wider than the flat
+  one: at zoom 1 and R = 1 a 16:9 screen spans 39.3 degrees, not 37.9, so its sides sit just
+  outside the view (`I` prints the angle between the arc's ends).
+- Magnify mode draws the screen flat: there the screen stays at its zoom-1 size, which fits the
+  display, and zoom narrows the view, so there is no large screen to bend. With a curve on, `Z`
+  therefore also switches between curved and flat, and the two modes no longer show the same
+  picture away from the centre.
+- Head-locked screens curve the same way (the mapping is in head space when locked).
+- Nothing beside or behind the viewer is drawn, as for the plane: an arc reaching past 90 degrees
+  stops there (the widest, zoom 4 with R = 1, reaches 79 degrees).
+- `xrd_minify_ratio` is unchanged: the cylinder touches the plane at the centre, where u and v
+  change at the plane's rates (a unit test measures them on the curved mapping), and they only
+  fall away from the centre, so the centre stays the worst case for the mipmap decision.
+- The eye-edge and mipmap clamp margins act on uv after the mapping, so the curved mapping needs
+  none of its own; the seam and trilinear eye-separation render tests run again on a curved
+  screen and pass.
+- `C` is not remembered per file, like the screen lock: it depends on the viewer, not the film.
+  With `--screen-curve off`, `C` curves with R = 1.
+
+What the sandbox verified (unit tests and both Xvfb smoke tests, software GL, this worktree):
+- `xrd_flat_curve_dir_to_uv` (the C mirror): centre, the arc's ends, top and bottom, beside and
+  behind, junk input; `off` gives the plane's result bit for bit.
+- The shader against the C mirror on every pixel of both eyes, for radii 0, 1, 2.5 and 10 at two
+  zooms and four head poses (a texture that encodes its own uv).
+- A dumped flat2d frame at `--zoom 0.9 --screen-curve 1.0`: the side borders each in one column,
+  the top and bottom borders 6 rows nearer the frame's edge at the sides than at the centre;
+  `off` and magnify mode give straight borders and the frame of a run without the flag.
+
+Hardware check (not done; the owner, Viture Pro XR): play a flat film at zoom 1.5 and 2.5 and
+press `C` to compare curved and flat: whether the curved screen is more comfortable to look
+around, whether the bowed top and bottom edges look natural or distracting, whether R = 1 suits
+or a larger `--screen-curve` (say 2) is better, and that `C`, `Z` and `L` print and act as the
+README says. Unverified until then: everything about comfort; the look of a curved screen in 3D
+(half SBS); frame timing with the curve on (the shader adds a square root and an arctangent per
+pixel; not measured).
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship

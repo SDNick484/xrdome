@@ -101,20 +101,24 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 | Z | Zoom mode, flat only; prints `zoom mode: screen` or `zoom mode: magnify` |
 | L | Screen lock, flat only; prints `screen: head-locked` or `screen: fixed` |
 | B | Debanding on / off (mpv `deband`); prints `deband: on` or `deband: off`. Not remembered per file |
+| C | Curved screen on or off, flat only; prints `screen curve: 1.00` or `screen curve: off` |
 | ? | Print the key list to stderr (`keys:` lines) |
 | I | Print playback information to stderr (`info:` lines) |
 | Q | Quit |
 
 The `zoom:` and `filter:` lines are printed only when the value changes (not for
 a press at a limit). `P` also prints the other projection's zoom, since each projection keeps its
-own. In VR180, `Z` prints `zoom mode: magnify (VR180 has no screen mode)` and `L` prints
-`screen: fixed (VR180 cannot be head-locked)`, and neither changes anything. `?` is Shift+/ on a
+own. In VR180, `Z` prints `zoom mode: magnify (VR180 has no screen mode)`, `L` prints
+`screen: fixed (VR180 cannot be head-locked)` and `C` prints
+`screen curve: none (VR180 has no flat screen)`, and none of them changes anything. In magnify
+mode `C` still switches, and prints e.g. `screen curve: 1.00 (flat in magnify mode)`. `?` is Shift+/ on a
 US keyboard. Key repeat is ignored except for zoom and seek.
 
 `I` prints, one item per line: the file name; codec, coded frame size and frame rate; `hwdec`;
 projection, layout and (flat 3D) packing, each with where it came from (the sources of the
-`detect:` line, or `key`); zoom, and for flat video the zoom mode and the screen size in degrees;
-screen fixed or head-locked; the filter in use (`trilinear` while mipmaps are used) and whether
+`detect:` line, or `key`); zoom, and for flat video the zoom mode and the screen size in degrees
+(for a curved screen, the angle between its ends as seen from the eye); screen fixed or
+head-locked and the screen curve; the filter in use (`trilinear` while mipmaps are used) and whether
 mipmaps are on; the video texture; `deband` on or off; frames presented and missed vsyncs so far. For example:
 
 ```
@@ -122,6 +126,7 @@ info: projection: flat (frame shape)
 info: layout: mono (frame shape)
 info: zoom: 1.50, zoom mode screen, screen 54.5 x 32.3 degrees
 info: screen: fixed
+info: screen curve: off
 info: filter: trilinear, mipmaps on
 ```
 
@@ -136,7 +141,8 @@ start gives a tilted picture, and `R` does not correct that. Hold your head leve
 `--pose SPEC` (`null`, or `udp-opentrack` with `port`, `yaw`, `pitch`, `roll`), `--output NAME`,
 `--device viture-pro|xreal-air2pro`, `--zoom F`, `--proj auto|hequirect|flat`,
 `--layout auto|sbs-lr|sbs-rl|tb-lr|tb-rl|mono`, `--packing auto|half|full`,
-`--zoom-mode screen|magnify`, `--screen fixed|locked`, `--mipmap on|off`, `--windowed`,
+`--zoom-mode screen|magnify`, `--screen fixed|locked`, `--screen-curve off|R`, `--mipmap on|off`,
+`--windowed`,
 `--require-hwdec` (exit 1 unless mpv decodes with VA-API), `--timing-log PATH`,
 `--content-fov HxV`, `--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)),
 `--mpv-profile NAME`, `--mpv-opt KEY=VALUE` (repeatable, up to 16), `--mpv-log LEVEL`,
@@ -160,7 +166,9 @@ and bottom as full when it is narrower than 1.5:1, otherwise half (so 1920x1080 
 
 `--zoom-mode screen|magnify` (default `screen`, flat only) chooses what zoom does to a flat
 picture; see [Flat video](#flat-video). `--screen fixed|locked` (default `fixed`, flat only)
-keeps the screen fixed in the room or locks it to the head. `--mipmap on|off` (default `on`) uses
+keeps the screen fixed in the room or locks it to the head. `--screen-curve off|R` (default `off`,
+flat only; R from 1 to 10) bends the screen into part of a cylinder; see
+[Flat video](#flat-video). `--mipmap on|off` (default `on`) uses
 mipmaps while the picture is shrunk; see [Viewing comfort and sharpness](#viewing-comfort-and-sharpness).
 
 `--convergence DEG` (default 0, -5 to 5) turns each eye's view by half the angle in opposite
@@ -242,8 +250,9 @@ to highest: built-in defaults, built-in device values, the ini file, the command
 `[general]` keys: `pose` (same spec as `--pose`, default `udp-opentrack:port=4242`), `output`
 (same as `--output`, default `auto`), `screen` (`fixed` or `locked`, as `--screen`, default
 `fixed`), `resume` (`yes` or `no`, as `--resume`, default `no`; see
-[Resume](#resume-where-you-left-off)), `ffprobe` (the program run for format detection,
-default `ffprobe` looked up on `PATH`) and `deband` (`yes` or `no`, also `on` or `off`, as
+[Resume](#resume-where-you-left-off)), `screen_curve` (`off` or a radius from 1 to 10, as
+`--screen-curve`, default `off`), `ffprobe` (the program run for format detection, default
+`ffprobe` looked up on `PATH`) and `deband` (`yes` or `no`, also `on` or `off`, as
 `--deband`, default `no`).
 
 `[device.<name>]` keys, read for the device selected with `--device` (default `viture-pro`):
@@ -259,6 +268,7 @@ pose = udp-opentrack:port=4242,yaw=-1
 output = auto
 screen = fixed
 resume = no
+screen_curve = off
 ffprobe = /usr/bin/ffprobe
 deband = no
 
@@ -293,7 +303,8 @@ Two zoom modes (`Z`, or `--zoom-mode`, remembered per file):
 - `magnify`: the screen stays at the size of zoom 1 and zoom narrows the view instead, as zoom
   does for VR180. The picture moves zoom times faster than your head.
 
-At the same zoom both modes show the same picture straight ahead, so switching does not jump.
+At the same zoom both modes show the same flat picture straight ahead, so switching does not jump
+(a curved screen is flat in magnify mode; see below).
 
 Screen size of a 16:9 picture on the Viture Pro XR (display 37.9 x 21.9 degrees), in screen mode,
 as `I` prints it:
@@ -310,6 +321,25 @@ head like the glasses' own mode (head tracking and mouse look are ignored; conve
 applies). Turning the lock off recentres fully, so the screen reappears straight ahead; a tilted
 head at that moment gives a tilted screen, as with `Shift+R`. The lock is not saved per file,
 since it depends on where you sit, not on the film. It does nothing for VR180.
+
+Curved screen (`C`, `--screen-curve off|R`, `[general] screen_curve`, default `off`): the screen
+is bent into part of an upright cylinder, so the edges of a large screen are as far from you as
+its centre and face you instead of being seen at a slant. R is the cylinder's radius in screen
+distances, from 1 to 10. The screen's centre stays where the flat screen's is and the cylinder
+touches the flat screen there, so R = 1 puts the cylinder's axis through your head and every
+column of the screen at the same distance; a larger R bends it less and approaches the flat
+screen. The screen keeps its width measured along the curve, and its height, so a curved screen
+at a given zoom covers the same picture as a flat one but its ends come round towards you: at
+zoom 1 with R = 1, a 16:9 screen's left and right edges sit just outside the view (39.3 degrees
+apart instead of 37.9). Columns stay straight and upright; the top and bottom edges bow outwards
+towards the sides, as the top and bottom of a cinema's curved screen do from its centre. `C`
+switches between flat and curved; if `--screen-curve` was `off`, `C` curves with R = 1. Like the
+lock, the curve is not saved per file. It applies only in screen zoom mode: magnify keeps the
+zoom-1 screen, which fits the display, and narrows the view onto it, so there is no large screen
+to bend and the screen stays flat (with a curve on, `Z` therefore also switches between curved
+and flat). A head-locked screen curves the same way. Nothing beside or behind you is drawn, so an
+arc that would reach past 90 degrees to either side stops there (at zoom 4 with R = 1 a 16:9
+screen reaches 79 degrees).
 
 Subtitles: for flat 2D, mpv's own subtitle rendering is left on, so a subtitle track (or an
 `.srt` next to the file) appears on the screen, at the bottom of the picture. In 3D layouts and in
