@@ -1,5 +1,7 @@
 #include "video/player_mpv.h"
 
+#include "store/filestate.h"
+
 #include <epoxy/gl.h>
 #include <mpv/client.h>
 #include <mpv/render_gl.h>
@@ -32,12 +34,14 @@ struct xrd_player {
     xrd_layout layout; /* what the aspect warning expects; see xrd_player_set_content */
     float hfov_deg, vfov_deg;
     char hwdec[64];
+    double resume_at;  /* xrd_player_options.resume_at, cleared once checked */
     char err[512];
 };
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
 static void check_aspect(xrd_player *p);
+static void check_resume(xrd_player *p);
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...)
 {
@@ -241,6 +245,7 @@ xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void 
     p->fbo_format = opt ? opt->fbo_format : XRD_FBO_RGBA8;
     p->aspect_warning = true;
     p->sub_pref = true;
+    p->resume_at = opt ? opt->resume_at : 0.0;
 
     p->mpv = mpv_create();
     if (!p->mpv) {
@@ -378,6 +383,46 @@ const char *xrd_player_codec(xrd_player *p)
     snprintf(p->codec, sizeof p->codec, "%s", s ? s : "");
     mpv_free(s);
     return p->codec;
+}
+
+/* The file has loaded: a resume position that its duration rules out (the file
+ * was replaced by a shorter one) goes back to the start. */
+static void check_resume(xrd_player *p)
+{
+    double at = p->resume_at;
+    p->resume_at = 0.0;
+    if (!(at > 0.0))
+        return;
+    double dur = xrd_player_duration(p);
+    xrd_resume_verdict v = xrd_resume_check(at, dur);
+    if (v == XRD_RESUME_OK || v == XRD_RESUME_TOO_EARLY)
+        return;
+    if (v == XRD_RESUME_PAST_END) {
+        char a[32], b[32];
+        xrd_format_position(at, a, sizeof a);
+        xrd_format_position(dur, b, sizeof b);
+        fprintf(stderr,
+                "xrdome: note: saved position %s is past the end of this file (%s); "
+                "starting from the beginning\n", a, b);
+    }
+    const char *cmd[] = {"seek", "0", "absolute", NULL};
+    mpv_command(p->mpv, cmd);
+}
+
+double xrd_player_position(xrd_player *p)
+{
+    double v = 0.0;
+    if (mpv_get_property(p->mpv, "time-pos", MPV_FORMAT_DOUBLE, &v) < 0 || !(v >= 0.0))
+        return -1.0;
+    return v;
+}
+
+double xrd_player_duration(xrd_player *p)
+{
+    double v = 0.0;
+    if (mpv_get_property(p->mpv, "duration", MPV_FORMAT_DOUBLE, &v) < 0 || !(v > 0.0))
+        return -1.0;
+    return v;
 }
 
 double xrd_player_fps(xrd_player *p)
@@ -542,6 +587,7 @@ static int handle_events(xrd_player *p)
                 p->finished = true;
                 return -1;
             }
+            check_resume(p);
             break;
         }
         case MPV_EVENT_END_FILE: {

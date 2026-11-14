@@ -80,6 +80,8 @@ typedef struct {
     xrd_filestate loaded;
     xrd_file_settings start; /* the values playback starts with (xrd_session_start) */
     unsigned explicit_flags; /* xrd_session.explicit_flags */
+    bool resume;             /* open at resume_at (set by detect_and_start) */
+    double resume_at;        /* seconds */
 } xrd_memory;
 
 /* Everything the keys, the per-frame view and the I key read or change. */
@@ -476,13 +478,24 @@ static void memory_load(xrd_memory *m, const xrd_config *cfg)
  * was loaded. Every record states the projection in effect at quit (spec
  * 5.9), so proj is always set in what is written and in the saved line.
  * Failure only warns; the exit status is not touched. */
-static void memory_save(const xrd_memory *m, const char *file, const xrd_controls *ctl)
+static void memory_save(const xrd_memory *m, const xrd_config *cfg, const char *file,
+                        const xrd_controls *ctl, double position, double duration)
 {
     xrd_file_settings end;
     xrd_session_settings(ctl, m->start.content_hfov, m->start.content_vfov, &end);
     xrd_filestate out; /* distinct from m->loaded: collect clears it first */
     xrd_filestate_collect(m->have_loaded ? &m->loaded : NULL, m->explicit_flags, &m->start,
                           &end, &out);
+    /* The position (--resume) is not a view setting: collect leaves it out.
+     * Written only while resume is on and the position at quit is inside the
+     * resumable part of the file; a position outside it removes the old one.
+     * With resume off, a record's position is kept as it was. */
+    double pos = 0.0;
+    int rs = xrd_session_resume_save(cfg, position, duration, &pos);
+    if (rs > 0 || (rs < 0 && m->have_loaded && (m->loaded.set & XRD_SET_POSITION))) {
+        out.set |= XRD_SET_POSITION;
+        out.v.position = rs > 0 ? pos : m->loaded.v.position;
+    }
     if (out.set == 0 && !m->have_loaded)
         return;
     out.set |= XRD_SET_PROJ;
@@ -531,8 +544,16 @@ static void detect_and_start(xrd_app *a, const xrd_config *cfg, xrd_memory *mem,
         fprintf(stderr, "detect: %s\n", line);
 
     xrd_session_start(cfg, rec, &a->det, ss);
+    /* --resume: the record's position, handed to mpv as its start option (main). */
+    double rpos = 0.0;
+    unsigned shown = ss->applied;
+    if (xrd_session_resume_start(cfg, rec, &rpos)) {
+        mem->resume = true;
+        mem->resume_at = rpos;
+        shown |= XRD_SET_POSITION;
+    }
     char text[200];
-    if (rec && ss->applied && xrd_filestate_describe(rec, ss->applied, text, sizeof text) > 0)
+    if (rec && shown && xrd_filestate_describe(rec, shown, text, sizeof text) > 0)
         fprintf(stderr, "settings: restored %s\n", text);
     if (a->det.proj == XRD_PROJ_FLAT && (cfg->explicit_flags & XRD_SET_CONTENT_FOV))
         fprintf(stderr, "xrdome: note: --content-fov applies to VR180 only; "
@@ -671,12 +692,21 @@ int main(int argc, char **argv)
         fail("renderer: %s", err);
         goto out;
     }
-    const char *mpv_opts[sizeof cfg.mpv_opts / sizeof cfg.mpv_opts[0]];
+    /* One more than --mpv-opt allows: the resume position goes first, so any
+     * --mpv-opt (and an explicit start, which suppresses it) comes after. */
+    const char *mpv_opts[sizeof cfg.mpv_opts / sizeof cfg.mpv_opts[0] + 1];
+    int n_opts = 0;
+    char start_opt[64];
+    if (mem.resume) {
+        snprintf(start_opt, sizeof start_opt, "start=%.3f", mem.resume_at);
+        mpv_opts[n_opts++] = start_opt;
+    }
     for (int i = 0; i < cfg.mpv_opt_count; i++)
-        mpv_opts[i] = cfg.mpv_opts[i];
+        mpv_opts[n_opts++] = cfg.mpv_opts[i];
     xrd_player_options popt = {.profile = cfg.mpv_profile, .opts = mpv_opts,
-                               .opt_count = cfg.mpv_opt_count, .log_level = cfg.mpv_log,
-                               .fbo_format = cfg.fbo_format, .deband = cfg.deband};
+                               .opt_count = n_opts, .log_level = cfg.mpv_log,
+                               .fbo_format = cfg.fbo_format, .deband = cfg.deband,
+                               .resume_at = mem.resume ? mem.resume_at : 0.0};
     p = xrd_player_open_ex(cfg.file, gl_get_proc, wm.info.x11.display, &popt, err, sizeof err);
     if (!p) {
         fail("%s", err);
@@ -883,7 +913,8 @@ int main(int argc, char **argv)
 
 out:
     if (mem.on && !mem.block_save && rendered)
-        memory_save(&mem, cfg.file, &ctl);
+        memory_save(&mem, &cfg, cfg.file, &ctl, p ? xrd_player_position(p) : -1.0,
+                    p ? xrd_player_duration(p) : -1.0);
     if (pose && strcmp(pose->name, "udp-opentrack") == 0)
         fprintf(stderr, "pose: %u malformed UDP packets dropped\n",
                 (unsigned)xrd_pose_udp_dropped(pose));

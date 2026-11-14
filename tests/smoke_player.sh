@@ -778,4 +778,77 @@ st=$?
 check "B4 --deband maybe exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
 grep -q '^xrdome: .*--deband' "$work/b4.err"; check "B4 names --deband" $?
 
+# M13 to M19. Resume (--resume): a 100 s file, quit mid-file by starting at 40 s (--mpv-opt
+# start=40) and presenting a few frames. Own state directory.
+"$make_pattern" 100 "$work/long.mp4" libx264 512x256 || { echo "FAIL: make_pattern.sh (long)"; exit 1; }
+rstate="$work/state-resume"
+rrec() { ls "$rstate"/xrdome/files/*.ini 2>/dev/null; }
+rpos() { sed -n 's/^position = //p' "$(rrec)"; }
+# rrun NAME ARGS...: one run in the resume state directory; stderr in $work/NAME.err, status in $rst.
+rrun() {
+    _rn=$1; shift
+    ( XDG_STATE_HOME=$rstate; export XDG_STATE_HOME
+      xvfb "$xrdome" --windowed --pose null --frames 5 "$@" "$work/long.mp4" >"$work/$_rn.err" 2>&1 )
+    rst=$?
+    cat "$work/$_rn.err"
+}
+
+# M13. without --resume the record has no position.
+rrun m13 --zoom 1.0 --mpv-opt start=40
+check "M13 exits 0 (got $rst)" "$([ "$rst" -eq 0 ]; echo $?)"
+[ -n "$(rrec)" ] && ! grep -q '^position' "$(rrec)"; check "M13 record has no position" $?
+! grep -q 'position=' "$work/m13.err"; check "M13 no position in the settings lines" $?
+
+# M14. with --resume the position at quit is saved (3 decimals) and printed.
+rrun m14 --resume --mpv-opt start=40
+check "M14 exits 0 (got $rst)" "$([ "$rst" -eq 0 ]; echo $?)"
+grep -q '^settings: saved .*position=0:00:4[0-9]$' "$work/m14.err"; check "M14 saved line has position" $?
+grep -Eq '^position = 4[0-9]\.[0-9]{3}$' "$(rrec)"; check "M14 record has position = 4x.xxx" $?
+saved_pos=$(rpos)
+cp "$(rrec)" "$work/m14.rec"
+
+# M15. the next --resume run opens there: restored line, and its position at quit is still
+# past 40 s (a run that began at 0 would end under 30 s and drop the position).
+rrun m15 --resume
+check "M15 exits 0 (got $rst)" "$([ "$rst" -eq 0 ]; echo $?)"
+grep -q '^settings: restored .*position=0:00:40$' "$work/m15.err"; check "M15 restored line has position" $?
+! grep -q '^xrdome: note:' "$work/m15.err"; check "M15 no note" $?
+[ -n "$(rpos)" ] && awk -v p="$(rpos)" 'BEGIN { exit !(p >= saved) }' saved="$saved_pos"
+check "M15 playback began at the saved position (record position $(rpos), was $saved_pos)" $?
+
+# M16. --no-resume and --no-memory beat --resume; neither changes the record.
+cp "$(rrec)" "$work/m16.rec"
+rrun m16a --resume --no-resume
+check "M16 --resume --no-resume exits 0 (got $rst)" "$([ "$rst" -eq 0 ]; echo $?)"
+! grep -q 'position=' "$work/m16a.err"; check "M16 --no-resume: no position restored or saved" $?
+cmp -s "$work/m16.rec" "$(rrec)"; check "M16 --no-resume: record byte-identical (position kept)" $?
+rrun m16b --resume --no-memory
+check "M16 --resume --no-memory exits 0 (got $rst)" "$([ "$rst" -eq 0 ]; echo $?)"
+! grep -q '^settings:' "$work/m16b.err"; check "M16 --no-memory: no settings line" $?
+cmp -s "$work/m16.rec" "$(rrec)"; check "M16 --no-memory: record byte-identical" $?
+
+# M17. an explicit start (--mpv-opt start=70) wins over the record: nothing restored, and the
+# position it ends at is saved.
+rrun m17 --resume --mpv-opt start=70
+check "M17 exits 0 (got $rst)" "$([ "$rst" -eq 0 ]; echo $?)"
+! grep -q '^settings: restored .*position=' "$work/m17.err"; check "M17 position not restored" $?
+grep -q '^settings: saved .*position=0:01:1[0-9]$' "$work/m17.err"; check "M17 saved line has 1:1x" $?
+awk -v p="$(rpos)" 'BEGIN { exit !(p >= 70) }'; check "M17 record position is past 70 s" $?
+
+# M18. quitting in the first 30 s drops the position from the record.
+rrun m18 --resume --mpv-opt start=10
+check "M18 exits 0 (got $rst)" "$([ "$rst" -eq 0 ]; echo $?)"
+! grep -q '^position' "$(rrec)"; check "M18 record has no position" $?
+! grep -q 'saved .*position=' "$work/m18.err"; check "M18 saved line has no position" $?
+
+# M19. a position past the file's duration is ignored with one note, and the file starts at 0.
+rrun m19a --resume --mpv-opt start=40
+echo "position = 9999.000" >>"$(rrec)"
+rrun m19 --resume
+check "M19 exits 0 (got $rst)" "$([ "$rst" -eq 0 ]; echo $?)"
+[ "$(grep -c '^xrdome: note:' "$work/m19.err")" -eq 1 ] &&
+    grep -q '^xrdome: note: saved position 2:46:39 is past the end of this file (0:01:40); starting from the beginning$' "$work/m19.err"
+check "M19 one note about the position past the end" $?
+! grep -q '^position' "$(rrec)"; check "M19 record no longer has a position" $?
+
 exit $fail

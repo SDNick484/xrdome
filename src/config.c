@@ -263,6 +263,11 @@ static int ini_read(xrd_config *c, const char *path, bool *device_found, char *e
             rc = parse_screen("screen", val, &c->screen_locked, msg, sizeof msg);
         } else if (sec == SEC_GENERAL && !strcmp(key, "deband")) {
             rc = parse_onoff("deband", val, true, &c->deband, msg, sizeof msg);
+        } else if (sec == SEC_GENERAL && !strcmp(key, "resume")) {
+            if (!xrd_value_yesno(val, &c->resume)) {
+                snprintf(msg, sizeof msg, "resume: expected yes or no, got '%s'", val);
+                rc = -1;
+            }
         } else if (sec == SEC_GENERAL && !strcmp(key, "ffprobe")) {
             rc = set_string("ffprobe", c->ffprobe, sizeof c->ffprobe, val, msg, sizeof msg);
         } else {
@@ -292,7 +297,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
            OPT_CONTENT_FOV, OPT_HWDEC, OPT_WINDOWED, OPT_TIMING, OPT_SYNC, OPT_FRAMES,
            OPT_MIPMAP_FORCE, OPT_MIPMAP_CHECK, OPT_DUMP,
            OPT_MPV_PROFILE, OPT_MPV_OPT, OPT_MPV_LOG, OPT_CONVERGENCE, OPT_FILTER,
-           OPT_FBO_FORMAT, OPT_DITHER, OPT_NO_MEMORY, OPT_FORGET,
+           OPT_FBO_FORMAT, OPT_DITHER, OPT_NO_MEMORY, OPT_FORGET, OPT_RESUME, OPT_NO_RESUME,
            OPT_PACKING, OPT_ZOOM_MODE, OPT_SCREEN, OPT_MIPMAP, OPT_DEBAND };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
@@ -320,6 +325,8 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"deband", required_argument, NULL, OPT_DEBAND},
         {"no-memory", no_argument, NULL, OPT_NO_MEMORY},
         {"forget", no_argument, NULL, OPT_FORGET},
+        {"resume", no_argument, NULL, OPT_RESUME},
+        {"no-resume", no_argument, NULL, OPT_NO_RESUME},
         {"packing", required_argument, NULL, OPT_PACKING},
         {"zoom-mode", required_argument, NULL, OPT_ZOOM_MODE},
         {"screen", required_argument, NULL, OPT_SCREEN},
@@ -487,6 +494,12 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
             break;
         case OPT_FORGET:
             c->forget = true;
+            break;
+        case OPT_RESUME: /* the last of --resume and --no-resume wins */
+            c->resume = true;
+            break;
+        case OPT_NO_RESUME:
+            c->resume = false;
             break;
         case OPT_PACKING:
             if (!strcmp(optarg, "auto")) {

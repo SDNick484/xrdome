@@ -67,6 +67,7 @@ static void defaults_match_spec(void **state)
     assert_int_equal(c.explicit_flags, 0);
     assert_false(c.no_memory);
     assert_false(c.forget);
+    assert_false(c.resume);
 }
 
 static void ini_absent_is_ok(void **state)
@@ -1157,6 +1158,51 @@ static void ini_zoom_is_not_explicit(void **state)
     assert_int_equal(c.explicit_flags, 0);
 }
 
+static void resume_flags_and_ini(void **state)
+{
+    (void)state;
+    char err[256] = "", path[64];
+    xrd_config c;
+    /* off by default */
+    char *a0[] = {"xrdome", "a.mp4", NULL};
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_parse_args(&c, 2, a0, err, sizeof err), 0);
+    assert_false(c.resume);
+    char *a1[] = {"xrdome", "--resume", "a.mp4", NULL};
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_parse_args(&c, 3, a1, err, sizeof err), 0);
+    assert_true(c.resume);
+    /* the last of the two wins */
+    char *a2[] = {"xrdome", "--resume", "--no-resume", "a.mp4", NULL};
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_parse_args(&c, 4, a2, err, sizeof err), 0);
+    assert_false(c.resume);
+    char *a3[] = {"xrdome", "--no-resume", "--resume", "a.mp4", NULL};
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_parse_args(&c, 4, a3, err, sizeof err), 0);
+    assert_true(c.resume);
+
+    /* ini: resume = yes, and a flag beats it */
+    write_tmp(path, "[general]\nresume = yes\n");
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), 0);
+    assert_true(c.resume);
+    char *b1[] = {"xrdome", "--windowed", "a.mp4", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 3, b1, err, sizeof err), 0);
+    assert_true(c.resume);
+    char *b2[] = {"xrdome", "--no-resume", "a.mp4", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 3, b2, err, sizeof err), 0);
+    assert_false(c.resume);
+    write_tmp(path, "[general]\nresume = no\n");
+    char *b3[] = {"xrdome", "--resume", "a.mp4", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 3, b3, err, sizeof err), 0);
+    assert_true(c.resume);
+    write_tmp(path, "[general]\nresume = maybe\n");
+    assert_int_equal(xrd_config_load(&c, path, 3, b3, err, sizeof err), -1);
+    assert_non_null(strstr(err, "resume"));
+    unlink(path);
+}
+
 static void args_memory_flags(void **state)
 {
     (void)state;
@@ -1258,6 +1304,7 @@ int main(void)
         cmocka_unit_test(explicit_default_value_counts),
         cmocka_unit_test(ini_zoom_is_not_explicit),
         cmocka_unit_test(args_memory_flags),
+        cmocka_unit_test(resume_flags_and_ini),
         cmocka_unit_test(ini_rejects_new_keys),
     };
     save_env(NULL);

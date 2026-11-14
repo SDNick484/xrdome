@@ -35,6 +35,7 @@ typedef struct {
     unsigned explicit_flags; /* XRD_SET_ZOOM|LAYOUT|CONTENT_FOV|CONVERGENCE|PROJ|PACKING|ZOOM_MODE given on the command line */
     bool no_memory;        /* --no-memory */
     bool forget;           /* --forget */
+    bool resume;           /* --resume / --no-resume, [general] resume; default false */
     bool proj_auto;        /* --proj auto (default true) */
     xrd_proj proj;         /* valid when !proj_auto */
     bool layout_auto;      /* --layout auto (default true); layout valid when false */

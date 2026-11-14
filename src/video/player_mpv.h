@@ -38,6 +38,11 @@ typedef struct {
     const char *log_level;
     xrd_fbo_format fbo_format; /* video texture format; 0 = XRD_FBO_RGBA8 */
     bool deband;               /* mpv "deband" at open; --mpv-opt deband=... still wins */
+    /* > 0: opts carries "start=<resume_at>" for a resume. When the file has
+     * loaded and its duration says the position is no longer usable (past the
+     * end, or in the last part), the player seeks back to 0 and, for a
+     * position past the end, prints one "xrdome: note:" line. */
+    double resume_at;
 } xrd_player_options;
 
 /* As xrd_player_open; opt may be NULL (profile "fast", no extra options,
@@ -60,6 +65,9 @@ void        xrd_player_set_aspect_warning(xrd_player *p, bool on);
  * 2D) and mpv's own sub-visibility at open (default yes; --mpv-opt
  * sub-visibility=no) allows them. */
 void        xrd_player_set_sub_visible(xrd_player *p, bool on);
+/* mpv "time-pos" and "duration" in seconds; -1 when unknown. */
+double      xrd_player_position(xrd_player *p);
+double      xrd_player_duration(xrd_player *p);
 const char *xrd_player_codec(xrd_player *p);   /* mpv "video-codec", "" if unknown */
 double      xrd_player_fps(xrd_player *p);     /* mpv "container-fps", 0 if unknown */
 /* Call once per loop. Creates or resizes the FBO when video size is known, renders a new
