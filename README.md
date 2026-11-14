@@ -100,6 +100,7 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 | P | Switch projection, flat or VR180; prints `proj: flat` or `proj: hequirect` |
 | Z | Zoom mode, flat only; prints `zoom mode: screen` or `zoom mode: magnify` |
 | L | Screen lock, flat only; prints `screen: head-locked` or `screen: fixed` |
+| B | Debanding on / off (mpv `deband`); prints `deband: on` or `deband: off`. Not remembered per file |
 | ? | Print the key list to stderr (`keys:` lines) |
 | I | Print playback information to stderr (`info:` lines) |
 | Q | Quit |
@@ -114,7 +115,7 @@ US keyboard. Key repeat is ignored except for zoom and seek.
 projection, layout and (flat 3D) packing, each with where it came from (the sources of the
 `detect:` line, or `key`); zoom, and for flat video the zoom mode and the screen size in degrees;
 screen fixed or head-locked; the filter in use (`trilinear` while mipmaps are used) and whether
-mipmaps are on; the video texture; frames presented and missed vsyncs so far. For example:
+mipmaps are on; the video texture; `deband` on or off; frames presented and missed vsyncs so far. For example:
 
 ```
 info: projection: flat (frame shape)
@@ -139,7 +140,7 @@ start gives a tilted picture, and `R` does not correct that. Hold your head leve
 `--require-hwdec` (exit 1 unless mpv decodes with VA-API), `--timing-log PATH`,
 `--content-fov HxV`, `--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)),
 `--mpv-profile NAME`, `--mpv-opt KEY=VALUE` (repeatable, up to 16), `--mpv-log LEVEL`,
-`--convergence DEG`, `--filter bilinear|bicubic`, `--fbo-format rgb10|rgba8`, `--dither on|off`,
+`--convergence DEG`, `--filter bilinear|bicubic`, `--fbo-format rgb10|rgba8`, `--dither on|off`, `--deband on|off`,
 `--no-memory`, `--forget` (the last two are described under [Per-file settings](#per-file-settings)).
 
 `--proj auto|hequirect|flat` (default `auto`) chooses the projection: `hequirect` is VR180
@@ -240,7 +241,7 @@ to highest: built-in defaults, built-in device values, the ini file, the command
 `[general]` keys: `pose` (same spec as `--pose`, default `udp-opentrack:port=4242`), `output`
 (same as `--output`, default `auto`), `screen` (`fixed` or `locked`, as `--screen`, default
 `fixed`) and `ffprobe` (the program run for format detection, default `ffprobe` looked up on
-`PATH`).
+`PATH`) and `deband` (`yes` or `no`, also `on` or `off`, as `--deband`, default `no`).
 
 `[device.<name>]` keys, read for the device selected with `--device` (default `viture-pro`):
 `fov_diag` (diagonal FOV in degrees, 10 to 120), `zoom` (the VR180 zoom, 0.25 to 4, default 1)
@@ -255,6 +256,7 @@ pose = udp-opentrack:port=4242,yaw=-1
 output = auto
 screen = fixed
 ffprobe = /usr/bin/ffprobe
+deband = no
 
 [device.viture-pro]
 fov_diag = 43
@@ -559,6 +561,21 @@ no measurable difference (see "Performance notes"). To measure it yourself, make
 compare the logs; toggling `F` live mixes both filters in one log. `--mpv-log v` and
 `--mpv-log debug` are for diagnosis only: they print a lot and affect timing, so leave them off
 for measurements.
+
+**Banding: debanding.** Dark gradients and skies in a low-bitrate file (a 2.5 Mbit/s AV1 file
+looked far worse than 20 Mbit/s H.264) show visible steps that the 10-bit texture and dithering
+cannot remove, because the steps are in the decoded picture. mpv's `deband` filter smooths them
+inside its render pass, before xrdome's texture and dithering. It is off by default: `--deband on`
+(or `deband = yes` in `[general]`) turns it on at start, and `B` switches it during playback so
+you can compare on the glasses; the key prints `deband: on` or `deband: off` and `I` shows it.
+It is a viewing preference, not a property of the file, so it is not saved in the per-file record.
+It costs GPU time in mpv's render pass (not measured on the glasses yet; see `docs/STATUS.md`).
+The strength is left to mpv: `--mpv-opt deband-iterations=N` (mpv default 1),
+`--mpv-opt deband-threshold=N` (32), `--mpv-opt deband-range=N` (16) and
+`--mpv-opt deband-grain=N` (48), for example `--deband on --mpv-opt deband-iterations=2`.
+`--mpv-opt deband=yes` does the same as `--deband on`; an explicit `--mpv-opt deband=...` wins
+over `--deband`, and the key then toggles whatever mpv currently has. mpv's `gpu-dumb-mode`
+(which xrdome uses only on software GL) ignores it.
 
 **Shrinking: mipmaps.** Flat video often has more pixels than the area it is drawn into, and a
 picture drawn smaller than its source shimmers on fine detail and edges when the head moves.

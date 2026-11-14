@@ -164,6 +164,27 @@ Still unverified (spec section 11):
 - Not verified: an actual `emerge` build (needs root), `pkgcheck scan` (not installed). The owner
   runs the install commands from the README.
 
+## Debanding (`--deband`, `B`)
+- `--deband on|off` and `[general] deband = yes|no` (default off) set mpv's `deband` at open; `B`
+  toggles it through `mpv_set_property` and prints `deband: on|off`; `I` prints
+  `info: deband: on|off`, read back from mpv.
+- Decisions: not remembered per file (a viewing preference, like `F` and the sharpness choices,
+  not a property of the file); strength is left to `--mpv-opt deband-*`; `--mpv-opt deband=...`
+  is applied after `--deband` and wins; the key reads mpv's live value, so it follows it. The ini
+  also takes `on|off` and the flag only `on|off` (the issue writes `deband = yes`).
+- Verified in the sandbox: unit tests for flag, ini, precedence and errors; smoke B1 to B4 on
+  Mesa llvmpipe: a banded 8-bit gradient (32 bands, 4 levels apart) shows about 90 distinct
+  levels across a row with `--deband on` against 32 with `off` (mpv's deband adds its grain; the
+  smoothing of the steps is small at this size). llvmpipe only honours `deband` outside
+  `gpu-dumb-mode`, so B1 to B3 pass `--mpv-opt gpu-dumb-mode=no`; with xrdome's usual
+  `gpu-dumb-mode` on llvmpipe the frames with deband on and off are identical.
+- Not verified: the `B` key itself and the `I` line (the smoke test has no way to send keys); any
+  effect on the glasses; GPU cost.
+- Awaits the glasses: a timing pair, `--timing-log` each, `--deband off` against `on`, on the 4K
+  film and on the 8K VR180 file (missed vsyncs; the integrated GPU is the constraint, and
+  `fast` is the default profile for that reason); and the owner's judgement on a dark,
+  low-bitrate file, toggling `B` on a still frame.
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship
