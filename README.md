@@ -9,7 +9,8 @@ memory. On the Viture Pro XR, with the default mpv profile, bicubic sampling and
 texture, 0.6% of swap intervals were late (see [Performance notes](#performance-notes)). Per-file
 settings memory was run on the Viture Pro XR on 2026-11-13: saving a zoom change, restoring it,
 and keeping it across a rename were seen to work; the other remembered settings and `--forget`
-have only passed the unit and Xvfb smoke tests. The XREAL Air 2 Pro is untested. See `docs/STATUS.md`, `docs/superpowers/specs/2026-11-11-xrdome-design.md` and
+have only passed the unit and Xvfb smoke tests. On the XREAL Air 2 Pro (2026-11-14) VR180 and flat
+files played with head tracking much as on the Viture, with and without `--device xreal-air2pro`. See `docs/STATUS.md`, `docs/superpowers/specs/2026-11-11-xrdome-design.md` and
 `docs/superpowers/plans/2026-11-11-xrdome.md`.
 
 Flat video and format detection (an ordinary film opens as a flat screen fixed in the room, a
@@ -637,7 +638,7 @@ every layout, and does not change
 what the camera recorded. Positive values move everything in the scene further away, so your eyes
 must diverge more for distant content; negative values bring the scene nearer. On the Viture Pro
 XR (tested 2026-11-12), values up to 2 degrees made no significant difference, and 5 degrees put
-the scene out of focus until zoomed far out. It is untested on the XREAL Air 2 Pro. There are no
+the scene out of focus until zoomed far out. Convergence was not tried on the XREAL Air 2 Pro. There are no
 keys for it; it can be given on the command line and is remembered per file like the other
 settings.
 
