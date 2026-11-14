@@ -36,6 +36,7 @@ core_sources = files(
   'src/driver/xrdriver.c',
   'src/display/sbs.c',
   'src/video/player_mpv.c',
+  'src/video/mpv_scale.c',
   'src/app/controls.c',
   'src/store/filestate.c',
   'src/detect/probe.c',
@@ -64,6 +65,7 @@ test_names = [
   'session',
   'xrdriver',
   'sbs',
+  'mpv_scale',
 ]
 
 inc = include_directories('src')
