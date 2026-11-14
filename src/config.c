@@ -1,4 +1,6 @@
+#ifndef _GNU_SOURCE /* sdl2-compat's pkg-config cflags already define it */
 #define _GNU_SOURCE /* getopt_long, strtof */
+#endif
 
 #include "config.h"
 #include "values.h"
