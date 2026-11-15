@@ -202,6 +202,10 @@ static void settings_take_zooms_by_projection(void **state)
     cfg.screen_curve = 1.5f;
     xrd_session_controls(&ss, &cfg, &c);
     assert_float_equal(xrd_controls_screen_curve(&c), 1.5f, TOL);
+    assert_true(c.sharpen == 0.f); /* --sharpen off by default */
+    cfg.sharpen = 0.6f;
+    xrd_session_controls(&ss, &cfg, &c);
+    assert_float_equal(c.sharpen, 0.6f, TOL);
     xrd_file_settings s;
     xrd_session_settings(&c, 180.0f, 180.0f, &s);
     assert_float_equal(s.flat_zoom, 1.5f, TOL);

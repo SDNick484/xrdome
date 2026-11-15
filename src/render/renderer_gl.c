@@ -11,11 +11,20 @@ struct xrd_renderer {
     GLuint prog;
     GLuint vao;
     GLint u_video, u_rot, u_tan_half, u_proj, u_inv_fov, u_reject, u_flat_half, u_flat_curve,
-        u_eye_scale, u_eye_offset, u_filter, u_dither, u_trilinear, u_max_level;
+        u_eye_scale, u_eye_offset, u_filter, u_dither, u_mask, u_trilinear, u_max_level;
+    /* Sharpening (sharpen.frag): its program, and the intermediate the eye
+     * pass draws into while it is on, made on the first sharpened draw and
+     * remade when the output size changes. */
+    GLuint sharp_prog;
+    GLint s_src, s_lo, s_hi, s_peak, s_dither;
+    GLuint mid_fbo, mid_tex;
+    int mid_w, mid_h;
+    bool mid_failed; /* the intermediate could not be made: draw without sharpening */
     float hfov_deg, vfov_deg;
     float convergence_deg;
     xrd_filter filter;
     bool dither;
+    float sharpen;
 };
 
 static void set_err(char *err, size_t errlen, const char *what, const char *log)
@@ -42,18 +51,9 @@ static GLuint compile(GLenum type, const char *const *lines, int n, const char *
     return s;
 }
 
-xrd_renderer *xrd_renderer_new(char *err, size_t errlen)
+/* Links vs and fs into a program, deleting both shaders; 0 on failure. */
+static GLuint link_program(GLuint vs, GLuint fs, char *err, size_t errlen)
 {
-    GLuint vs = compile(GL_VERTEX_SHADER, XRD_SHADER_VR180_VERT,
-                        XRD_SHADER_LINES(XRD_SHADER_VR180_VERT), "vr180.vert", err, errlen);
-    if (!vs)
-        return NULL;
-    GLuint fs = compile(GL_FRAGMENT_SHADER, XRD_SHADER_VR180_FRAG,
-                        XRD_SHADER_LINES(XRD_SHADER_VR180_FRAG), "vr180.frag", err, errlen);
-    if (!fs) {
-        glDeleteShader(vs);
-        return NULL;
-    }
     GLuint prog = glCreateProgram();
     glAttachShader(prog, vs);
     glAttachShader(prog, fs);
@@ -67,12 +67,44 @@ xrd_renderer *xrd_renderer_new(char *err, size_t errlen)
         glGetProgramInfoLog(prog, (GLsizei)sizeof log, NULL, log);
         set_err(err, errlen, "link", log);
         glDeleteProgram(prog);
+        return 0;
+    }
+    return prog;
+}
+
+/* vr180.vert with fs_lines as the fragment shader. */
+static GLuint build(const char *const *fs_lines, int fs_n, const char *fs_what, char *err,
+                    size_t errlen)
+{
+    GLuint vs = compile(GL_VERTEX_SHADER, XRD_SHADER_VR180_VERT,
+                        XRD_SHADER_LINES(XRD_SHADER_VR180_VERT), "vr180.vert", err, errlen);
+    if (!vs)
+        return 0;
+    GLuint fs = compile(GL_FRAGMENT_SHADER, fs_lines, fs_n, fs_what, err, errlen);
+    if (!fs) {
+        glDeleteShader(vs);
+        return 0;
+    }
+    return link_program(vs, fs, err, errlen);
+}
+
+xrd_renderer *xrd_renderer_new(char *err, size_t errlen)
+{
+    GLuint prog = build(XRD_SHADER_VR180_FRAG, XRD_SHADER_LINES(XRD_SHADER_VR180_FRAG),
+                        "vr180.frag", err, errlen);
+    if (!prog)
+        return NULL;
+    GLuint sharp = build(XRD_SHADER_SHARPEN_FRAG, XRD_SHADER_LINES(XRD_SHADER_SHARPEN_FRAG),
+                         "sharpen.frag", err, errlen);
+    if (!sharp) {
+        glDeleteProgram(prog);
         return NULL;
     }
 
     xrd_renderer *r = calloc(1, sizeof *r);
     if (!r) {
         glDeleteProgram(prog);
+        glDeleteProgram(sharp);
         set_err(err, errlen, "alloc", "out of memory");
         return NULL;
     }
@@ -97,6 +129,14 @@ xrd_renderer *xrd_renderer_new(char *err, size_t errlen)
     r->u_trilinear = glGetUniformLocation(prog, "u_trilinear");
     r->u_max_level = glGetUniformLocation(prog, "u_max_level");
     r->dither = false;
+    r->u_mask = glGetUniformLocation(prog, "u_mask");
+    r->sharp_prog = sharp;
+    r->s_src = glGetUniformLocation(sharp, "u_src");
+    r->s_lo = glGetUniformLocation(sharp, "u_lo");
+    r->s_hi = glGetUniformLocation(sharp, "u_hi");
+    r->s_peak = glGetUniformLocation(sharp, "u_peak");
+    r->s_dither = glGetUniformLocation(sharp, "u_dither");
+    r->sharpen = 0.f;
     return r;
 }
 
@@ -106,6 +146,11 @@ void xrd_renderer_free(xrd_renderer *r)
         return;
     glDeleteVertexArrays(1, &r->vao);
     glDeleteProgram(r->prog);
+    glDeleteProgram(r->sharp_prog);
+    if (r->mid_fbo)
+        glDeleteFramebuffers(1, &r->mid_fbo);
+    if (r->mid_tex)
+        glDeleteTextures(1, &r->mid_tex);
     free(r);
 }
 
@@ -128,6 +173,45 @@ void xrd_renderer_set_dither(xrd_renderer *r, bool on)
 void xrd_renderer_set_filter(xrd_renderer *r, xrd_filter f)
 {
     r->filter = f;
+}
+
+void xrd_renderer_set_sharpen(xrd_renderer *r, float strength)
+{
+    r->sharpen = strength > 0.f ? (strength < 1.f ? strength : 1.f) : 0.f;
+}
+
+/* Makes the intermediate w x h (GL_RGB10_A2: 10 bits per colour, the same
+ * as the video texture, and 2 alpha bits for the picture mask), bound as the
+ * draw framebuffer. false, once and for good, if the GPU cannot render to it;
+ * the draw framebuffer binding is then undefined. */
+static bool mid_ready(xrd_renderer *r, int w, int h)
+{
+    if (r->mid_failed)
+        return false;
+    if (!r->mid_fbo) {
+        glGenTextures(1, &r->mid_tex);
+        glGenFramebuffers(1, &r->mid_fbo);
+    }
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, r->mid_fbo);
+    if (r->mid_w == w && r->mid_h == h)
+        return true;
+    glBindTexture(GL_TEXTURE_2D, r->mid_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB10_A2, w, h, 0, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV,
+                 NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, r->mid_tex, 0);
+    GLenum st = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
+    if (st != GL_FRAMEBUFFER_COMPLETE) {
+        fprintf(stderr, "xrdome: warning: sharpening is off: the GPU cannot render to a "
+                        "%dx%d 10-bit texture (framebuffer status 0x%x)\n", w, h, (unsigned)st);
+        r->mid_failed = true;
+        return false;
+    }
+    r->mid_w = w;
+    r->mid_h = h;
+    return true;
 }
 
 /* The shader's u_filter for f: 0 bilinear, else the enlarge() kernel. */
@@ -166,9 +250,19 @@ void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
     glDisable(GL_FRAMEBUFFER_SRGB);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
+    /* With sharpening the eye pass draws into the intermediate, undithered
+     * and with the picture mask in alpha, and sharpen.frag draws each eye
+     * from it into the caller's framebuffer. Without it the eye pass draws
+     * straight there, exactly as before sharpening existed. */
+    glActiveTexture(GL_TEXTURE0);
+    GLint target = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &target);
+    bool sharpen = r->sharpen > 0.f && mid_ready(r, out_w, out_h);
+    if (!sharpen)
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)target);
+
     glUseProgram(r->prog);
     glBindVertexArray(r->vao);
-    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, video_tex);
     glUniform1i(r->u_video, 0);
     glUniform2f(r->u_tan_half, dp->geom.tan_h, dp->geom.tan_v);
@@ -184,7 +278,8 @@ void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
     glUniform1i(r->u_trilinear, dp->trilinear);
     glUniform1i(r->u_max_level, XRD_MIP_MAX_LEVEL);
     glUniform1i(r->u_filter, dp->trilinear ? 0 : filter_index(r->filter));
-    glUniform1i(r->u_dither, r->dither);
+    glUniform1i(r->u_dither, r->dither && !sharpen);
+    glUniform1i(r->u_mask, sharpen);
 
     int half = out_w / 2;
     for (int eye = 0; eye < 2; eye++) {
@@ -200,6 +295,24 @@ void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
         xrd_quat_to_mat3(xrd_quat_from_ypr_deg(eye == 0 ? -half_c : half_c, 0, 0), eye_rot);
         mat3_mul(rot, eye_rot, eye_view);
         glUniformMatrix3fv(r->u_rot, 1, GL_FALSE, eye_view);
+        glViewport(eye * half, 0, half, out_h);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+    if (!sharpen)
+        return;
+
+    /* CAS's negative lobe runs from -1/8 (its sharpness 0) to -1/5 (its
+     * sharpness 1); strength 1 is the latter and smaller strengths scale it
+     * down to 0, so the effect fades out continuously. */
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)target);
+    glUseProgram(r->sharp_prog);
+    glBindTexture(GL_TEXTURE_2D, r->mid_tex);
+    glUniform1i(r->s_src, 0);
+    glUniform1f(r->s_peak, -r->sharpen / 5.f);
+    glUniform1i(r->s_dither, r->dither);
+    for (int eye = 0; eye < 2; eye++) {
+        glUniform2i(r->s_lo, eye * half, 0);
+        glUniform2i(r->s_hi, eye * half + half - 1, out_h - 1);
         glViewport(eye * half, 0, half, out_h);
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }

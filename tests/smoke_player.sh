@@ -804,6 +804,43 @@ for filt in bicubic-ar mitchell; do
     n=$((n + 1))
 done
 
+# ---- --sharpen: contrast-adaptive sharpening after the eye pass (SH1 to SH5) ----
+# SH1. Flat, the same 4/3 enlargement as E1: the eye is still filled exactly (the white border
+# reaches every eye edge and nothing inside is black), the same picture as E1 but not its frame.
+flat sh1 --frames 30 --zoom 1.0 --sharpen 0.5 --dump-frame "$work/sh1.ppm" "$work/small.mp4"
+no_xrdome_lines "$work/sh1.err"; check "SH1 --sharpen 0.5: no xrdome lines" $?
+check_flat fill "$work/sh1.ppm"; check "SH1 sharpen 0.5: border on the eye edges, no black inside" $?
+check_flat same "$work/sh1.ppm" "$work/e1.ppm"; check "SH1 sharpen 0.5: same picture as E1" $?
+check_flat differs "$work/sh1.ppm" "$work/e1.ppm"; check "SH1 sharpen 0.5: not E1's frame" $?
+# SH2. Half SBS at full strength: each viewport keeps to its own eye.
+flat sh2 --frames 30 --zoom 1.0 --sharpen 1 --dump-frame "$work/sh2.ppm" "$work/small.HSBS.mp4"
+check_flat eyes "$work/sh2.ppm"; check "SH2 sharpen 1 half SBS: left viewport red, right blue" $?
+# SH3. A shrunk flat picture (mipmaps, black corners around the screen): corners stay black.
+flat sh3 --frames 30 --zoom 0.5 --sharpen 0.5 --dump-frame "$work/sh3.ppm" "$work/flat2d.mp4"
+check_flat corners "$work/sh3.ppm"; check "SH3 sharpen 0.5 zoom 0.5: corners black" $?
+grep -qx 'mipmap check: [1-9][0-9]* trilinear draws, texture 1920x1080' "$work/sh3.err"
+check "SH3 every trilinear draw found its chain" $?
+# SH4. VR180 with the ini key: the pattern's colours and orientation hold.
+mkdir -p "$work/cfgs/xrdome"
+printf '[general]\nsharpen = 0.5\n' >"$work/cfgs/xrdome/config.ini"
+had_cfg=${XDG_CONFIG_HOME+set} old_cfg=${XDG_CONFIG_HOME-}
+XDG_CONFIG_HOME="$work/cfgs"
+export XDG_CONFIG_HOME
+flat sh4 --frames 30 --dump-frame "$work/sh4.ppm" "$work/pattern.mp4"
+flat sh4f --frames 30 --sharpen 0 --dump-frame "$work/sh4f.ppm" "$work/pattern.mp4"
+if [ -n "$had_cfg" ]; then XDG_CONFIG_HOME=$old_cfg; else unset XDG_CONFIG_HOME; fi
+no_xrdome_lines "$work/sh4.err"; check "SH4 ini sharpen = 0.5: no xrdome lines" $?
+check_frame "$work/sh4.ppm"; check "SH4 ini sharpen = 0.5 VR180: colours and orientation" $?
+check_flat differs "$work/sh4.ppm" "$work/out.ppm"; check "SH4 ini sharpen = 0.5 reaches the eye pass" $?
+check_flat differs "$work/sh4.ppm" "$work/sh4f.ppm"; check "SH4 --sharpen 0 beats the ini" $?
+# SH5. A value out of range is named, nothing starts.
+"$xrdome" --no-memory --windowed --pose null --sharpen 2 "$work/small.mp4" >"$work/sh5.err" 2>&1
+st=$?
+cat "$work/sh5.err"
+check "SH5 --sharpen 2 exits 1 (got $st)" "$([ "$st" -eq 1 ]; echo $?)"
+grep -qx 'xrdome: --sharpen: 2 is out of range (0 to 1)' "$work/sh5.err"
+check "SH5 --sharpen 2 names the flag and the range" $?
+
 # ---- per-file settings memory (M1 to M10) ----
 cp "$work/pattern.mp4" "$work/mem.mp4"
 rec() { ls "$XDG_STATE_HOME"/xrdome/files/*.ini 2>/dev/null; }

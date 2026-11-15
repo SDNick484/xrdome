@@ -14,10 +14,11 @@ mpv_dep = dependency('mpv')
 py = find_program('python3')
 
 shaders_gen = custom_target('shaders_gen',
-  input : ['src/render/shaders/vr180.vert', 'src/render/shaders/vr180.frag'],
+  input : ['src/render/shaders/vr180.vert', 'src/render/shaders/vr180.frag',
+           'src/render/shaders/sharpen.frag'],
   output : 'shaders_gen.h',
   command : [py, files('tools/embed_shaders.py'), '@OUTPUT@',
-             'VR180_VERT=@INPUT0@', 'VR180_FRAG=@INPUT1@'])
+             'VR180_VERT=@INPUT0@', 'VR180_FRAG=@INPUT1@', 'SHARPEN_FRAG=@INPUT2@'])
 
 # Core sources: append one line per task.
 core_sources = files(

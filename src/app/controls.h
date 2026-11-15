@@ -26,6 +26,7 @@ typedef struct {
     bool screen_locked;
     bool screen_curved;         /* C: the flat screen is curved (both zoom modes) */
     float screen_curve;         /* the curved screen's radius, XRD_SCREEN_CURVE_MIN..MAX */
+    float sharpen;              /* sharpening strength, 0 (off) to XRD_SHARPEN_MAX */
     bool layout_chosen;         /* M or S was pressed in this run */
 } xrd_controls;
 
@@ -68,6 +69,12 @@ void xrd_controls_cycle_layout(xrd_controls *c, double frame_aspect);
 void xrd_controls_toggle_swap(xrd_controls *c);   /* sets layout_chosen */
 /* F: the next filter in xrd_filter order, after the last the first. */
 void xrd_controls_cycle_filter(xrd_controls *c);
+/* From --sharpen; values outside 0..XRD_SHARPEN_MAX are clamped into it.
+ * xrd_controls_init sets 0. */
+void xrd_controls_init_sharpen(xrd_controls *c, float strength);
+/* Shift+F: the next multiple of XRD_SHARPEN_STEP above the strength (0.25,
+ * 0.5, 0.75, 1; from 0.3, 0.5), and from XRD_SHARPEN_MAX back to 0 (off). */
+void xrd_controls_step_sharpen(xrd_controls *c);
 /* Left-button drag by (dx, dy) window pixels, SDL axes (+y down): dragging
  * right looks right, dragging up looks up, 0.1 degrees per pixel. */
 void xrd_controls_mouse_drag(xrd_controls *c, int dx, int dy);

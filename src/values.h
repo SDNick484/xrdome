@@ -15,6 +15,8 @@
 #define XRD_CONTENT_FOV_MIN 10.0f
 #define XRD_CONTENT_FOV_MAX 180.0f
 #define XRD_CONVERGENCE_MAX 5.0f /* and -5 */
+#define XRD_SHARPEN_MAX 1.0f     /* --sharpen 0 (off) to 1 */
+#define XRD_SHARPEN_STEP 0.25f   /* Shift+F */
 
 typedef enum {
     XRD_VALUE_OK,

@@ -414,6 +414,7 @@ static int reset_view(void **state)
     xrd_renderer_set_convergence(g_r, 0.f);
     xrd_renderer_set_content_fov(g_r, 180.f, 180.f);
     xrd_renderer_set_dither(g_r, false);
+    xrd_renderer_set_sharpen(g_r, 0.f);
     g_curve = 0.f;
     return 0;
 }
@@ -2024,6 +2025,349 @@ static void hequirect_tb_lr(void **state)
     glDeleteTextures(1, &tex);
 }
 
+/* ---- sharpening (--sharpen): CAS after the eye pass ---- */
+
+static float g_fin[W * H * 4];  /* the eye pass without sharpening */
+static float g_fout[W * H * 4]; /* the same draw sharpened */
+
+/* dp drawn into a W x H target of format fmt and read back as floats:
+ * GL_RGB10_A2 holds exactly what the renderer's intermediate holds, and
+ * GL_RGBA32F the second pass's output before any rounding. */
+static void draw_float(GLuint tex, xrd_quat q, const xrd_draw_params *dp, GLenum fmt, float *out)
+{
+    float rot[9];
+    xrd_quat_to_mat3(q, rot);
+    GLuint col, fbo;
+    glGenTextures(1, &col);
+    glBindTexture(GL_TEXTURE_2D, col);
+    glTexImage2D(GL_TEXTURE_2D, 0, (GLint)fmt, W, H, 0, GL_RGBA, GL_FLOAT, NULL);
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, col, 0);
+    assert_int_equal(glCheckFramebufferStatus(GL_FRAMEBUFFER), GL_FRAMEBUFFER_COMPLETE);
+    glViewport(0, 0, W, H);
+    glClearColor(1.f, 0.f, 1.f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    xrd_renderer_draw(g_r, tex, rot, dp, W, H);
+    assert_int_equal(glGetError(), GL_NO_ERROR);
+    GLint bound = -1;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &bound);
+    assert_int_equal(bound, (GLint)fbo); /* the caller's binding is left as it was */
+    glReadPixels(0, 0, W, H, GL_RGBA, GL_FLOAT, out);
+    assert_int_equal(glGetError(), GL_NO_ERROR);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_fbo);
+    glDeleteFramebuffers(1, &fbo);
+    glDeleteTextures(1, &col);
+}
+
+/* The eye pass drew picture at (x, y): the test pictures have no black. */
+static bool fpicture(const float *img, int x, int y)
+{
+    const float *p = &img[(y * W + x) * 4];
+    return p[0] > 0.f || p[1] > 0.f || p[2] > 0.f;
+}
+
+/* Reference for sharpen.frag at (x, y), channel c, from the unsharpened
+ * picture in (drawn into GL_RGB10_A2, so the intermediate's values), in
+ * double precision: FidelityFX CAS's sharpen-only filter
+ * (per-channel weights, soft min and max over the cross and the 3 x 3,
+ * amount sqrt(min(mn, 2 - mx) / mx), lobe amount * -strength / 5), with
+ * neighbours clamped into (x, y)'s eye viewport and a black neighbour taken
+ * as the centre. Black stays 0. */
+static double cas_reference(const float *in, int x, int y, int c, double strength)
+{
+    if (!fpicture(in, x, y))
+        return 0.0;
+    int x0 = x < W / 2 ? 0 : W / 2, x1 = x0 + W / 2 - 1;
+    double e = in[(y * W + x) * 4 + c];
+    double n[3][3];
+    for (int j = 0; j < 3; j++)
+        for (int i = 0; i < 3; i++) {
+            int xx = x + i - 1, yy = y + j - 1;
+            xx = xx < x0 ? x0 : (xx > x1 ? x1 : xx);
+            yy = yy < 0 ? 0 : (yy > H - 1 ? H - 1 : yy);
+            n[j][i] = fpicture(in, xx, yy) ? in[(yy * W + xx) * 4 + c] : e;
+        }
+    double b = n[0][1], d = n[1][0], f = n[1][2], h = n[2][1];
+    double mn = fmin(fmin(fmin(b, d), fmin(e, f)), h);
+    double mx = fmax(fmax(fmax(b, d), fmax(e, f)), h);
+    double mn2 = fmin(fmin(fmin(mn, n[0][0]), fmin(n[0][2], n[2][0])), n[2][2]);
+    double mx2 = fmax(fmax(fmax(mx, n[0][0]), fmax(n[0][2], n[2][0])), n[2][2]);
+    mn += mn2;
+    mx += mx2;
+    double amp = fmin(mn, 2.0 - mx) / fmax(mx, 1e-5);
+    amp = sqrt(amp < 0 ? 0 : (amp > 1 ? 1 : amp));
+    double w = amp * -strength / 5.0;
+    double o = (w * (b + d + f + h) + e) / (1.0 + 4.0 * w);
+    return o < 0 ? 0 : (o > 1 ? 1 : o);
+}
+
+/* Grey noise in 40..215 (no black, no saturated channel), w x h, one value
+ * per texel from a fixed LCG; r, g and b differ. */
+static GLuint make_noise_tex(int w, int h)
+{
+    uint8_t *px = malloc((size_t)w * h * 4);
+    assert_non_null(px);
+    uint32_t s = 12345u;
+    for (int i = 0; i < w * h; i++) {
+        for (int c = 0; c < 3; c++) {
+            s = s * 1664525u + 1013904223u;
+            px[i * 4 + c] = (uint8_t)(40 + (s >> 24) % 176);
+        }
+        px[i * 4 + 3] = 255;
+    }
+    GLuint t = make_tex(w, h, px);
+    free(px);
+    return t;
+}
+
+/* A flat picture of one eye's size (W / 2 x H texels, 1:1 at zoom 1):
+ * grey STEP_LO left of its centre, STEP_HI right of it. */
+static GLuint make_sharp_step_tex(void)
+{
+    static uint8_t px[W / 2 * H * 4];
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W / 2; x++) {
+            uint8_t *p = &px[(y * (W / 2) + x) * 4];
+            p[0] = p[1] = p[2] = x < W / 4 ? STEP_LO : STEP_HI;
+            p[3] = 255;
+        }
+    return make_tex(W / 2, H, px);
+}
+
+/* Draws dp unsharpened and at strength into the float target and compares
+ * every pixel with cas_reference. Returns the largest change sharpening made. */
+static double check_cas(GLuint tex, xrd_quat q, const xrd_draw_params *dp, float strength,
+                        const char *what)
+{
+    xrd_renderer_set_sharpen(g_r, 0.f);
+    draw_float(tex, q, dp, GL_RGB10_A2, g_fin);
+    xrd_renderer_set_sharpen(g_r, strength);
+    draw_float(tex, q, dp, GL_RGBA32F, g_fout);
+    xrd_renderer_set_sharpen(g_r, 0.f);
+    double moved = 0;
+    int n_black = 0;
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++) {
+            n_black += !fpicture(g_fin, x, y);
+            for (int c = 0; c < 4; c++) {
+                double got = g_fout[(y * W + x) * 4 + c];
+                double want = c == 3 ? 1.0 : cas_reference(g_fin, x, y, c, strength);
+                if (fabs(got - want) > 1e-3)
+                    fail_msg("%s, strength %.2f: pixel (%d,%d) channel %d = %.5f, reference "
+                             "%.5f (unsharpened %.5f)", what, (double)strength, x, y, c, got,
+                             want, (double)g_fin[(y * W + x) * 4 + c]);
+                if (c < 3)
+                    moved = fmax(moved, fabs(got - g_fin[(y * W + x) * 4 + c]));
+            }
+        }
+    printf("  %s, strength %.2f: largest change %.1f levels, %d black pixels\n", what,
+           (double)strength, moved * 255.0, n_black);
+    return moved;
+}
+
+/* The second pass is CAS: every pixel matches the double-precision reference,
+ * at the eye boundary (a step whose bright side ends there), next to the
+ * content edge, behind the viewer and around the flat screen (each with the
+ * edge tilted, so black also touches the picture diagonally). */
+static void sharpen_matches_cas_reference(void **state)
+{
+    (void)state;
+    GLuint step = make_step_tex(), sharp = make_sharp_step_tex(), noise = make_noise_tex(64, 36);
+    const xrd_draw_params vr = {.proj = XRD_PROJ_HEQUIRECT, .layout = XRD_LAYOUT_SBS_LR,
+                                .geom = {.tan_h = g_th, .tan_v = g_tv}};
+    xrd_draw_params one = {.proj = XRD_PROJ_FLAT, .layout = XRD_LAYOUT_MONO};
+    flat_geom(XRD_ZOOM_SCREEN, 1.f, 16.0 / 9.0, &one.geom);
+    const float strengths[] = {1.f, 0.5f};
+    for (size_t i = 0; i < 2; i++) {
+        float s = strengths[i];
+        assert_true(check_cas(sharp, XRD_QUAT_IDENTITY, &one, s, "flat 1:1 step") > 5.0 / 255);
+        check_cas(step, XRD_QUAT_IDENTITY, &vr, s, "VR180 step");
+        xrd_renderer_set_content_fov(g_r, 90.f, 90.f);
+        check_cas(noise, xrd_quat_from_ypr_deg(-30, 10, 20), &vr, s, "VR180 content edge, rolled");
+        xrd_renderer_set_content_fov(g_r, 180.f, 180.f);
+        check_cas(noise, xrd_quat_from_ypr_deg(80, 0, 15), &vr, s, "VR180 behind, rolled");
+        xrd_draw_params fl = {.proj = XRD_PROJ_FLAT, .layout = XRD_LAYOUT_MONO};
+        flat_geom(XRD_ZOOM_SCREEN, 0.7f, 16.0 / 9.0, &fl.geom);
+        check_cas(noise, xrd_quat_from_ypr_deg(0, 0, 10), &fl, s, "flat screen border, rolled");
+        fl.screen_curve = 1.f;
+        check_cas(noise, XRD_QUAT_IDENTITY, &fl, s, "curved flat screen border");
+    }
+    glDeleteTextures(1, &step);
+    glDeleteTextures(1, &sharp);
+    glDeleteTextures(1, &noise);
+}
+
+/* Strength 0 is exactly the one-pass draw, for every filter, both
+ * projections and with dithering, also after a sharpened draw. */
+static void sharpen_zero_is_todays_output(void **state)
+{
+    (void)state;
+    static uint8_t before[W * H * 4];
+    GLuint tex = make_noise_tex(64, 36);
+    xrd_renderer_set_dither(g_r, true);
+    const xrd_filter filters[N_FILTERS] = ALL_FILTERS;
+    for (int proj = 0; proj < 2; proj++)
+        for (size_t f = 0; f < N_FILTERS; f++) {
+            xrd_renderer_set_filter(g_r, filters[f]);
+            xrd_draw_params dp = {.proj = proj ? XRD_PROJ_FLAT : XRD_PROJ_HEQUIRECT,
+                                  .layout = proj ? XRD_LAYOUT_MONO : XRD_LAYOUT_SBS_LR,
+                                  .geom = {.tan_h = g_th, .tan_v = g_tv}};
+            if (proj)
+                flat_geom(XRD_ZOOM_SCREEN, 0.8f, 16.0 / 9.0, &dp.geom);
+            draw_dp(tex, XRD_QUAT_IDENTITY, &dp); /* never sharpened in this run */
+            memcpy(before, g_img, sizeof before);
+            xrd_renderer_set_sharpen(g_r, 0.5f);
+            draw_dp(tex, XRD_QUAT_IDENTITY, &dp);
+            assert_true(memcmp(before, g_img, sizeof before) != 0);
+            xrd_renderer_set_sharpen(g_r, 0.f);
+            draw_dp(tex, XRD_QUAT_IDENTITY, &dp);
+            if (memcmp(before, g_img, sizeof before) != 0)
+                fail_msg("%s %s: strength 0 after 0.5 differs from the one-pass draw",
+                         proj ? "flat" : "VR180", xrd_value_filter_name(filters[f]));
+            xrd_renderer_set_sharpen(g_r, -1.f); /* clamped to 0 */
+            draw_dp(tex, XRD_QUAT_IDENTITY, &dp);
+            assert_memory_equal(before, g_img, sizeof before);
+        }
+    glDeleteTextures(1, &tex);
+}
+
+/* Constant input stays constant at full strength: the picture keeps its
+ * colour up to its edges (eye boundary, flat screen border, content edge),
+ * black stays exactly black (undithered), with dithering on, at the test
+ * size and at the device size (the intermediate is remade). */
+static void sharpen_keeps_constant(void **state)
+{
+    (void)state;
+    static uint8_t plain[W * H * 4];
+    GLuint tex = make_flat_tex(90, 140, 200);
+    xrd_renderer_set_dither(g_r, true);
+    xrd_renderer_set_filter(g_r, XRD_FILTER_BICUBIC);
+    xrd_draw_params dps[3] = {
+        {.proj = XRD_PROJ_HEQUIRECT, .layout = XRD_LAYOUT_SBS_LR, .geom = {.tan_h = g_th, .tan_v = g_tv}},
+        {.proj = XRD_PROJ_FLAT, .layout = XRD_LAYOUT_MONO},
+        {.proj = XRD_PROJ_HEQUIRECT, .layout = XRD_LAYOUT_SBS_LR, .geom = {.tan_h = g_th, .tan_v = g_tv}},
+    };
+    flat_geom(XRD_ZOOM_SCREEN, 0.7f, 16.0 / 9.0, &dps[1].geom);
+    const xrd_quat qs[3] = {xrd_quat_from_ypr_deg(0, 0, 10), xrd_quat_from_ypr_deg(0, 0, 10),
+                            xrd_quat_from_ypr_deg(-30, 10, 20)};
+    for (int k = 0; k < 3; k++) {
+        xrd_renderer_set_content_fov(g_r, k == 2 ? 90.f : 180.f, k == 2 ? 90.f : 180.f);
+        xrd_renderer_set_sharpen(g_r, 0.f);
+        draw_dp(tex, qs[k], &dps[k]);
+        memcpy(plain, g_img, sizeof plain);
+        xrd_renderer_set_sharpen(g_r, 1.f);
+        draw_dp(tex, qs[k], &dps[k]);
+        int n_black = 0;
+        for (int i = 0; i < W * H; i++) {
+            const uint8_t *a = &plain[i * 4], *b = &g_img[i * 4];
+            bool black = !a[0] && !a[1] && !a[2];
+            n_black += black;
+            for (int c = 0; c < 4; c++)
+                if (black ? b[c] != a[c] : abs(b[c] - a[c]) > 2)
+                    fail_msg("case %d: pixel (%d,%d) channel %d = %d sharpened, %d without", k,
+                             i % W, i / W, c, b[c], a[c]);
+        }
+        assert_true(k == 0 || n_black > 100); /* the cases with black reach it */
+    }
+    xrd_renderer_set_content_fov(g_r, 180.f, 180.f);
+
+    /* the device size, after the test size: the intermediate is remade */
+    xrd_view_geom g;
+    xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_SCREEN, 43.f, 16.f / 9.f, 0.7f, 16.0 / 9.0, &g);
+    big_begin();
+    xrd_renderer_set_sharpen(g_r, 1.f);
+    draw_big(tex, &g, XRD_LAYOUT_MONO, false);
+    int n_pic = 0;
+    for (size_t i = 0; i < (size_t)BIG_W * BIG_H; i++) {
+        const uint8_t *p = &g_big[i * 4];
+        if (!p[0] && !p[1] && !p[2])
+            continue;
+        n_pic++;
+        if (abs(p[0] - 90) > 2 || abs(p[1] - 140) > 2 || abs(p[2] - 200) > 2)
+            fail_msg("device size: pixel %zu = (%d,%d,%d), want (90,140,200) +- 2", i, p[0], p[1],
+                     p[2]);
+    }
+    big_end();
+    assert_true(n_pic > BIG_W * BIG_H / 4);
+    xrd_renderer_set_sharpen(g_r, 0.f);
+    glDeleteTextures(1, &tex);
+}
+
+/* A different grey in each eye, constant within each: sharpened at full
+ * strength each viewport stays its own constant grey up to the boundary
+ * between them, so no read crosses from one eye into the other. */
+static void sharpen_keeps_eyes_apart(void **state)
+{
+    (void)state;
+    uint8_t px[TEX_W * TEX_H * 4];
+    for (int i = 0; i < TEX_W * TEX_H; i++) {
+        uint8_t v = (i % TEX_W) < TEX_W / 2 ? 100 : 170;
+        px[i * 4 + 0] = px[i * 4 + 1] = px[i * 4 + 2] = v;
+        px[i * 4 + 3] = 255;
+    }
+    GLuint tex = make_tex(TEX_W, TEX_H, px);
+    xrd_renderer_set_filter(g_r, XRD_FILTER_BICUBIC);
+    xrd_renderer_set_sharpen(g_r, 1.f);
+    for (int swap = 0; swap < 2; swap++) {
+        draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, swap, false);
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++) {
+                int want = (x < W / 2) != (swap != 0) ? 100 : 170;
+                const uint8_t *p = &g_img[(y * W + x) * 4];
+                if (abs(p[0] - want) > 1 || p[0] != p[1] || p[1] != p[2])
+                    fail_msg("swap %d: pixel (%d,%d) = %d, want %d", swap, x, y, p[0], want);
+            }
+    }
+    xrd_renderer_set_sharpen(g_r, 0.f);
+    glDeleteTextures(1, &tex);
+}
+
+/* A step edge drawn about 1:1 gains contrast: the dark side next to it gets
+ * darker and the bright side brighter than without sharpening, the edge
+ * steeper, by no more than CAS's reference allows (check_cas compares every
+ * pixel). */
+static void sharpen_steepens_a_step(void **state)
+{
+    (void)state;
+    GLuint tex = make_sharp_step_tex();
+    xrd_draw_params one = {.proj = XRD_PROJ_FLAT, .layout = XRD_LAYOUT_MONO};
+    flat_geom(XRD_ZOOM_SCREEN, 1.f, 16.0 / 9.0, &one.geom);
+    check_cas(tex, XRD_QUAT_IDENTITY, &one, 1.f, "flat 1:1 step");
+    int y = H / 2;
+    for (int eye = 0; eye < 2; eye++) {
+        double lo_in = 1, lo_out = 1, hi_in = 0, hi_out = 0, slope_in = 0, slope_out = 0;
+        for (int x = eye * (W / 2) + 2; x < (eye + 1) * (W / 2) - 2; x++) {
+            const float *a = &g_fin[(y * W + x) * 4], *b = &g_fout[(y * W + x) * 4];
+            lo_in = fmin(lo_in, a[0]);
+            lo_out = fmin(lo_out, b[0]);
+            hi_in = fmax(hi_in, a[0]);
+            hi_out = fmax(hi_out, b[0]);
+            slope_in = fmax(slope_in, fabs(a[4] - a[0]));
+            slope_out = fmax(slope_out, fabs(b[4] - b[0]));
+        }
+        printf("  eye %d: unsharpened %.1f..%.1f, sharpened %.1f..%.1f, steepest step "
+               "%.1f -> %.1f levels\n", eye, lo_in * 255, hi_in * 255, lo_out * 255,
+               hi_out * 255, slope_in * 255, slope_out * 255);
+        assert_true(lo_out < lo_in - 2.0 / 255 && hi_out > hi_in + 2.0 / 255);
+        assert_true(slope_out > slope_in + 2.0 / 255);
+        assert_true(lo_out >= 0.0 && hi_out <= 1.0);
+    }
+    glDeleteTextures(1, &tex);
+}
+
+/* The caller's scissor, blend, culling and colour mask do not reach either
+ * pass. */
+static void sharpen_ignores_caller_state(void **state)
+{
+    (void)state;
+    xrd_renderer_set_sharpen(g_r, 1.f);
+    draw_tex(g_tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false, true);
+    expect_px(96, 54, 255, 0, 0);
+    expect_px(288, 54, 0, 0, 255);
+    xrd_renderer_set_sharpen(g_r, 0.f);
+}
+
 static void no_gl_error(void **state)
 {
     (void)state;
@@ -2091,6 +2435,12 @@ int main(void)
         cmocka_unit_test_teardown(curve_seam_even_and_odd_sizes, reset_view),
         cmocka_unit_test_teardown(curve_magnify_seam_other_radii, reset_view),
         cmocka_unit_test_teardown(curve_trilinear_keeps_eyes_apart_when_shrinking, reset_view),
+        cmocka_unit_test_teardown(sharpen_matches_cas_reference, reset_view),
+        cmocka_unit_test_teardown(sharpen_zero_is_todays_output, reset_view),
+        cmocka_unit_test_teardown(sharpen_keeps_constant, reset_view),
+        cmocka_unit_test_teardown(sharpen_keeps_eyes_apart, reset_view),
+        cmocka_unit_test_teardown(sharpen_steepens_a_step, reset_view),
+        cmocka_unit_test_teardown(sharpen_ignores_caller_state, reset_view),
         cmocka_unit_test(no_gl_error),
     };
     return cmocka_run_group_tests(tests, setup, teardown);

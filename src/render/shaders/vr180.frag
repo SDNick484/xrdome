@@ -11,6 +11,7 @@ uniform vec2  u_eye_scale;  // eye sub-image transform per axis: tex = uv * scal
 uniform vec2  u_eye_offset;
 uniform int   u_filter;     // 0: the hardware bilinear filter, 1 to 3: enlarge()
 uniform bool  u_dither;     // ordered dithering of the 8-bit output
+uniform bool  u_mask;       // black writes alpha 0: the picture mask for sharpen.frag
 uniform bool  u_trilinear;  // sample through the mipmap chain (levels 0..u_max_level)
 uniform int   u_max_level;  // XRD_MIP_MAX_LEVEL
 in  vec2 v_ndc;             // -1..1 within this eye's viewport
@@ -185,7 +186,7 @@ void main()
     vec2 tx = uv * size;
     float rho = max(length(dFdx(tx)), length(dFdy(tx)));
     if (black) {
-        o_color = vec4(0.0, 0.0, 0.0, 1.0);
+        o_color = vec4(0.0, 0.0, 0.0, u_mask ? 0.0 : 1.0);
         return;
     }
     uv = clamp(uv, 0.0, 1.0);
@@ -215,6 +216,7 @@ void main()
         float n = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
         c += (n - 0.5) / 255.0;
     }
-    // Alpha is ours, not the video texture's (RGB10_A2 has 2 alpha bits).
+    // Alpha is ours, not the video texture's (RGB10_A2 has 2 alpha bits);
+    // 1 marks the picture for sharpen.frag.
     o_color = vec4(c, 1.0);
 }
