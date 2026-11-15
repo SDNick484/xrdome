@@ -66,7 +66,7 @@ bool xrd_controls_toggle_curve(xrd_controls *c)
 
 float xrd_controls_screen_curve(const xrd_controls *c)
 {
-    if (c->proj != XRD_PROJ_FLAT || c->zoom_mode != XRD_ZOOM_SCREEN || !c->screen_curved)
+    if (c->proj != XRD_PROJ_FLAT || !c->screen_curved)
         return 0.0f;
     return c->screen_curve;
 }
@@ -188,7 +188,7 @@ const xrd_key_help xrd_key_list[] = {
     {"Z", "zoom mode: screen / magnify (flat)"},
     {"L", "screen: fixed / head-locked (flat)"},
     {"B", "debanding on / off"},
-    {"C", "screen: flat / curved (flat, screen zoom mode)"},
+    {"C", "screen: flat / curved (flat)"},
     {"?", "this list"},
     {"I", "playback information"},
     {"Q", "quit"},

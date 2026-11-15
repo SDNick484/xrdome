@@ -80,7 +80,10 @@ bool xrd_flat_dir_to_uv(const float d[3], float half_w, float half_h, float uv[2
  * half_h is not finite and > 0, or the hit is outside the screen (1e-6
  * tolerance counts the edge as inside); and when curve is outside
  * [XRD_SCREEN_CURVE_MIN, XRD_SCREEN_CURVE_MAX]. On success uv is clamped to
- * [0,1]. Mirrors the shader's flat branch with u_flat_curve: keep in step. */
+ * [0,1]. Mirrors the shader's flat branch with u_flat_curve: keep in step.
+ * Both zoom modes use it with xrd_view_geometry's half-extents: in magnify
+ * mode they are the zoom-1 screen's, so magnify curves the zoom-1 screen with
+ * the same radius and zoom only narrows the view onto it. */
 bool xrd_flat_curve_dir_to_uv(const float d[3], float half_w, float half_h, float curve,
                               float uv[2]);
 
@@ -104,7 +107,8 @@ void xrd_eye_uv_transform(xrd_layout layout, int eye, bool swap,
  * Returns 0 when an input makes the ratio meaningless (a size or extent that
  * is not > 0, or not finite). A curved flat screen (xrd_flat_curve_dir_to_uv)
  * has the plane's ratio at the centre: the cylinder touches the plane there
- * and its arc length and height grow at the plane's rate, so g serves both. */
+ * and its arc length and height grow at the plane's rate, so g serves both,
+ * in either zoom mode. */
 float xrd_minify_ratio(xrd_proj proj, const xrd_view_geom *g, int eye_src_w, int eye_src_h,
                        int out_eye_w, int out_eye_h,
                        float content_hfov_deg, float content_vfov_deg);

@@ -668,12 +668,21 @@ check_curve flat "$work/c2.ppm"; check "C2 --screen-curve off: all borders strai
 flat c2n --frames 30 --zoom 0.9 --dump-frame "$work/c2n.ppm" "$work/flat2d.mp4"
 check_curve same "$work/c2.ppm" "$work/c2n.ppm"; check "C2 --screen-curve off draws what no flag draws" $?
 
-# C3. Magnify mode keeps the screen flat.
+# C3. Magnify mode curves its zoom-1 screen too (issue #41 reversed the old
+# decision that it stays flat, so this expectation changed from straight to
+# bowed borders); with the curve off magnify mode is the plane: every border
+# straight, and the frame of a run without the flag.
 flat c3 --frames 30 --zoom 0.9 --zoom-mode magnify --screen-curve 1.0 \
      --dump-frame "$work/c3.ppm" "$work/flat2d.mp4"
-check_curve flat "$work/c3.ppm"; check "C3 magnify: all borders straight" $?
+no_xrdome_lines "$work/c3.err"; check "C3 no xrdome lines" $?
+check_curve curved "$work/c3.ppm"
+check "C3 magnify --screen-curve 1.0: side borders straight, top and bottom bow" $?
+flat c3o --frames 30 --zoom 0.9 --zoom-mode magnify --screen-curve off \
+     --dump-frame "$work/c3o.ppm" "$work/flat2d.mp4"
+check_curve flat "$work/c3o.ppm"; check "C3 magnify --screen-curve off: all borders straight" $?
 flat c3n --frames 30 --zoom 0.9 --zoom-mode magnify --dump-frame "$work/c3n.ppm" "$work/flat2d.mp4"
-check_curve same "$work/c3.ppm" "$work/c3n.ppm"; check "C3 magnify: the curve changes nothing" $?
+check_curve same "$work/c3o.ppm" "$work/c3n.ppm"
+check "C3 magnify --screen-curve off draws what no flag draws" $?
 
 # C4. [general] screen_curve in config.ini, and a radius out of range.
 mkdir -p "$work/cfgc/xrdome"

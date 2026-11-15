@@ -1723,6 +1723,38 @@ static void curve_mirror_matches_shader(void **state)
             }
 }
 
+/* Magnify mode curves its zoom-1 screen with the same radius and narrows the
+ * view onto it (issue #41): the shader against the mirror on every pixel, with
+ * the magnify geometry. At zoom 0.8 the whole screen is in view with black
+ * around it; at zoom 2.5 the narrowed view lies on the screen straight ahead
+ * and straddles the arc's end at 20 degrees of yaw (the end is 19 to 20
+ * degrees out). Radius 0 is the plane, as magnify drew it before. */
+static void curve_magnify_mirror_matches_shader(void **state)
+{
+    (void)state;
+    const float curves[] = {0.f, 1.f, 2.5f, 10.f};
+    const float zooms[] = {0.8f, 2.5f};
+    const xrd_quat views[] = {XRD_QUAT_IDENTITY, xrd_quat_from_ypr_deg(20, 0, 0),
+                              xrd_quat_from_ypr_deg(0, -8, 0), xrd_quat_from_ypr_deg(-15, 5, 0)};
+    for (size_t c = 0; c < sizeof curves / sizeof curves[0]; c++)
+        for (size_t z = 0; z < 2; z++)
+            for (size_t v = 0; v < sizeof views / sizeof views[0]; v++) {
+                xrd_view_geom g;
+                flat_geom(XRD_ZOOM_MAGNIFY, zooms[z], 16.0 / 9.0, &g);
+                int n_hit, n_miss;
+                check_curve_mirror(&g, curves[c], views[v], &n_hit, &n_miss);
+                if (z == 0 && v == 0 && (n_hit < W * H / 2 || n_miss < W * H / 20))
+                    fail_msg("magnify, curve %.2f: %d hits and %d misses checked",
+                             (double)curves[c], n_hit, n_miss);
+                if (z == 1 && v == 0 && (n_hit < W * H * 9 / 10 || n_miss != 0))
+                    fail_msg("magnify zoom 2.5, curve %.2f straight ahead: %d hits and %d "
+                             "misses checked", (double)curves[c], n_hit, n_miss);
+                if (z == 1 && v == 1 && (n_hit < W * H / 4 || n_miss < W * H / 4))
+                    fail_msg("magnify zoom 2.5, curve %.2f at the arc's end: %d hits and %d "
+                             "misses checked", (double)curves[c], n_hit, n_miss);
+            }
+}
+
 /* Nothing behind or beside the viewer, and a junk radius draws black. */
 static void curve_behind_and_junk_are_black(void **state)
 {
@@ -1746,13 +1778,23 @@ static void curve_behind_and_junk_are_black(void **state)
 }
 
 /* Review Focus 4 on the curved screen: the eye-edge clamp margins act on uv
- * after the mapping, so they hold for the cylinder as for the plane. */
+ * after the mapping, so they hold for the cylinder as for the plane. The
+ * seam checks run in magnify mode (zoom 20 onto the zoom-1 screen), which
+ * curves since issue #41: here at radius 1, below at 2.5 and 10. */
 static void curve_seam_even_and_odd_sizes(void **state)
 {
     g_curve = 1.f;
     flat_seam_even_and_odd_sizes(state);
     g_curve = 2.5f;
     flat_odd_sizes_keep_eyes_apart(state);
+}
+
+static void curve_magnify_seam_other_radii(void **state)
+{
+    g_curve = 2.5f;
+    flat_seam_even_and_odd_sizes(state);
+    g_curve = 10.f;
+    flat_seam_even_and_odd_sizes(state);
 }
 
 static void curve_trilinear_keeps_eyes_apart_when_shrinking(void **state)
@@ -1835,8 +1877,10 @@ int main(void)
         cmocka_unit_test_teardown(trilinear_averages_checkerboard_at_4x_shrink, reset_view),
         cmocka_unit_test_teardown(trilinear_enlarging_matches_bilinear, reset_view),
         cmocka_unit_test_teardown(curve_mirror_matches_shader, reset_view),
+        cmocka_unit_test_teardown(curve_magnify_mirror_matches_shader, reset_view),
         cmocka_unit_test_teardown(curve_behind_and_junk_are_black, reset_view),
         cmocka_unit_test_teardown(curve_seam_even_and_odd_sizes, reset_view),
+        cmocka_unit_test_teardown(curve_magnify_seam_other_radii, reset_view),
         cmocka_unit_test_teardown(curve_trilinear_keeps_eyes_apart_when_shrinking, reset_view),
         cmocka_unit_test(no_gl_error),
     };

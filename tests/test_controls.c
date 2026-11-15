@@ -188,17 +188,36 @@ static void curve_init_toggle_and_magnify(void **state)
 
     xrd_controls_init_format(&c, XRD_PROJ_FLAT, XRD_PACKING_AUTO, 1.0f, XRD_ZOOM_SCREEN, false);
     assert_float_equal(xrd_controls_screen_curve(&c), 2.f, 0.f);
-    /* magnify keeps the zoom-1 screen: flat, and curved again in screen mode */
+    /* magnify curves its zoom-1 screen with the same radius: Z leaves the
+     * curve alone (reversed 2026-11-14, issue #41; it used to flatten it) */
+    assert_true(xrd_controls_toggle_zoom_mode(&c));
+    assert_int_equal(c.zoom_mode, XRD_ZOOM_MAGNIFY);
+    assert_true(c.screen_curved);
+    assert_float_equal(xrd_controls_screen_curve(&c), 2.f, 0.f);
+    /* C flips it in magnify mode too, and keeps the radius */
+    assert_true(xrd_controls_toggle_curve(&c));
+    assert_false(c.screen_curved);
+    assert_true(xrd_controls_screen_curve(&c) == 0.f);
+    /* Z with the curve off leaves it off */
     assert_true(xrd_controls_toggle_zoom_mode(&c));
     assert_true(xrd_controls_screen_curve(&c) == 0.f);
     assert_true(xrd_controls_toggle_zoom_mode(&c));
+    assert_true(xrd_controls_screen_curve(&c) == 0.f);
+    assert_true(xrd_controls_toggle_curve(&c));
     assert_float_equal(xrd_controls_screen_curve(&c), 2.f, 0.f);
-    /* C flips it and keeps the radius */
+    assert_true(xrd_controls_toggle_zoom_mode(&c));
+    assert_int_equal(c.zoom_mode, XRD_ZOOM_SCREEN);
+    assert_float_equal(xrd_controls_screen_curve(&c), 2.f, 0.f);
+    /* C flips it in screen mode and keeps the radius */
     assert_true(xrd_controls_toggle_curve(&c));
     assert_false(c.screen_curved);
     assert_true(xrd_controls_screen_curve(&c) == 0.f);
     assert_true(xrd_controls_toggle_curve(&c));
     assert_float_equal(xrd_controls_screen_curve(&c), 2.f, 0.f);
+    /* --zoom-mode magnify from the start curves too */
+    xrd_controls_init_format(&c, XRD_PROJ_FLAT, XRD_PACKING_AUTO, 1.0f, XRD_ZOOM_MAGNIFY, false);
+    assert_float_equal(xrd_controls_screen_curve(&c), 2.f, 0.f);
+    xrd_controls_init_format(&c, XRD_PROJ_FLAT, XRD_PACKING_AUTO, 1.0f, XRD_ZOOM_SCREEN, false);
 
     /* off: C curves with radius 1; junk counts as off */
     const float offs[] = {0.f, 0.5f, -1.f, 11.f, NAN};
@@ -209,9 +228,14 @@ static void curve_init_toggle_and_magnify(void **state)
         assert_true(xrd_controls_toggle_curve(&c));
         assert_float_equal(xrd_controls_screen_curve(&c), 1.f, 0.f);
     }
-    /* a head-locked screen curves too */
+    /* a head-locked screen curves too, in both zoom modes */
     assert_true(xrd_controls_toggle_lock(&c));
     assert_float_equal(xrd_controls_screen_curve(&c), 1.f, 0.f);
+    assert_true(xrd_controls_toggle_zoom_mode(&c));
+    assert_float_equal(xrd_controls_screen_curve(&c), 1.f, 0.f);
+    /* back to VR180: nothing is curved, whatever the zoom mode */
+    xrd_controls_toggle_proj(&c);
+    assert_true(xrd_controls_screen_curve(&c) == 0.f);
 }
 
 static void layout_chosen_follows_cycle_and_swap(void **state)
