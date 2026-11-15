@@ -4,6 +4,7 @@
 #include <math.h>
 #include <stdbool.h>
 #include <cmocka.h>
+#include <SDL_keycode.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -381,6 +382,22 @@ static void key_list_matches_readme(void **state)
     assert_int_equal(n, xrd_key_list_len);
 }
 
+/* README, Keys: key repeat is ignored except for zoom and seek. A held R
+ * used to recenter on every repeat, which hid the view's drift. */
+static void key_repeat_only_for_zoom_and_seek(void **state)
+{
+    (void)state;
+    const SDL_Keycode repeats[] = {SDLK_LEFT, SDLK_RIGHT, SDLK_UP, SDLK_DOWN,
+                                   SDLK_LEFTBRACKET, SDLK_RIGHTBRACKET};
+    const SDL_Keycode once[] = {SDLK_q, SDLK_SPACE, SDLK_r, SDLK_f, SDLK_s, SDLK_m,
+                                SDLK_p, SDLK_z, SDLK_l, SDLK_c, SDLK_b, SDLK_i,
+                                SDLK_SLASH, SDLK_QUESTION};
+    for (size_t i = 0; i < sizeof repeats / sizeof repeats[0]; i++)
+        assert_true(xrd_key_repeats(repeats[i]));
+    for (size_t i = 0; i < sizeof once / sizeof once[0]; i++)
+        assert_false(xrd_key_repeats(once[i]));
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -404,6 +421,7 @@ int main(void)
         cmocka_unit_test(init_display_defaults_and_values),
         cmocka_unit_test(filter_toggles),
         cmocka_unit_test(key_list_matches_readme),
+        cmocka_unit_test(key_repeat_only_for_zoom_and_seek),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

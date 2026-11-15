@@ -376,6 +376,8 @@ static bool handle_key_action(const SDL_KeyboardEvent *k, xrd_app *a)
 {
     xrd_controls *ctl = a->ctl;
     bool shift = (k->keysym.mod & KMOD_SHIFT) != 0;
+    if (k->repeat && !xrd_key_repeats(k->keysym.sym))
+        return false;
     switch (k->keysym.sym) {
     case SDLK_q:
         return true;
