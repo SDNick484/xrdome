@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "math/quat.h"
 #include "render/projection.h"
@@ -85,5 +86,9 @@ typedef struct {
  * checks the keys and the order against README.md). */
 extern const xrd_key_help xrd_key_list[];
 extern const size_t xrd_key_list_len;
+
+/* True for the keys that act on key repeat (an SDL keycode): zoom and seek.
+ * Every other key acts once per press (README, Keys). */
+bool xrd_key_repeats(int32_t sdl_keycode);
 
 #endif
