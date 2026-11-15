@@ -147,6 +147,30 @@ const char *xrd_value_zoom_mode_name(xrd_zoom_mode m)
     return zoom_mode_names[m];
 }
 
+static const char *const filter_names[] = {
+    [XRD_FILTER_BILINEAR] = "bilinear",
+    [XRD_FILTER_BICUBIC] = "bicubic",
+    [XRD_FILTER_BICUBIC_AR] = "bicubic-ar",
+    [XRD_FILTER_MITCHELL] = "mitchell",
+};
+
+bool xrd_value_filter(const char *s, xrd_filter *out)
+{
+    for (size_t i = 0; i < sizeof filter_names / sizeof filter_names[0]; i++)
+        if (!strcmp(s, filter_names[i])) {
+            *out = (xrd_filter)i;
+            return true;
+        }
+    return false;
+}
+
+const char *xrd_value_filter_name(xrd_filter f)
+{
+    if ((int)f < 0 || (size_t)f >= sizeof filter_names / sizeof filter_names[0])
+        return NULL;
+    return filter_names[f];
+}
+
 bool xrd_value_yesno(const char *s, bool *out)
 {
     if (!strcmp(s, "yes"))

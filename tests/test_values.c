@@ -158,6 +158,37 @@ static void zoom_mode_round_trip(void **state)
     assert_null(xrd_value_zoom_mode_name((xrd_zoom_mode)99));
 }
 
+/* Every filter has a name that parses back to it; "bicubic" keeps meaning
+ * Catmull-Rom (XRD_FILTER_BICUBIC), so existing command lines are unchanged. */
+static void filter_round_trip(void **state)
+{
+    (void)state;
+    for (int i = 0; i < XRD_FILTER_COUNT; i++) {
+        const char *name = xrd_value_filter_name((xrd_filter)i);
+        assert_non_null(name);
+        xrd_filter f = XRD_FILTER_COUNT;
+        assert_true(xrd_value_filter(name, &f));
+        assert_int_equal(f, i);
+    }
+    xrd_filter f;
+    assert_true(xrd_value_filter("bicubic", &f));
+    assert_int_equal(f, XRD_FILTER_BICUBIC);
+    assert_true(xrd_value_filter("bicubic-ar", &f));
+    assert_int_equal(f, XRD_FILTER_BICUBIC_AR);
+    assert_true(xrd_value_filter("mitchell", &f));
+    assert_int_equal(f, XRD_FILTER_MITCHELL);
+    assert_true(xrd_value_filter("bilinear", &f));
+    assert_int_equal(f, XRD_FILTER_BILINEAR);
+    f = XRD_FILTER_MITCHELL;
+    assert_false(xrd_value_filter("lanczos2", &f));
+    assert_false(xrd_value_filter("Mitchell", &f));
+    assert_false(xrd_value_filter("bicubic-", &f));
+    assert_false(xrd_value_filter("", &f));
+    assert_int_equal(f, XRD_FILTER_MITCHELL); /* untouched on false */
+    assert_null(xrd_value_filter_name(XRD_FILTER_COUNT));
+    assert_null(xrd_value_filter_name((xrd_filter)99));
+}
+
 static void yesno(void **state)
 {
     (void)state;
@@ -180,6 +211,7 @@ int main(void)
         cmocka_unit_test(yesno),
         cmocka_unit_test(proj_round_trip), cmocka_unit_test(packing_round_trip),
         cmocka_unit_test(zoom_mode_round_trip),
+        cmocka_unit_test(filter_round_trip),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

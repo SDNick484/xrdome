@@ -8,7 +8,15 @@
 
 typedef struct xrd_renderer xrd_renderer;
 
-typedef enum { XRD_FILTER_BILINEAR, XRD_FILTER_BICUBIC } xrd_filter;
+/* Eye-pass filters for an enlarged picture; see xrd_renderer_set_filter. The
+ * order is the F key's cycle (xrd_controls_cycle_filter). */
+typedef enum {
+    XRD_FILTER_BILINEAR,
+    XRD_FILTER_BICUBIC,
+    XRD_FILTER_BICUBIC_AR,
+    XRD_FILTER_MITCHELL,
+    XRD_FILTER_COUNT
+} xrd_filter;
 
 /* Highest mipmap level the eye pass samples with xrd_draw_params.trilinear;
  * the video texture's chain holds levels 0 to this. */
@@ -31,9 +39,14 @@ void xrd_renderer_set_content_fov(xrd_renderer *r, float hfov_deg, float vfov_de
  * mono. Takes effect on the next xrd_renderer_draw. */
 void xrd_renderer_set_convergence(xrd_renderer *r, float deg);
 
-/* Eye-pass sampling of the video texture (default XRD_FILTER_BILINEAR).
- * XRD_FILTER_BICUBIC is Catmull-Rom, clamped to the eye's sub-image like the
- * bilinear path. Takes effect on the next xrd_renderer_draw. */
+/* Eye-pass sampling of the video texture (default XRD_FILTER_BILINEAR):
+ * the GPU's bilinear filter (1 texture tap per pixel); XRD_FILTER_BICUBIC,
+ * Catmull-Rom (9 taps); XRD_FILTER_BICUBIC_AR, Catmull-Rom held within the
+ * range of the 2 x 2 nearest texels (anti-ringing, 13 taps);
+ * XRD_FILTER_MITCHELL, Mitchell-Netravali B = C = 1/3 (9 taps). Each is
+ * clamped to the eye's sub-image like the bilinear path, and none is used
+ * while xrd_draw_params.trilinear is set. Takes effect on the next
+ * xrd_renderer_draw. */
 void xrd_renderer_set_filter(xrd_renderer *r, xrd_filter f);
 
 /* Ordered dithering of the 8-bit output (default off): adds a per-pixel offset

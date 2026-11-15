@@ -32,7 +32,7 @@ typedef struct {
     char mpv_scale[32];    /* --mpv-scale NAME, [general] mpv_scale: mpv's scaler for an
                               enlarged flat picture; "" = off (default) */
     float convergence;     /* --convergence DEG, -5 .. 5, default 0 */
-    xrd_filter filter;     /* --filter bilinear|bicubic, default bicubic */
+    xrd_filter filter;     /* --filter (xrd_value_filter names), default bicubic */
     xrd_fbo_format fbo_format; /* --fbo-format rgb10|rgba8, default rgb10 */
     bool dither;           /* --dither on|off, default on */
     bool deband;           /* --deband on|off, [general] deband; default off; set on mpv at open */

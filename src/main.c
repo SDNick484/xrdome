@@ -311,7 +311,7 @@ static void print_info(xrd_app *a)
         fprintf(stderr, "info: screen: fixed (VR180)\n");
     }
     fprintf(stderr, "info: filter: %s, mipmaps %s\n",
-            a->trilinear ? "trilinear" : c->filter == XRD_FILTER_BICUBIC ? "bicubic" : "bilinear",
+            a->trilinear ? "trilinear" : xrd_value_filter_name(c->filter),
             a->mip_want ? "on" : "off");
     int tw, th;
     xrd_player_texture_size(a->p, &tw, &th);
@@ -341,8 +341,7 @@ static void report_display_changes(const xrd_controls *before, const xrd_control
     if (after->zoom != before->zoom)
         fprintf(stderr, "zoom: %.2f\n", (double)after->zoom);
     if (after->filter != before->filter)
-        fprintf(stderr, "filter: %s\n",
-                after->filter == XRD_FILTER_BICUBIC ? "bicubic" : "bilinear");
+        fprintf(stderr, "filter: %s\n", xrd_value_filter_name(after->filter));
 }
 
 /* P (spec 5.7): the other projection, with its own zoom. A layout that was
@@ -407,7 +406,7 @@ static bool handle_key_action(const SDL_KeyboardEvent *k, xrd_app *a)
         break;
     case SDLK_f:
         if (!k->repeat)
-            xrd_controls_toggle_filter(ctl);
+            xrd_controls_cycle_filter(ctl);
         break;
     case SDLK_s:
         if (!k->repeat)

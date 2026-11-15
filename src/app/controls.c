@@ -146,9 +146,9 @@ void xrd_controls_toggle_swap(xrd_controls *c)
     c->layout_chosen = true;
 }
 
-void xrd_controls_toggle_filter(xrd_controls *c)
+void xrd_controls_cycle_filter(xrd_controls *c)
 {
-    c->filter = c->filter == XRD_FILTER_BICUBIC ? XRD_FILTER_BILINEAR : XRD_FILTER_BICUBIC;
+    c->filter = (xrd_filter)((c->filter + 1) % XRD_FILTER_COUNT);
 }
 
 void xrd_controls_mouse_drag(xrd_controls *c, int dx, int dy)
@@ -181,7 +181,7 @@ const xrd_key_help xrd_key_list[] = {
     {"R", "recenter, yaw only"},
     {"Shift+R", "recenter, full"},
     {"[ / ]", "zoom out / in"},
-    {"F", "bicubic / bilinear sampling"},
+    {"F", "cycle the enlarging filter"},
     {"S", "swap eyes"},
     {"M", "cycle layout (flat: 2D, half SBS, full SBS, half TB, full TB)"},
     {"P", "projection: flat / VR180"},

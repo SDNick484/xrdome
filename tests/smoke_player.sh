@@ -365,6 +365,8 @@ check "size change: trilinear draws at 1280x720 then 1920x1080, all checked" $?
 #   nosubs  PPM and PPM2 do not differ in the lower part of each eye
 #   same    PPM and PPM2 show the same picture: under 0.5% of pixels differ by
 #           more than 48 in a channel
+#   differs PPM and PPM2 are not the same frame: at least 100 pixels differ by
+#           more than 4 in a channel
 #   subsat  PPM PPM2 PPM3 PPM4: the subtitle pixels (PPM against PPM2) cover the
 #           same box in each eye as those of PPM3 against PPM4, within 2% of
 #           the eye's width and height
@@ -448,6 +450,12 @@ elif mode == "same":
             for y in range(h) for x in range(w))
     v = n / (w * h)
     expect("pixels that differ", v, v < .005)
+elif mode == "differs":
+    other = load(sys.argv[3])
+    assert other[:2] == img[:2], "frame sizes differ"
+    n = sum(max(abs(a - b) for a, b in zip(pix(img, x, y), pix(other, x, y))) > 4
+            for y in range(h) for x in range(w))
+    expect("pixels that differ by more than 4", n, n >= 100)
 elif mode == "subsat":
     a2, b1, b2 = load(sys.argv[3]), load(sys.argv[4]), load(sys.argv[5])
     assert a2[:2] == img[:2] == b1[:2] == b2[:2], "frame sizes differ"
@@ -762,6 +770,30 @@ flat v7 --frames 30 --mpv-scale spline36 --dump-frame "$work/v7.ppm" "$work/patt
 grep -qx 'video texture: rgb10_a2 4096x2048 dither=on mipmap=off mpv-scale=unused' "$work/v7.err"
 check "V7 VR180: coded texture, mpv-scale unused" $?
 check_frame "$work/v7.ppm"; check "V7 colours and orientation" $?
+
+# ---- --filter: the enlarging filters (E1 to E3) ----
+# small.mp4 (480x270) at zoom 1.0 is enlarged 4/3 into the 640x360 eye, with no mipmaps and
+# no --mpv-scale, so the eye pass's filter decides every pixel.
+# E1. bicubic (Catmull-Rom, the default) fills the eye exactly.
+flat e1 --frames 30 --zoom 1.0 --dump-frame "$work/e1.ppm" "$work/small.mp4"
+grep -qx 'video texture: rgb10_a2 480x270 dither=on mipmap=off' "$work/e1.err"
+check "E1 the coded 480x270 texture, no mipmaps" $?
+check_flat fill "$work/e1.ppm"; check "E1 bicubic: border on the eye edges, no black inside" $?
+# E2 bicubic-ar, E3 mitchell: the same picture as bicubic, but not the same frame (the flag
+# reaches the eye pass), and in half SBS each viewport shows only its own eye.
+n=2
+for filt in bicubic-ar mitchell; do
+    flat "e$n" --frames 30 --zoom 1.0 --filter "$filt" --dump-frame "$work/e$n.ppm" \
+         "$work/small.mp4"
+    no_xrdome_lines "$work/e$n.err"; check "E$n --filter $filt: no xrdome lines" $?
+    check_flat fill "$work/e$n.ppm"; check "E$n $filt: border on the eye edges, no black inside" $?
+    check_flat same "$work/e$n.ppm" "$work/e1.ppm"; check "E$n $filt: same picture as bicubic" $?
+    check_flat differs "$work/e$n.ppm" "$work/e1.ppm"; check "E$n $filt: not bicubic's frame" $?
+    flat "e${n}s" --frames 30 --zoom 1.0 --filter "$filt" --dump-frame "$work/e${n}s.ppm" \
+         "$work/small.HSBS.mp4"
+    check_flat eyes "$work/e${n}s.ppm"; check "E$n $filt half SBS: left viewport red, right blue" $?
+    n=$((n + 1))
+done
 
 # ---- per-file settings memory (M1 to M10) ----
 cp "$work/pattern.mp4" "$work/mem.mp4"

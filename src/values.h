@@ -8,6 +8,7 @@
 #include <stdbool.h>
 
 #include "render/projection.h"
+#include "render/renderer_gl.h"
 
 #define XRD_ZOOM_MIN 0.25f
 #define XRD_ZOOM_MAX 4.0f
@@ -45,6 +46,10 @@ const char *xrd_value_packing_name(xrd_packing p);     /* NULL if out of enum ra
 /* "screen" or "magnify". */
 bool xrd_value_zoom_mode(const char *s, xrd_zoom_mode *out);
 const char *xrd_value_zoom_mode_name(xrd_zoom_mode m); /* NULL if out of enum range */
+
+/* "bilinear", "bicubic", "bicubic-ar" or "mitchell". */
+bool xrd_value_filter(const char *s, xrd_filter *out);
+const char *xrd_value_filter_name(xrd_filter f);       /* NULL if out of enum range */
 
 /* "yes" or "no". */
 bool xrd_value_yesno(const char *s, bool *out);

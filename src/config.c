@@ -531,13 +531,10 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
                 c->explicit_flags |= XRD_SET_CONVERGENCE;
             break;
         case OPT_FILTER:
-            if (!strcmp(optarg, "bilinear"))
-                c->filter = XRD_FILTER_BILINEAR;
-            else if (!strcmp(optarg, "bicubic"))
-                c->filter = XRD_FILTER_BICUBIC;
-            else {
-                set_err(err, errlen, "--filter: unknown filter '%s' (expected bilinear or bicubic)",
-                        optarg);
+            if (!xrd_value_filter(optarg, &c->filter)) {
+                set_err(err, errlen,
+                        "--filter: unknown filter '%s' (expected bilinear, bicubic, bicubic-ar "
+                        "or mitchell)", optarg);
                 rc = -1;
             }
             break;

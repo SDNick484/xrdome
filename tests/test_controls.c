@@ -331,15 +331,21 @@ static void init_display_defaults_and_values(void **state)
     assert_int_equal(c.filter, XRD_FILTER_BILINEAR);
 }
 
-static void filter_toggles(void **state)
+/* F from the default (bicubic): the other filters in xrd_filter order,
+ * wrapping after the last, then bicubic again; each has a name. */
+static void filter_cycles(void **state)
 {
     (void)state;
     xrd_controls c;
     xrd_controls_init(&c, 1.0f, XRD_LAYOUT_SBS_LR);
-    xrd_controls_toggle_filter(&c);
-    assert_int_equal(c.filter, XRD_FILTER_BILINEAR);
-    xrd_controls_toggle_filter(&c);
-    assert_int_equal(c.filter, XRD_FILTER_BICUBIC);
+    const xrd_filter want[] = {XRD_FILTER_BICUBIC_AR, XRD_FILTER_MITCHELL, XRD_FILTER_BILINEAR,
+                               XRD_FILTER_BICUBIC};
+    assert_int_equal(sizeof want / sizeof want[0], XRD_FILTER_COUNT);
+    for (size_t i = 0; i < sizeof want / sizeof want[0]; i++) {
+        xrd_controls_cycle_filter(&c);
+        assert_int_equal(c.filter, want[i]);
+        assert_non_null(xrd_value_filter_name(c.filter));
+    }
 }
 
 /* The ? list has the README's Keys table's keys, in its order. */
@@ -402,7 +408,7 @@ int main(void)
         cmocka_unit_test(yaw_is_not_clamped),
         cmocka_unit_test(recenter_zeroes_mouse_angles_only),
         cmocka_unit_test(init_display_defaults_and_values),
-        cmocka_unit_test(filter_toggles),
+        cmocka_unit_test(filter_cycles),
         cmocka_unit_test(key_list_matches_readme),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);

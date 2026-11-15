@@ -9,7 +9,7 @@ uniform vec2  u_flat_half;  // flat: the screen's half-extents on the plane z = 
 uniform float u_flat_curve; // flat: 0 for the plane, else the curved screen's radius (--screen-curve)
 uniform vec2  u_eye_scale;  // eye sub-image transform per axis: tex = uv * scale + offset
 uniform vec2  u_eye_offset;
-uniform bool  u_bicubic;    // Catmull-Rom instead of the hardware bilinear filter
+uniform int   u_filter;     // 0: the hardware bilinear filter, 1 to 3: enlarge()
 uniform bool  u_dither;     // ordered dithering of the 8-bit output
 uniform bool  u_trilinear;  // sample through the mipmap chain (levels 0..u_max_level)
 uniform int   u_max_level;  // XRD_MIP_MAX_LEVEL
@@ -32,29 +32,72 @@ vec4 tap(vec2 uv, vec2 m)
     return textureLod(u_video, uv * g_sc + g_lo, 0.0);
 }
 
-// Catmull-Rom as 9 bilinear taps (3 x 3): on each axis the two middle
-// weights (both >= 0) merge into one bilinear tap placed between their
-// texels. Clamping every tap like tap() gives exactly clamp-to-edge
-// Catmull-Rom over the eye's sub-image. size is the sub-image in texels.
-vec4 catmull_rom(vec2 uv, vec2 size, vec2 m)
+// A separable 4 x 4 filter as 9 bilinear taps (3 x 3). w0 to w3 weigh the
+// texels centred at p1 - 1, p1, p1 + 1 and p1 + 2 on each axis (p1 in texels
+// of the sub-image, on a texel centre) and sum to 1. On each axis the two
+// middle weights (both >= 0 for every kernel here) merge into one bilinear
+// tap placed between their texels. Clamping every tap like tap() gives
+// exactly the clamp-to-edge filter over the eye's sub-image. size is the
+// sub-image in texels.
+vec4 sep9(vec2 p1, vec2 size, vec2 m, vec2 w0, vec2 w1, vec2 w2, vec2 w3)
 {
-    vec2 p = uv * size;
-    vec2 p1 = floor(p - 0.5) + 0.5;
-    vec2 f = p - p1;
-    vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
-    vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
-    vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
-    vec2 w3 = f * f * (-0.5 + 0.5 * f);
     vec2 w12 = w1 + w2;
     vec2 t0 = (p1 - 1.0) / size;
     vec2 t12 = (p1 + w2 / w12) / size;
     vec2 t3 = (p1 + 2.0) / size;
-    vec4 c = (tap(vec2(t0.x,  t0.y), m) * w0.x + tap(vec2(t12.x,  t0.y), m) * w12.x +
-              tap(vec2(t3.x,  t0.y), m) * w3.x) * w0.y
-           + (tap(vec2(t0.x, t12.y), m) * w0.x + tap(vec2(t12.x, t12.y), m) * w12.x +
-              tap(vec2(t3.x, t12.y), m) * w3.x) * w12.y
-           + (tap(vec2(t0.x,  t3.y), m) * w0.x + tap(vec2(t12.x,  t3.y), m) * w12.x +
-              tap(vec2(t3.x,  t3.y), m) * w3.x) * w3.y;
+    return (tap(vec2(t0.x,  t0.y), m) * w0.x + tap(vec2(t12.x,  t0.y), m) * w12.x +
+            tap(vec2(t3.x,  t0.y), m) * w3.x) * w0.y
+         + (tap(vec2(t0.x, t12.y), m) * w0.x + tap(vec2(t12.x, t12.y), m) * w12.x +
+            tap(vec2(t3.x, t12.y), m) * w3.x) * w12.y
+         + (tap(vec2(t0.x,  t3.y), m) * w0.x + tap(vec2(t12.x,  t3.y), m) * w12.x +
+            tap(vec2(t3.x,  t3.y), m) * w3.x) * w3.y;
+}
+
+// Mitchell-Netravali (B = C = 1/3) at distance x: inner for x < 1, outer
+// for 1 <= x < 2.
+vec2 mitchell_inner(vec2 x)
+{
+    return ((7.0 * x - 12.0) * x * x + 16.0 / 3.0) / 6.0;
+}
+
+vec2 mitchell_outer(vec2 x)
+{
+    return (((-7.0 / 3.0 * x + 12.0) * x - 20.0) * x + 32.0 / 3.0) / 6.0;
+}
+
+// The enlarging filters (u_filter 1 to 3) at eye-local uv, which main() has
+// already clamped half a texel inside the sub-image:
+//   1 Catmull-Rom (B = 0, C = 1/2): 9 taps.
+//   2 Catmull-Rom with anti-ringing: the result is held, per channel, within
+//     the darkest and brightest of the 2 x 2 texels around uv (each read at
+//     its centre, so exactly that texel), which removes the halo next to
+//     hard edges and keeps the steepness: 9 + 4 = 13 taps. Those four taps
+//     are clamped like the others and stay in the sub-image.
+//   3 Mitchell-Netravali (B = C = 1/3): softer, with about half the halo.
+//     9 taps.
+vec4 enlarge(vec2 uv, vec2 size, vec2 m)
+{
+    vec2 p = uv * size;
+    vec2 p1 = floor(p - 0.5) + 0.5;
+    vec2 f = p - p1;
+    vec2 w0, w1, w2, w3;
+    if (u_filter == 3) {
+        w0 = mitchell_outer(1.0 + f);
+        w1 = mitchell_inner(f);
+        w2 = mitchell_inner(1.0 - f);
+        w3 = mitchell_outer(2.0 - f);
+    } else {
+        w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+        w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+        w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+        w3 = f * f * (-0.5 + 0.5 * f);
+    }
+    vec4 c = sep9(p1, size, m, w0, w1, w2, w3);
+    if (u_filter == 2) {
+        vec4 a = tap(p1 / size, m), b = tap(vec2(p1.x + 1.0, p1.y) / size, m);
+        vec4 d = tap(vec2(p1.x, p1.y + 1.0) / size, m), e = tap((p1 + 1.0) / size, m);
+        c = clamp(c, min(min(a, b), min(d, e)), max(max(a, b), max(d, e)));
+    }
     return clamp(c, 0.0, 1.0);
 }
 
@@ -158,12 +201,12 @@ void main()
         vec2 mt = min(mip_margin(k, ts) / size, vec2(0.5)) * split;
         c = textureLod(u_video, clamp(uv, mt, 1.0 - mt) * g_sc + g_lo, lod).rgb;
     } else {
-        // Half a texel of the sub-image as the clamp margin: Catmull-Rom
+        // Half a texel of the sub-image as the clamp margin: enlarge()
         // clamps both axes; bilinear clamps u, and v only when v is split (an
         // unsplit v is held at the texture edge by GL_CLAMP_TO_EDGE).
         vec2 m = 0.5 / size;
-        c = u_bicubic ? catmull_rom(clamp(uv, m, 1.0 - m), size, m).rgb
-                      : tap(uv, vec2(m.x, u_eye_scale.y < 1.0 ? m.y : 0.0)).rgb;
+        c = u_filter != 0 ? enlarge(clamp(uv, m, 1.0 - m), size, m).rgb
+                          : tap(uv, vec2(m.x, u_eye_scale.y < 1.0 ? m.y : 0.0)).rgb;
     }
     // The window is 8-bit: without dithering a 10-bit texture's extra
     // precision is rounded away here. Interleaved gradient noise gives each
