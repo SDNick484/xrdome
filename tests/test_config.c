@@ -939,14 +939,22 @@ static void args_filter(void **state)
     char *b[] = {"xrdome", "--filter", "bicubic", "a.mp4", NULL};
     assert_int_equal(xrd_config_parse_args(&c, 4, b, err, sizeof err), 0);
     assert_int_equal(c.filter, XRD_FILTER_BICUBIC);
+    char *d[] = {"xrdome", "--filter", "bicubic-ar", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, d, err, sizeof err), 0);
+    assert_int_equal(c.filter, XRD_FILTER_BICUBIC_AR);
+    char *e[] = {"xrdome", "--filter", "mitchell", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, e, err, sizeof err), 0);
+    assert_int_equal(c.filter, XRD_FILTER_MITCHELL);
 
-    const char *bad[] = {"lanczos", "Bicubic", "", "nearest"};
+    const char *bad[] = {"lanczos", "lanczos2", "Bicubic", "", "nearest", "bicubic_ar"};
     for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
         xrd_config_defaults(&c);
         char *x[] = {"xrdome", "--filter", (char *)bad[i], "a.mp4", NULL};
         assert_int_equal(xrd_config_parse_args(&c, 4, x, err, sizeof err), -1);
         assert_non_null(strstr(err, "filter"));
         assert_non_null(strstr(err, bad[i]));
+        assert_non_null(strstr(err, "bicubic-ar"));
+        assert_non_null(strstr(err, "mitchell"));
         assert_int_equal(c.filter, XRD_FILTER_BICUBIC);
     }
 }

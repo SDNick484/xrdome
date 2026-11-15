@@ -66,7 +66,8 @@ void xrd_controls_zoom_out(xrd_controls *c);      /* zoom / 1.1, at least 0.25 *
  * entry. Sets layout_chosen. */
 void xrd_controls_cycle_layout(xrd_controls *c, double frame_aspect);
 void xrd_controls_toggle_swap(xrd_controls *c);   /* sets layout_chosen */
-void xrd_controls_toggle_filter(xrd_controls *c); /* bicubic <-> bilinear (F) */
+/* F: the next filter in xrd_filter order, after the last the first. */
+void xrd_controls_cycle_filter(xrd_controls *c);
 /* Left-button drag by (dx, dy) window pixels, SDL axes (+y down): dragging
  * right looks right, dragging up looks up, 0.1 degrees per pixel. */
 void xrd_controls_mouse_drag(xrd_controls *c, int dx, int dy);

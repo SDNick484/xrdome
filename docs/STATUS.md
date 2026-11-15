@@ -521,6 +521,75 @@ Run on the glasses on 2026-11-14 (see Hardware run 2026-11-14): cheap on this GP
 at most a slight improvement over `off`; no flash on resize; no fringe at the eyes' shared edge in
 a full SBS film. Not checked: subtitles with it, the `I` line at zoom 1.5. Off by default stays.
 
+## Enlarging filter in the eye pass (`--filter`, `F`, issue #25)
+
+`--filter bilinear|bicubic|bicubic-ar|mitchell` (default `bicubic`, command line only as before);
+`F` cycles bilinear, bicubic, bicubic-ar, mitchell and back, printing `filter: NAME`; `I` prints
+the name. The filter acts wherever the eye pass enlarges: all of VR180 (about 2 to 6x) and flat
+video that is enlarged without `--mpv-scale` or beyond its cap. Mipmaps still take over while
+shrinking.
+
+Decisions:
+- Kept `bicubic-ar` (Catmull-Rom with anti-ringing: the result held, per channel, within the
+  lowest and highest of the 2 x 2 texels around the sample point) and `mitchell`
+  (Mitchell-Netravali, B = C = 1/3). Texture reads per pixel: bilinear 1, bicubic 9, bicubic-ar
+  13 (the 9 plus the 4 nearest texels, each read at its centre), mitchell 9. Mitchell uses the same
+  9-tap merge as Catmull-Rom: its two middle weights are positive for every fraction.
+- Dropped Lanczos-2 after trying it: it can use the same 9 taps (its middle weights are positive
+  too), but in the comparison below it was within one level of Catmull-Rom on every measure, at
+  8 more sines per pixel. EWA / jinc was not tried: it is not separable, so it needs about 16 or
+  more single reads per pixel plus a Bessel-like weight each, while the 8K VR180 file already
+  misses 1.6% of vsyncs with the defaults.
+- `bicubic` stays the default and keeps its meaning (exactly the previous Catmull-Rom, same
+  shader arithmetic). `bicubic-ar` looks strictly better in the sandbox (same steepness, no halo)
+  for 4 more reads, but it has not been seen or timed on the glasses, so the evidence is not
+  enough to change the default.
+- No ini key: `filter` has not been one (README Flags; `ini_new_flags_are_not_keys` checks it).
+  The issue assumed an ini key existed; adding one is a separate decision.
+- All filters share one clamp: every tap goes through `tap()`, so no read reaches the other eye's
+  pixels or the shared middle texel of an odd split, for the new 4 reads as for the 9.
+
+Comparison in the sandbox (flat, `--zoom 1.0 --dither off`, a synthetic 16:9 picture with text,
+1-pixel diagonals, black/white and 100/160 grey steps and 1-pixel gratings, lossless RGB, dumped
+with `--dump-frame` from the 640x360 eye; crops in the PR description):
+
+| 4x enlargement | ring at the grey step (levels) | halo pixels around text (white on 20, black on 235) | grating contrast, 2-pixel period |
+|---|---|---|---|
+| bilinear | 0 | 0, 0 | 0.75 |
+| bicubic | 4 | 1708, 1116 | 0.91 |
+| bicubic-ar | 0 | 0, 0 | 0.91 |
+| mitchell | 2 | 265, 104 | 0.71 |
+| lanczos2 (dropped) | 5 | 1796, 1170 | 0.92 |
+
+At 2x the order is the same (bicubic 4, mitchell 1, bicubic-ar 0 levels of ring; contrast 0.50,
+0.69, 0.69, 0.54 for bilinear, bicubic, bicubic-ar, mitchell). A thin bright line peaks slightly
+lower with bicubic-ar than with bicubic (194 against 202 at 4x). Rough relative cost on Mesa
+llvmpipe (CPU, a 7680x3840 texture drawn into 3840x1080, three noisy runs): bilinear 1, bicubic
+about 3, mitchell about 3.3, bicubic-ar about 4 (lanczos2 about 4). That is not the GPU.
+
+Verified in the sandbox (llvmpipe): render tests for each new filter against a double-precision
+reference on a horizontal and a vertical step (`bicubic_ar_matches_reference`,
+`mitchell_matches_reference`, `new_filters_vertical_match_reference`); bicubic-ar against a 2D
+reference and within the 2 x 2 range on a noise texture at two views, where Catmull-Rom leaves
+that range (`bicubic_ar_stays_in_2x2_range`); constant input stays constant at three views and
+dithering stays within one level, for every filter; and every filter passes the existing eye-edge
+checks (VR180 seam, flat stereo colours, seam edge at 20x magnify for even and odd sizes, odd
+sizes straight ahead, and the shrinking cases with trilinear off). Mutations that drop the
+anti-ringing clamp, move one of its reads off its texel or change a Mitchell weight each fail
+these tests. Smoke E1 to E3: a 480x270 picture enlarged 4/3 with `bicubic`, `bicubic-ar` and
+`mitchell` fills the eye, shows the same picture as `bicubic` but a different frame, and half SBS
+keeps each viewport to its own eye. Not verified: the `F` key and its `filter:` line (the smoke
+test sends no keys); the look on the glasses; GPU cost.
+
+Hardware check (owner, after merge):
+1. On a VR180 file (the enlargement is largest there) and then a 1080p film, on a still frame,
+   `F` through all four filters: is `bicubic-ar` better than `bicubic` (no halo at high-contrast
+   edges, no loss of detail), and is `mitchell` worth keeping? If `bicubic-ar` wins, it can become
+   the default.
+2. Timing pair on the 8K AV1 VR180 file at zoom 1.0, AC power, `--no-memory --frames 3600`, a
+   `--timing-log` each, no keys: `--filter bicubic` against `--filter bicubic-ar` (the most
+   expensive), missed vsyncs from the `timing:` line. The defaults missed 1.6% there on 2026-11-14.
+
 ## XREAL Air 2 Pro (owner, 2026-11-14, `main` at `bb95090`)
 - VR180 and flat files played on the XREAL Air 2 Pro with head tracking, "pretty much the same" as
   on the Viture Pro XR, both with `--device xreal-air2pro` and without it.

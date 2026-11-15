@@ -15,6 +15,7 @@
 #include "math/quat.h"
 #include "render/projection.h"
 #include "render/renderer_gl.h"
+#include "values.h"
 
 #define W 384
 #define H 108
@@ -27,6 +28,11 @@ static GLuint g_fbo, g_color, g_tex, g_quad_tex;
 static xrd_renderer *g_r;
 static float g_th, g_tv;
 static float g_curve; /* xrd_draw_params.screen_curve for draw_flat and draw_big */
+
+/* Every eye-pass filter, for the checks that must hold for each of them. */
+#define ALL_FILTERS \
+    {XRD_FILTER_BILINEAR, XRD_FILTER_BICUBIC, XRD_FILTER_BICUBIC_AR, XRD_FILTER_MITCHELL}
+#define N_FILTERS 4
 
 /* Colour of quadrant (eye, right half?, top half?) of the quadrant texture. */
 static const uint8_t *quad_colour(int eye, int right, int top)
@@ -587,7 +593,7 @@ static void convergence_pitched_shifts_horizontally(void **state)
     check_convergence_pitched(-4.f);
 }
 
-/* ---- bicubic (Catmull-Rom) ---- */
+/* ---- the enlarging filters: bicubic (Catmull-Rom), bicubic-ar, mitchell ---- */
 
 #define STEP_EW 32
 #define STEP_H 16
@@ -613,32 +619,49 @@ static GLuint make_step_tex(void)
     return make_tex(2 * STEP_EW, STEP_H, px);
 }
 
-/* Catmull-Rom of one row of n texels at texel-space position p (texel i is
- * centred on i + 0.5), clamping indices to the row (clamp to edge). */
-static double catmull_rom(const double *row, int n, double p)
+/* Mitchell-Netravali's family at distance x >= 0, from the textbook form
+ * (Mitchell and Netravali 1988). */
+static double bc_kernel(double b, double c, double x)
+{
+    if (x < 1)
+        return ((12 - 9 * b - 6 * c) * x * x * x + (-18 + 12 * b + 6 * c) * x * x +
+                (6 - 2 * b)) / 6;
+    if (x < 2)
+        return ((-b - 6 * c) * x * x * x + (6 * b + 30 * c) * x * x + (-12 * b - 48 * c) * x +
+                (8 * b + 24 * c)) / 6;
+    return 0;
+}
+
+/* Filter f (not bilinear) of one row of n texels at texel-space position p
+ * (texel i is centred on i + 0.5), clamping indices to the row (clamp to
+ * edge): Catmull-Rom is B = 0, C = 1/2, Mitchell B = C = 1/3, and bicubic-ar
+ * Catmull-Rom held within the two texels around p. */
+static double filter_1d(xrd_filter f, const double *row, int n, double p)
 {
     double s = p - 0.5;
     int i1 = (int)floor(s);
-    double f = s - i1;
-    double w[4] = {
-        0.5 * (-f * f * f + 2 * f * f - f),
-        0.5 * (3 * f * f * f - 5 * f * f + 2),
-        0.5 * (-3 * f * f * f + 4 * f * f + f),
-        0.5 * (f * f * f - f * f),
-    };
-    double sum = 0;
+    double t = s - i1;
+    double b = f == XRD_FILTER_MITCHELL ? 1.0 / 3.0 : 0.0;
+    double c = f == XRD_FILTER_MITCHELL ? 1.0 / 3.0 : 0.5;
+    double sum = 0, lo = 1e9, hi = -1e9;
     for (int k = 0; k < 4; k++) {
         int i = i1 - 1 + k;
         i = i < 0 ? 0 : (i > n - 1 ? n - 1 : i);
-        sum += w[k] * row[i];
+        sum += bc_kernel(b, c, fabs(k - 1 - t)) * row[i];
+        if (k == 1 || k == 2) {
+            lo = fmin(lo, row[i]);
+            hi = fmax(hi, row[i]);
+        }
     }
+    if (f == XRD_FILTER_BICUBIC_AR)
+        sum = sum < lo ? lo : (sum > hi ? hi : sum);
     return sum;
 }
 
 /* Reference value of viewport pixel (x, y) for the step texture, identity
  * view, 180 x 180 content: the eye-pass mapping in double precision, the
- * half-texel seam clamp, then Catmull-Rom across the eye's sub-image. */
-static double step_reference(int x, int y)
+ * half-texel seam clamp, then filter f across the eye's sub-image. */
+static double step_reference(xrd_filter f, int x, int y)
 {
     double ndc_x = (x + 0.5) / (W / 4.0) - 1.0, ndc_y = (y + 0.5) / (H / 2.0) - 1.0;
     double dx = ndc_x * g_th, dy = ndc_y * g_tv, dz = -1.0;
@@ -651,35 +674,67 @@ static double step_reference(int x, int y)
     double row[STEP_EW];
     for (int i = 0; i < STEP_EW; i++)
         row[i] = step_value(i);
-    double v = catmull_rom(row, STEP_EW, u * STEP_EW);
+    double v = filter_1d(f, row, STEP_EW, u * STEP_EW);
     return v < 0 ? 0 : (v > 255 ? 255 : v);
+}
+
+/* Draws the step texture with filter f and compares the middle row of both
+ * eyes with step_reference; returns the reference's lowest and highest value
+ * along it. */
+static void check_step_reference(xrd_filter f, double *undershoot, double *overshoot)
+{
+    GLuint tex = make_step_tex();
+    xrd_renderer_set_filter(g_r, f);
+    draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false, false);
+    int y = H / 2;
+    *undershoot = 255;
+    *overshoot = 0;
+    for (int eye = 0; eye < 2; eye++)
+        for (int x = 0; x < W / 2; x++) {
+            double want = step_reference(f, x, y);
+            *undershoot = fmin(*undershoot, want);
+            *overshoot = fmax(*overshoot, want);
+            const uint8_t *p = &g_img[(y * W + eye * (W / 2) + x) * 4];
+            for (int c = 0; c < 3; c++)
+                if (fabs(p[c] - want) > 3.0)
+                    fail_msg("%s: eye %d pixel %d channel %d = %d, reference %.2f",
+                             xrd_value_filter_name(f), eye, x, c, p[c], want);
+        }
+    glDeleteTextures(1, &tex);
 }
 
 static void bicubic_matches_catmull_rom_reference(void **state)
 {
     (void)state;
-    GLuint tex = make_step_tex();
-    xrd_renderer_set_filter(g_r, XRD_FILTER_BICUBIC);
-    draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false, false);
-    int y = H / 2;
-    double undershoot = 255, overshoot = 0;
-    for (int eye = 0; eye < 2; eye++)
-        for (int x = 0; x < W / 2; x++) {
-            double want = step_reference(x, y);
-            if (want < undershoot)
-                undershoot = want;
-            if (want > overshoot)
-                overshoot = want;
-            const uint8_t *p = &g_img[(y * W + eye * (W / 2) + x) * 4];
-            for (int c = 0; c < 3; c++)
-                if (fabs(p[c] - want) > 3.0)
-                    fail_msg("eye %d pixel %d channel %d = %d, Catmull-Rom reference %.2f",
-                             eye, x, c, p[c], want);
-        }
+    double undershoot, overshoot;
+    check_step_reference(XRD_FILTER_BICUBIC, &undershoot, &overshoot);
     /* The reference really rings around the edge, so it is not bilinear. */
     assert_true(undershoot < STEP_LO - 5);
     assert_true(overshoot > STEP_HI + 5);
-    glDeleteTextures(1, &tex);
+}
+
+/* Anti-ringing: Catmull-Rom without its halo. The step's 150-level edge
+ * would ring by about 11 levels; here it stays within LO..HI. */
+static void bicubic_ar_matches_reference(void **state)
+{
+    (void)state;
+    double undershoot, overshoot;
+    check_step_reference(XRD_FILTER_BICUBIC_AR, &undershoot, &overshoot);
+    assert_true(undershoot >= STEP_LO);
+    assert_true(overshoot <= STEP_HI);
+}
+
+/* Mitchell rings too, but about half as much as Catmull-Rom (at most 5.4
+ * levels on this 150-level step against 11.1). */
+static void mitchell_matches_reference(void **state)
+{
+    (void)state;
+    double undershoot, overshoot, cr_under, cr_over;
+    check_step_reference(XRD_FILTER_MITCHELL, &undershoot, &overshoot);
+    check_step_reference(XRD_FILTER_BICUBIC, &cr_under, &cr_over);
+    assert_true(undershoot < STEP_LO && overshoot > STEP_HI);
+    assert_true(STEP_LO - undershoot < (STEP_LO - cr_under) * 2 / 3);
+    assert_true(overshoot - STEP_HI < (cr_over - STEP_HI) * 2 / 3);
 }
 
 /* Transposed step: each eye's sub-image is STEP_LO in its lower half and
@@ -707,8 +762,8 @@ static GLuint make_vstep_tex(void)
 
 /* Reference value of viewport pixel (x, y) for the transposed step texture,
  * identity view, 180 x 180 content: v from the latitude, the half-texel clamp
- * on v, then Catmull-Rom down the column. */
-static double vstep_reference(int x, int y)
+ * on v, then filter f down the column. */
+static double vstep_reference(xrd_filter f, int x, int y)
 {
     double ndc_x = (x + 0.5) / (W / 4.0) - 1.0, ndc_y = (y + 0.5) / (H / 2.0) - 1.0;
     double dx = ndc_x * g_th, dy = ndc_y * g_tv, dz = -1.0;
@@ -719,37 +774,53 @@ static double vstep_reference(int x, int y)
     double col[VSTEP_H];
     for (int i = 0; i < VSTEP_H; i++)
         col[i] = vstep_value(i);
-    double r = catmull_rom(col, VSTEP_H, v * VSTEP_H);
+    double r = filter_1d(f, col, VSTEP_H, v * VSTEP_H);
     return r < 0 ? 0 : (r > 255 ? 255 : r);
+}
+
+static void check_vstep_reference(xrd_filter f, double *undershoot, double *overshoot)
+{
+    GLuint tex = make_vstep_tex();
+    xrd_renderer_set_filter(g_r, f);
+    draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false, false);
+    int x = W / 4;
+    *undershoot = 255;
+    *overshoot = 0;
+    for (int eye = 0; eye < 2; eye++)
+        for (int y = 0; y < H; y++) {
+            double want = vstep_reference(f, x, y);
+            *undershoot = fmin(*undershoot, want);
+            *overshoot = fmax(*overshoot, want);
+            const uint8_t *p = &g_img[(y * W + eye * (W / 2) + x) * 4];
+            for (int c = 0; c < 3; c++)
+                if (fabs(p[c] - want) > 3.0)
+                    fail_msg("%s: eye %d row %d channel %d = %d, reference %.2f",
+                             xrd_value_filter_name(f), eye, y, c, p[c], want);
+        }
+    glDeleteTextures(1, &tex);
 }
 
 static void bicubic_vertical_matches_catmull_rom_reference(void **state)
 {
     (void)state;
-    GLuint tex = make_vstep_tex();
-    xrd_renderer_set_filter(g_r, XRD_FILTER_BICUBIC);
-    draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false, false);
-    int x = W / 4;
-    double undershoot = 255, overshoot = 0;
-    for (int eye = 0; eye < 2; eye++)
-        for (int y = 0; y < H; y++) {
-            double want = vstep_reference(x, y);
-            if (want < undershoot)
-                undershoot = want;
-            if (want > overshoot)
-                overshoot = want;
-            const uint8_t *p = &g_img[(y * W + eye * (W / 2) + x) * 4];
-            for (int c = 0; c < 3; c++)
-                if (fabs(p[c] - want) > 3.0)
-                    fail_msg("eye %d row %d channel %d = %d, Catmull-Rom reference %.2f",
-                             eye, y, c, p[c], want);
-        }
+    double undershoot, overshoot;
+    check_vstep_reference(XRD_FILTER_BICUBIC, &undershoot, &overshoot);
     /* The reference rings around the edge, so bilinear would not pass. */
     assert_true(undershoot < STEP_LO - 5);
     assert_true(overshoot > STEP_HI + 5);
-    glDeleteTextures(1, &tex);
 }
 
+static void new_filters_vertical_match_reference(void **state)
+{
+    (void)state;
+    double undershoot, overshoot;
+    check_vstep_reference(XRD_FILTER_BICUBIC_AR, &undershoot, &overshoot);
+    assert_true(undershoot >= STEP_LO && overshoot <= STEP_HI);
+    check_vstep_reference(XRD_FILTER_MITCHELL, &undershoot, &overshoot);
+    assert_true(undershoot < STEP_LO && overshoot > STEP_HI);
+}
+
+/* Each enlarging filter is steeper than bilinear at the step's edge. */
 static void bicubic_differs_from_bilinear_near_edge(void **state)
 {
     (void)state;
@@ -758,19 +829,24 @@ static void bicubic_differs_from_bilinear_near_edge(void **state)
     xrd_renderer_set_filter(g_r, XRD_FILTER_BILINEAR);
     draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false, false);
     memcpy(lin, g_img, sizeof lin);
-    xrd_renderer_set_filter(g_r, XRD_FILTER_BICUBIC);
-    draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false, false);
-    int y = H / 2, max_diff = 0, at = -1;
-    for (int x = 0; x < W / 2; x++) {
-        int d = abs((int)g_img[(y * W + x) * 4] - (int)lin[(y * W + x) * 4]);
-        if (d > max_diff) {
-            max_diff = d;
-            at = x;
+    const xrd_filter filters[] = {XRD_FILTER_BICUBIC, XRD_FILTER_BICUBIC_AR, XRD_FILTER_MITCHELL};
+    for (size_t f = 0; f < sizeof filters / sizeof filters[0]; f++) {
+        xrd_renderer_set_filter(g_r, filters[f]);
+        draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false, false);
+        int y = H / 2, max_diff = 0, at = -1;
+        for (int x = 0; x < W / 2; x++) {
+            int d = abs((int)g_img[(y * W + x) * 4] - (int)lin[(y * W + x) * 4]);
+            if (d > max_diff) {
+                max_diff = d;
+                at = x;
+            }
         }
+        if (max_diff < 6)
+            fail_msg("%s: at most %d/255 from bilinear", xrd_value_filter_name(filters[f]),
+                     max_diff);
+        /* ...and that difference is near the edge (the viewport centre). */
+        assert_true(abs(at - W / 4) < W / 8);
     }
-    assert_true(max_diff >= 6);
-    /* ...and that difference is near the edge (the viewport centre). */
-    assert_true(abs(at - W / 4) < W / 8);
     glDeleteTextures(1, &tex);
 }
 
@@ -785,20 +861,23 @@ static void bicubic_keeps_flat_colour(void **state)
         px[i * 4 + 3] = 255;
     }
     GLuint tex = make_tex(TEX_W, TEX_H, px);
-    xrd_renderer_set_filter(g_r, XRD_FILTER_BICUBIC);
+    const xrd_filter filters[N_FILTERS] = ALL_FILTERS;
     const xrd_quat views[] = {XRD_QUAT_IDENTITY, xrd_quat_from_ypr_deg(-60, 25, 0),
                               xrd_quat_from_ypr_deg(80, -70, 10)};
-    for (size_t v = 0; v < sizeof views / sizeof views[0]; v++) {
-        draw_tex(tex, views[v], XRD_LAYOUT_SBS_LR, false, false);
-        for (int y = 0; y < H; y++)
-            for (int x = 0; x < W; x++) {
-                const uint8_t *p = &g_img[(y * W + x) * 4];
-                if (p[0] + p[1] + p[2] == 0)
-                    continue; /* behind the viewer: black by design */
-                if (abs(p[0] - 37) > 1 || abs(p[1] - 140) > 1 || abs(p[2] - 201) > 1)
-                    fail_msg("view %zu pixel (%d,%d) = (%d,%d,%d), want (37,140,201)", v, x, y,
-                             p[0], p[1], p[2]);
-            }
+    for (size_t f = 0; f < N_FILTERS; f++) {
+        xrd_renderer_set_filter(g_r, filters[f]);
+        for (size_t v = 0; v < sizeof views / sizeof views[0]; v++) {
+            draw_tex(tex, views[v], XRD_LAYOUT_SBS_LR, false, false);
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++) {
+                    const uint8_t *p = &g_img[(y * W + x) * 4];
+                    if (p[0] + p[1] + p[2] == 0)
+                        continue; /* behind the viewer: black by design */
+                    if (abs(p[0] - 37) > 1 || abs(p[1] - 140) > 1 || abs(p[2] - 201) > 1)
+                        fail_msg("%s view %zu pixel (%d,%d) = (%d,%d,%d), want (37,140,201)",
+                                 xrd_value_filter_name(filters[f]), v, x, y, p[0], p[1], p[2]);
+                }
+        }
     }
     glDeleteTextures(1, &tex);
 }
@@ -806,8 +885,132 @@ static void bicubic_keeps_flat_colour(void **state)
 static void bicubic_no_seam_bleed(void **state)
 {
     (void)state;
-    xrd_renderer_set_filter(g_r, XRD_FILTER_BICUBIC);
-    check_no_seam_bleed();
+    const xrd_filter filters[] = {XRD_FILTER_BICUBIC, XRD_FILTER_BICUBIC_AR, XRD_FILTER_MITCHELL};
+    for (size_t f = 0; f < sizeof filters / sizeof filters[0]; f++) {
+        xrd_renderer_set_filter(g_r, filters[f]);
+        check_no_seam_bleed();
+    }
+}
+
+/* ---- anti-ringing in two dimensions ---- */
+
+#define AR_EW 24
+#define AR_H 12
+
+/* Texel (i, j) of eye e of the noise texture, channel c: 30 to 225, so that
+ * Catmull-Rom's ringing is not clipped at 0 or 255. */
+static int ar_value(int e, int i, int j, int c)
+{
+    uint32_t h = (uint32_t)(((e * AR_H + j) * AR_EW + i) * 3 + c) * 2654435761u;
+    h ^= h >> 15;
+    h *= 2246822519u;
+    h ^= h >> 13;
+    return 30 + (int)(h % 196);
+}
+
+/* Filter f (bicubic or bicubic-ar) of eye e of the noise texture, channel
+ * c, at texel-space point (pu, pv), already clamped half a texel inside:
+ * the separable 4 x 4 Catmull-Rom with clamp to edge, and for bicubic-ar
+ * held within the 2 x 2 texels around the point. */
+static double ar_reference(xrd_filter f, int e, int c, double pu, double pv)
+{
+    int i1 = (int)floor(pu - 0.5), j1 = (int)floor(pv - 0.5);
+    double tu = pu - 0.5 - i1, tv = pv - 0.5 - j1, sum = 0, lo = 1e9, hi = -1e9;
+    for (int l = 0; l < 4; l++)
+        for (int k = 0; k < 4; k++) {
+            int i = i1 - 1 + k, j = j1 - 1 + l;
+            i = i < 0 ? 0 : (i > AR_EW - 1 ? AR_EW - 1 : i);
+            j = j < 0 ? 0 : (j > AR_H - 1 ? AR_H - 1 : j);
+            double t = ar_value(e, i, j, c);
+            sum += bc_kernel(0, 0.5, fabs(k - 1 - tu)) * bc_kernel(0, 0.5, fabs(l - 1 - tv)) * t;
+            if ((k == 1 || k == 2) && (l == 1 || l == 2)) {
+                lo = fmin(lo, t);
+                hi = fmax(hi, t);
+            }
+        }
+    if (f == XRD_FILTER_BICUBIC_AR)
+        sum = sum < lo ? lo : (sum > hi ? hi : sum);
+    return sum < 0 ? 0 : (sum > 255 ? 255 : sum);
+}
+
+/* Bicubic-ar and bicubic match ar_reference in two dimensions, in both eyes
+ * and at two views (within 3 levels, as the step tests). Every pixel of
+ * bicubic-ar also lies, per channel, within the lowest and highest of the
+ * 2 x 2 texels around its sample point (a texel within 1.01 texels of the
+ * point on both axes, so a point on a texel boundary may take either pair);
+ * plain Catmull-Rom leaves that range by more than 5 levels, so the check
+ * bites. */
+static void bicubic_ar_stays_in_2x2_range(void **state)
+{
+    (void)state;
+    static uint8_t px[2 * AR_EW * AR_H * 4];
+    for (int j = 0; j < AR_H; j++)
+        for (int x = 0; x < 2 * AR_EW; x++)
+            for (int c = 0; c < 4; c++)
+                px[(j * 2 * AR_EW + x) * 4 + c] =
+                    c == 3 ? 255 : (uint8_t)ar_value(x / AR_EW, x % AR_EW, j, c);
+    GLuint tex = make_tex(2 * AR_EW, AR_H, px);
+    const xrd_quat views[] = {XRD_QUAT_IDENTITY, xrd_quat_from_ypr_deg(30, 20, 10)};
+    const xrd_filter filters[] = {XRD_FILTER_BICUBIC_AR, XRD_FILTER_BICUBIC};
+    for (size_t v = 0; v < sizeof views / sizeof views[0]; v++) {
+        float rot[9];
+        xrd_quat_to_mat3(views[v], rot);
+        for (size_t f = 0; f < 2; f++) {
+            xrd_renderer_set_filter(g_r, filters[f]);
+            draw_tex(tex, views[v], XRD_LAYOUT_SBS_LR, false, false);
+            int outside = 0, checked = 0;
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W / 2; x++) {
+                    double a[3] = {((x + 0.5) / (W / 4.0) - 1.0) * g_th,
+                                   ((y + 0.5) / (H / 2.0) - 1.0) * g_tv, -1.0};
+                    double len = sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]), d[3];
+                    for (int i = 0; i < 3; i++)
+                        d[i] = (rot[i] * a[0] + rot[3 + i] * a[1] + rot[6 + i] * a[2]) / len;
+                    if (d[2] > -0.05)
+                        continue; /* behind or near the side: black or atan-sensitive */
+                    double u = atan2(d[0], -d[2]) / 3.14159265358979323846 + 0.5;
+                    double vv = asin(d[1]) / 3.14159265358979323846 + 0.5;
+                    double pu = fmin(fmax(u * AR_EW, 0.5), AR_EW - 0.5);
+                    double pv = fmin(fmax(vv * AR_H, 0.5), AR_H - 0.5);
+                    for (int e = 0; e < 2; e++) {
+                        const uint8_t *p = &g_img[(y * W + e * (W / 2) + x) * 4];
+                        for (int c = 0; c < 3; c++) {
+                            int lo = 255, hi = 0;
+                            for (int j = 0; j < AR_H; j++)
+                                for (int i = 0; i < AR_EW; i++)
+                                    if (fabs(i + 0.5 - pu) < 1.01 && fabs(j + 0.5 - pv) < 1.01) {
+                                        int t = ar_value(e, i, j, c);
+                                        lo = t < lo ? t : lo;
+                                        hi = t > hi ? t : hi;
+                                    }
+                            int out = p[c] < lo ? lo - p[c] : (p[c] > hi ? p[c] - hi : 0);
+                            /* bicubic-ar jumps where the 2 x 2 texels change: on a
+                             * boundary, either side's value is right */
+                            double want = ar_reference(filters[f], e, c, pu, pv), err = 1e9;
+                            for (int k = 0; k < 9; k++)
+                                err = fmin(err, fabs(p[c] - ar_reference(filters[f], e, c,
+                                                                         pu + (k % 3 - 1) * 0.01,
+                                                                         pv + (k / 3 - 1) * 0.01)));
+                            if (err > 3.0)
+                                fail_msg("%s view %zu eye %d pixel (%d,%d) channel %d = %d, "
+                                         "reference %.2f", xrd_value_filter_name(filters[f]),
+                                         v, e, x, y, c, p[c], want);
+                            checked++;
+                            if (filters[f] == XRD_FILTER_BICUBIC_AR && out > 1)
+                                fail_msg("view %zu eye %d pixel (%d,%d) channel %d = %d, "
+                                         "outside the 2x2 range %d..%d", v, e, x, y, c, p[c],
+                                         lo, hi);
+                            outside += out > 5;
+                        }
+                    }
+                }
+            assert_true(checked > W * H); /* most of each viewport is in front */
+            if (filters[f] == XRD_FILTER_BICUBIC && outside < 100)
+                fail_msg("view %zu: Catmull-Rom leaves the 2x2 range in only %d samples", v,
+                         outside);
+        }
+    }
+    glDeleteTextures(1, &tex);
 }
 
 /* The red/blue texture's eye centres are flat, so bicubic shows the same. */
@@ -912,8 +1115,8 @@ static void dither_is_bounded(void **state)
     (void)state;
     GLuint tex = make_flat_tex(128, 128, 128);
     xrd_renderer_set_dither(g_r, true);
-    const xrd_filter filters[] = {XRD_FILTER_BILINEAR, XRD_FILTER_BICUBIC};
-    for (size_t f = 0; f < 2; f++) {
+    const xrd_filter filters[N_FILTERS] = ALL_FILTERS;
+    for (size_t f = 0; f < N_FILTERS; f++) {
         xrd_renderer_set_filter(g_r, filters[f]);
         draw_tex(tex, XRD_QUAT_IDENTITY, XRD_LAYOUT_SBS_LR, false, false);
         for (int y = 0; y < H; y++)
@@ -921,8 +1124,8 @@ static void dither_is_bounded(void **state)
                 const uint8_t *p = &g_img[(y * W + x) * 4];
                 for (int c = 0; c < 3; c++)
                     if (abs(p[c] - 128) > 1)
-                        fail_msg("filter %zu pixel (%d,%d) channel %d = %d, want 128 +- 1",
-                                 f, x, y, c, p[c]);
+                        fail_msg("%s pixel (%d,%d) channel %d = %d, want 128 +- 1",
+                                 xrd_value_filter_name(filters[f]), x, y, c, p[c]);
             }
     }
     glDeleteTextures(1, &tex);
@@ -1118,13 +1321,13 @@ static void expect_viewport_colour(int eye, int r, int g, int b)
 
 static void check_flat_stereo_colours(GLuint tex, xrd_layout layout, double frame_aspect)
 {
-    const xrd_filter filters[] = {XRD_FILTER_BILINEAR, XRD_FILTER_BICUBIC};
+    const xrd_filter filters[N_FILTERS] = ALL_FILTERS;
     double a = xrd_picture_aspect(layout, xrd_packing_resolve(layout, XRD_PACKING_AUTO,
                                                                frame_aspect), frame_aspect);
     assert_float_equal(a, 16.0 / 9.0, 1e-9); /* the test frames hold 16:9 pictures */
     xrd_view_geom g;
     flat_geom(XRD_ZOOM_SCREEN, 1.f, a, &g);
-    for (size_t f = 0; f < 2; f++) {
+    for (size_t f = 0; f < N_FILTERS; f++) {
         xrd_renderer_set_filter(g_r, filters[f]);
         draw_flat(tex, XRD_QUAT_IDENTITY, layout, false, &g);
         expect_viewport_colour(0, 255, 0, 0);
@@ -1188,7 +1391,7 @@ static void check_seam_at_size(int w, int h, bool tb)
     const double to_edge_deg = (tb ? atan(g.half_h) : xrd_flat_half_angle(g.half_w, g_curve)) *
                                180.0 / 3.14159265358979323846;
     const int n = tb ? h : w;
-    const xrd_filter filters[] = {XRD_FILTER_BILINEAR, XRD_FILTER_BICUBIC};
+    const xrd_filter filters[N_FILTERS] = ALL_FILTERS;
 
     for (int which = 0; which < 2; which++) {
         /* which 0: the left eye (red) at its seam edge, the middle texel blue.
@@ -1200,7 +1403,7 @@ static void check_seam_at_size(int w, int h, bool tb)
          * v = 0 edge, up for the bottom eye's v = 1 edge. */
         double ang = which == 0 ? -to_edge_deg : to_edge_deg;
         xrd_quat q = tb ? xrd_quat_from_ypr_deg(0, ang, 0) : xrd_quat_from_ypr_deg(ang, 0, 0);
-        for (size_t fi = 0; fi < 2; fi++) {
+        for (size_t fi = 0; fi < N_FILTERS; fi++) {
             xrd_renderer_set_filter(g_r, filters[fi]);
             draw_flat(tex, q, layout, false, &g);
             int eye = which, max_other, n_own, n_black;
@@ -1209,7 +1412,7 @@ static void check_seam_at_size(int w, int h, bool tb)
                            &n_black);
             if (max_other > 8)
                 fail_msg("%dx%d %s, %s, eye %d: other eye's colour up to %d/255", w, h,
-                         tb ? "tb-lr" : "sbs-lr", fi ? "Catmull-Rom" : "bilinear", eye,
+                         tb ? "tb-lr" : "sbs-lr", xrd_value_filter_name(filters[fi]), eye,
                          max_other);
             /* the view really straddles the screen's edge */
             if (n_own < W / 2 * H / 4 || n_black < W / 2 * H / 4)
@@ -1235,7 +1438,7 @@ static void flat_seam_even_and_odd_sizes(void **state)
 static void flat_odd_sizes_keep_eyes_apart(void **state)
 {
     (void)state;
-    const xrd_filter filters[] = {XRD_FILTER_BILINEAR, XRD_FILTER_BICUBIC};
+    const xrd_filter filters[N_FILTERS] = ALL_FILTERS;
     const struct { int w, h; bool tb; } cases[] = {{1919, 1080, false}, {1920, 1081, true}};
     for (size_t c = 0; c < 2; c++) {
         int n = cases[c].tb ? cases[c].h : cases[c].w;
@@ -1247,14 +1450,14 @@ static void flat_odd_sizes_keep_eyes_apart(void **state)
         flat_geom(XRD_ZOOM_SCREEN, 1.f,
                   xrd_picture_aspect(layout, xrd_packing_resolve(layout, XRD_PACKING_AUTO, f), f),
                   &g);
-        for (size_t fi = 0; fi < 2; fi++) {
+        for (size_t fi = 0; fi < N_FILTERS; fi++) {
             xrd_renderer_set_filter(g_r, filters[fi]);
             draw_flat(tex, XRD_QUAT_IDENTITY, layout, false, &g);
             int max_blue, n_red, n_black;
             viewport_stats(0, 2, 0, &max_blue, &n_red, &n_black);
             if (max_blue > 8)
-                fail_msg("%dx%d: blue up to %d/255 in the left viewport", cases[c].w,
-                         cases[c].h, max_blue);
+                fail_msg("%dx%d %s: blue up to %d/255 in the left viewport", cases[c].w,
+                         cases[c].h, xrd_value_filter_name(filters[fi]), max_blue);
             assert_true(n_red > 0);
         }
         glDeleteTextures(1, &tex);
@@ -1339,7 +1542,7 @@ static void big_stats(int eye, int c, int lit, int *max_c, int *n_lit)
  * its second blue, the middle texel of an odd split axis coloured as either
  * eye in turn; at flat zooms 0.25 to 0.5 the whole picture, both seam-side
  * edges included, is shrunk 2x to 8x into a 1920 x 1080 viewport. With
- * trilinear (and, for comparison, bilinear and Catmull-Rom on level 0) the
+ * trilinear (and, for comparison, every filter on level 0) the
  * left viewport shows no blue and the right one no red above 8/255. */
 static void trilinear_keeps_eyes_apart_when_shrinking(void **state)
 {
@@ -1356,6 +1559,8 @@ static void trilinear_keeps_eyes_apart_when_shrinking(void **state)
         {true, XRD_FILTER_BICUBIC, "trilinear"},
         {false, XRD_FILTER_BILINEAR, "bilinear"},
         {false, XRD_FILTER_BICUBIC, "Catmull-Rom"},
+        {false, XRD_FILTER_BICUBIC_AR, "Catmull-Rom anti-ringing"},
+        {false, XRD_FILTER_MITCHELL, "Mitchell"},
     };
     big_begin();
     for (size_t fr = 0; fr < sizeof frames / sizeof frames[0]; fr++) {
@@ -1857,11 +2062,15 @@ int main(void)
         cmocka_unit_test_teardown(convergence_applies_in_mono_and_swap, reset_view),
         cmocka_unit_test_teardown(convergence_pitched_shifts_horizontally, reset_view),
         cmocka_unit_test_teardown(bicubic_matches_catmull_rom_reference, reset_view),
+        cmocka_unit_test_teardown(bicubic_ar_matches_reference, reset_view),
+        cmocka_unit_test_teardown(mitchell_matches_reference, reset_view),
         cmocka_unit_test_teardown(bicubic_vertical_matches_catmull_rom_reference, reset_view),
+        cmocka_unit_test_teardown(new_filters_vertical_match_reference, reset_view),
         cmocka_unit_test_teardown(bicubic_differs_from_bilinear_near_edge, reset_view),
         cmocka_unit_test_teardown(bicubic_keeps_flat_colour, reset_view),
         cmocka_unit_test_teardown(bicubic_no_seam_bleed, reset_view),
         cmocka_unit_test_teardown(bicubic_identity_left_is_red, reset_view),
+        cmocka_unit_test_teardown(bicubic_ar_stays_in_2x2_range, reset_view),
         cmocka_unit_test_teardown(tenbit_precision_survives_dither, reset_view),
         cmocka_unit_test_teardown(dither_is_bounded, reset_view),
         cmocka_unit_test_teardown(dither_keeps_black_black, reset_view),

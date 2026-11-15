@@ -11,7 +11,7 @@ struct xrd_renderer {
     GLuint prog;
     GLuint vao;
     GLint u_video, u_rot, u_tan_half, u_proj, u_inv_fov, u_reject, u_flat_half, u_flat_curve,
-        u_eye_scale, u_eye_offset, u_bicubic, u_dither, u_trilinear, u_max_level;
+        u_eye_scale, u_eye_offset, u_filter, u_dither, u_trilinear, u_max_level;
     float hfov_deg, vfov_deg;
     float convergence_deg;
     xrd_filter filter;
@@ -90,7 +90,7 @@ xrd_renderer *xrd_renderer_new(char *err, size_t errlen)
     r->u_flat_curve = glGetUniformLocation(prog, "u_flat_curve");
     r->u_eye_scale = glGetUniformLocation(prog, "u_eye_scale");
     r->u_eye_offset = glGetUniformLocation(prog, "u_eye_offset");
-    r->u_bicubic = glGetUniformLocation(prog, "u_bicubic");
+    r->u_filter = glGetUniformLocation(prog, "u_filter");
     r->convergence_deg = 0.f;
     r->filter = XRD_FILTER_BILINEAR;
     r->u_dither = glGetUniformLocation(prog, "u_dither");
@@ -130,6 +130,21 @@ void xrd_renderer_set_filter(xrd_renderer *r, xrd_filter f)
     r->filter = f;
 }
 
+/* The shader's u_filter for f: 0 bilinear, else the enlarge() kernel. */
+static int filter_index(xrd_filter f)
+{
+    switch (f) {
+    case XRD_FILTER_BICUBIC:
+        return 1;
+    case XRD_FILTER_BICUBIC_AR:
+        return 2;
+    case XRD_FILTER_MITCHELL:
+        return 3;
+    default:
+        return 0;
+    }
+}
+
 /* out = a * b, all column-major 3x3. */
 static void mat3_mul(const float a[9], const float b[9], float out[9])
 {
@@ -165,10 +180,10 @@ void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
     const double deg = 3.14159265358979323846 / 180.0;
     glUniform2f(r->u_reject, r->hfov_deg < XRD_FULL_FOV_DEG ? 1.f : 0.f, r->vfov_deg < XRD_FULL_FOV_DEG ? 1.f : 0.f);
     glUniform2f(r->u_inv_fov, (float)(1.0 / (r->hfov_deg * deg)), (float)(1.0 / (r->vfov_deg * deg)));
-    /* Trilinear replaces Catmull-Rom: it is used only while shrinking. */
+    /* Trilinear replaces the enlarging filter: it is used only while shrinking. */
     glUniform1i(r->u_trilinear, dp->trilinear);
     glUniform1i(r->u_max_level, XRD_MIP_MAX_LEVEL);
-    glUniform1i(r->u_bicubic, !dp->trilinear && r->filter == XRD_FILTER_BICUBIC);
+    glUniform1i(r->u_filter, dp->trilinear ? 0 : filter_index(r->filter));
     glUniform1i(r->u_dither, r->dither);
 
     int half = out_w / 2;
