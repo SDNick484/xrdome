@@ -72,7 +72,9 @@ void        xrd_player_set_aspect_warning(xrd_player *p, bool on);
  * 2D) and mpv's own sub-visibility at open (default yes; --mpv-opt
  * sub-visibility=no) allows them. */
 void        xrd_player_set_sub_visible(xrd_player *p, bool on);
-/* mpv "time-pos" and "duration" in seconds; -1 when unknown. */
+/* mpv "time-pos" and "duration" in seconds; -1 when unknown. After the file has
+ * played to its end (mpv has unloaded it), the duration read when it loaded, and
+ * that duration as the position. */
 double      xrd_player_position(xrd_player *p);
 double      xrd_player_duration(xrd_player *p);
 const char *xrd_player_codec(xrd_player *p);   /* mpv "video-codec", "" if unknown */

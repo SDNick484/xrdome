@@ -1072,4 +1072,19 @@ check "M19 exits 0 (got $rst)" "$([ "$rst" -eq 0 ]; echo $?)"
 check "M19 one note about the position past the end" $?
 ! grep -q '^position' "$(rrec)"; check "M19 record no longer has a position" $?
 
+# M20. playing to the end of the file (no --frames, which holds the last frame) drops the
+# position like a quit in the last minute, so a finished film starts over. mpv unloads the
+# file at its end, so its position and duration are gone by the time the record is saved.
+rrun m20a --resume --mpv-opt start=40
+grep -q '^position' "$(rrec)"; check "M20 record has a position before playing to the end" $?
+( XDG_STATE_HOME=$rstate; export XDG_STATE_HOME
+  xvfb "$xrdome" --windowed --pose null --resume --mpv-opt start=97 "$work/long.mp4" \
+      >"$work/m20.err" 2>&1 )
+rst=$?
+cat "$work/m20.err"
+check "M20 exits 0 at the end of the file (got $rst)" "$([ "$rst" -eq 0 ]; echo $?)"
+grep -q '^settings: saved ' "$work/m20.err" && ! grep -q 'saved .*position=' "$work/m20.err"
+check "M20 saved line has no position" $?
+! grep -q '^position' "$(rrec)"; check "M20 record no longer has a position" $?
+
 exit $fail

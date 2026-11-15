@@ -578,7 +578,8 @@ new one. The position is mpv's playback position at the moment of exit.
 A position is saved and resumed only inside this part of the file: not in the first 30 seconds,
 and not in the last 5% of the file or the last 60 seconds, whichever is shorter. So a position t
 in a file of length d is used when `t >= 30` and `t < d - min(0.05 * d, 60)`. A finished film
-therefore starts from the beginning next time. Quitting outside that range removes the record's
+therefore starts from the beginning next time; playing to the end of the file counts as
+finishing it. Quitting outside that range removes the record's
 `position` line. A file of 30 seconds or less never resumes.
 
 - Without `--resume` a record is exactly what it was before this feature, and a `position` line
