@@ -23,6 +23,16 @@ more than 0.14 percentage points of missed vsyncs. Not seen on the glasses: whet
 shimmer, a real half-SBS film, subtitles, top-bottom and full SBS. `docs/STATUS.md` has the
 details.
 
+A second run on both pairs of glasses (2026-11-14, afternoon and evening) covered the newer
+features. The automatic switch to SBS works on the XREAL Air 2 Pro (about 2.5 s, and back at exit);
+on the Viture Pro XR it worked once, then XRLinuxDriver 2.11.9 hung on the switch request (see
+[Switching to SBS](#switching-to-sbs)). Resume worked on an 81-minute film and an 8K file;
+debanding costs little on a 4K film but saturates the GPU at 8K; mpv's scalers cost almost nothing
+and look slightly better at most; the curved screen was liked, at R = 1; a full side-by-side 3D
+film played in 3D without flags. Tracking: the Viture drifted 0.02 degrees in 5 minutes; the XREAL
+must lie still while the driver calibrates it (see [Tracking notes](#tracking-notes)). Still not
+seen on the glasses: subtitles, shimmer, a real half-SBS film. `docs/STATUS.md` has the numbers.
+
 ## Build and run
 
 Dependencies: `media-video/mpv` (with `libmpv` and `vaapi` USE flags), `media-libs/libsdl2`
@@ -32,6 +42,15 @@ Dependencies: `media-video/mpv` (with `libmpv` and `vaapi` USE flags), `media-li
 by side unless flags say otherwise (one `xrdome: note:` line). Nothing from FFmpeg is linked.
 The test patterns and the smoke tests also need `media-video/ffmpeg` (`x264`/`x265`) and
 `x11-misc/xvfb-run`.
+
+The USE flags that matter, as `/etc/portage/package.use` lines (checked with `equery uses` on the
+owner's laptop, 2026-11-14: mpv 0.42.0, libsdl2 2.32.10, ffmpeg 9.0.2, mesa with `radeonsi`):
+
+```
+media-video/mpv libmpv vaapi
+media-libs/libsdl2 X opengl
+media-video/ffmpeg x264 x265
+```
 
 ```sh
 meson setup build
@@ -672,7 +691,10 @@ inside its render pass, before xrdome's texture and dithering. It is off by defa
 (or `deband = yes` in `[general]`) turns it on at start, and `B` switches it during playback so
 you can compare on the glasses; the key prints `deband: on` or `deband: off` and `I` shows it.
 It is a viewing preference, not a property of the file, so it is not saved in the per-file record.
-It costs GPU time in mpv's render pass (not measured on the glasses yet; see `docs/STATUS.md`).
+It costs GPU time in mpv's render pass: on the owner's integrated Radeon a 4K film went from 0.03%
+to 0.75% missed vsyncs and an 8K VR180 file from 1.6% to 28% (see
+[Performance notes](#performance-notes)); on a dark low-bitrate film the owner saw little
+difference.
 The strength is left to mpv: `--mpv-opt deband-iterations=N` (mpv default 1),
 `--mpv-opt deband-threshold=N` (32), `--mpv-opt deband-range=N` (16) and
 `--mpv-opt deband-grain=N` (48), for example `--deband on --mpv-opt deband-iterations=2`.
@@ -732,7 +754,8 @@ larger size as well.
   other eye's edge (4:2:0 chroma is already shared there without `--mpv-scale`). For ordinary 3D
   films both edges show the same part of the scene.
 - Cost: mpv scales into more pixels with a heavier kernel every frame; see
-  [Performance notes](#performance-notes). It is off by default until measured.
+  [Performance notes](#performance-notes). On the owner's Radeon it costs almost nothing for a
+  1080p film; the look was "hard to tell, maybe slight improvements". Off by default.
 
 ## Diagnostics
 
@@ -778,7 +801,8 @@ SUBSYSTEM=="tty", KERNEL=="ttyACM[0-9]*", ATTRS{idVendor}=="35ca", MODE="0660", 
 SUBSYSTEM=="hidraw", KERNEL=="hidraw[0-9]*", ATTRS{idVendor}=="35ca", MODE="0660", GROUP="plugdev"
 ```
 
-`/etc/udev/rules.d/70-xreal-xr.rules` (not yet tested on hardware):
+`/etc/udev/rules.d/70-xreal-xr.rules` (needed: on the owner's laptop it is the only rule that gives
+the XREAL's hidraw and USB nodes to `plugdev`, which the driver needs; 2026-11-14):
 
 ```
 SUBSYSTEM=="usb", ATTRS{idVendor}=="3318", MODE="0660", GROUP="plugdev"
@@ -845,7 +869,8 @@ shows
 display: switched the glasses to SBS in 1.3 s
 ```
 
-and playback starts on that output. At exit, if xrdome switched the glasses itself, it writes
+and playback starts on that output (2.2 to 2.8 s on the XREAL Air 2 Pro, 3.3 s on the Viture Pro XR,
+2026-11-14). At exit, if xrdome switched the glasses itself, it writes
 `sbs_mode=disable` so the desktop mirror is usable again, and prints
 `display: asked XRLinuxDriver to switch the glasses back to 1080p`. It does not switch back
 glasses that disconnected during playback (they come back in 1080p anyway) or when the driver is
@@ -870,6 +895,14 @@ files, and only the first and last of those lines.
 
 The tests point xrdome at another directory with the environment variable
 `XRDOME_XR_DRIVER_DIR` (default `/dev/shm`), so no test run writes to a real driver.
+
+On the glasses (2026-11-14, XRLinuxDriver 2.11.9): on the XREAL Air 2 Pro the switch and the switch
+back work. On the Viture Pro XR the driver hung on 3 of 4 switch requests, also with xrdome not
+running: its heartbeat stops, so the next xrdome run reports it as not running, and only
+restarting the driver helps. Until that is fixed in the driver, switch the Viture to SBS with
+its own button (front left, hold 2 seconds; the XREAL's is volume up, hold 2 seconds): xrdome
+then finds the glasses in SBS and asks the driver for nothing. A driver restarted while a request
+was waiting deleted it without acting on it.
 
 ## Performance notes
 
@@ -905,13 +938,14 @@ Viture Pro XR glasses at 3840x1080 60 Hz, with a 4320x2160 10-bit AV1 60 fps fil
   `--mipmap-force`, which makes the chain every frame. One pair each; the differences are within
   run-to-run noise. A flat 1080p AV1 film missed 0 of 10754.
 
-- `--mpv-scale` (not measured yet): mpv then draws every frame of an enlarged flat film at the
-  display's size with the named scaler, so the cost grows with the texture's size and the
-  scaler. To measure it, play the same 1080p film at the same zoom with the same `--frames 3600`
-  and a separate `--timing-log` per run: `--mpv-scale off`, `--mpv-scale spline36` and
-  `--mpv-scale ewa_lanczossharp` (an EWA scaler is much heavier than a separable one), and
-  compare the missed vsyncs in the `timing:` summaries; `I` and the `video texture:` line show the
-  texture's size. Repeat at zoom 2.0 for a larger texture.
+- Debanding (2026-11-14, AC power, 3600 frames per run, no keys): a 3840x2160 AV1 flat film at
+  zoom 1.5 missed 1 vsync with `--deband off` and 27 (0.75%) with `on`; a 7680x3840 AV1 VR180 file
+  at zoom 1.0 missed 59 (1.6%) and 1015 (28%). At 8K mpv's deband saturates the GPU.
+- `--mpv-scale` (2026-11-14, same conditions), a 1080p AV1 film: at zoom 1.5 (texture 2880x1620)
+  `off` 0 missed, `spline36` 2, `ewa_lanczossharp` 2; at zoom 2.0 (texture 3840x2160, the cap) 1, 1
+  and 7. Cheap on this GPU.
+- The 4K AV1 film's late frames fall on a spike every 32 display frames (16 source frames),
+  present with and without deband; not explained.
 
 ## Tracking notes
 
@@ -923,14 +957,56 @@ Measured 2026-11-11, Viture Pro XR (`35ca:101d`), XRLinuxDriver 2.11.9, Gentoo/O
   yaw -157, pitch 12, roll -176, so raw angles are not usable directly.
 - Rotation relative to a reference pose, `conj(q_ref) * q`, has standard NWU body axes:
   head left is positive about up, looking up is negative about left, right ear down is positive about forward.
-- Yaw drift over time: not measured yet.
+- Yaw drift at rest (2026-11-14): 0.02 degrees in 5 minutes, glasses lying still, hours after
+  they connected.
+
+XREAL Air 2 Pro (`3318:0432`), same driver, 2026-11-14: about 1000 packets per second, no malformed
+packets; head tracking works with `--device xreal-air2pro` much as on the Viture (owner; the axis
+signs were not checked one by one).
+
+- **Keep the XREAL still while the driver calibrates it**, about 16 seconds after it is plugged in
+  (or the driver started), until its log says `Device calibration complete`. Calibrated while
+  being handled or worn, its yaw slid 3 to 17 degrees over the next half minute, which shows in
+  xrdome as the picture drifting sideways after a recenter; calibrated lying still, it moved 0.06
+  degrees in a minute. Worn and still long after calibration it drifted 0.08 degrees per minute.
+  The plan's Task 10 already asked for 15 still seconds; this is the measurement.
+- Whether xrdome's automatic SBS switch (which restarts the glasses' IMU stream in the driver)
+  has the same effect is not known: the picture drifted after it twice, six minutes after
+  calibration.
 
 Hardware-check notes for tracking:
 
 - Look at `pose_to_swap_us` per frame, not only the max. If it often sits near 8-16 ms while
   `interval_us` is about 16.7 ms, re-run with `--sync-after-swap` and compare.
-- Time how long the player takes to exit after the glasses are unplugged.
+- Time how long the player takes to exit after the glasses are unplugged (XREAL Air 2 Pro,
+  2026-11-14: about 0.3 s; the display goes before the USB device does).
 - Use a file the machine can decode at full rate.
+
+## Hardware notes
+
+From `xrandr --props` and `edid-decode` on the owner's laptop, 2026-11-14 (full captures in
+`docs/hardware/`):
+
+| Glasses | USB ID | EDID vendor, product name | 1080p mode | SBS mode |
+|---|---|---|---|---|
+| Viture Pro XR | `35ca:101d` | `CVT`, `VITURE` | 1920x1080 at 60 (preferred), 90, 120 Hz | 3840x1080 at 60 Hz only |
+| XREAL Air 2 Pro | `3318:0432` | `MRG`, `Air 2 Pro` | 1920x1080 at 60 (preferred), 90, 120 Hz | 3840x1080 at 60 Hz only |
+
+- Both report the same placeholder EDID serial number (0x88888800), so the serial cannot tell
+  two pairs apart.
+- After a replug the glasses' output can come back under another name (`DisplayPort-1`, then
+  `DisplayPort-0`); xrdome finds the glasses' output by its size, not its name.
+- Each pair has a button that switches between 1080p and SBS: Viture, the small button at the
+  front left, held 2 seconds; XREAL, volume up on the right arm, held 2 seconds.
+
+Known limits:
+
+- The driver sends Euler angles, so the pose is ambiguous near 90 degrees of pitch (looking
+  straight up or down).
+- Yaw can drift slowly over a long session; `R` recentres it. See
+  [Tracking notes](#tracking-notes) for the XREAL's calibration.
+- A 4K VR180 file has about 11 source pixels per degree against the glasses' 51, so it looks soft
+  however it is scaled; see [Viewing comfort and sharpness](#viewing-comfort-and-sharpness).
 
 ## Licence
 

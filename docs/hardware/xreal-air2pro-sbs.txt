@@ -1,0 +1,113 @@
+# XREAL Air 2 Pro, SBS mode (3840x1080)
+
+Captured 2026-11-14 16:37 on the owner's ThinkPad P14s Gen 6 AMD (amdgpu, Xorg/MATE) with `xrandr --props`;
+the EDID block below was decoded with `edid-decode`. The serial number in the EDID is the same
+placeholder (0x88888800) on both pairs of glasses.
+
+## xrandr --props (the glasses' output only)
+
+```
+DisplayPort-0 connected 3840x1080+1920+0 (normal left inverted right x axis y axis) 120mm x 70mm
+	EDID: 
+		00ffffffffffff003647353100888888
+		08210103800c07780a9ee0a754489923
+		10505400000001010101010101010101
+		01010101010104740030f2382d40b058
+		45000038f400001e04740030f2382d40
+		b05845000038f400001e000000fd0032
+		82143c3c000a202020202020000000fc
+		0041697220322050726f0a2020200030
+	GAMMA_LUT_SIZE: 4096 
+		range: (0, -1)
+	DEGAMMA_LUT_SIZE: 4096 
+		range: (0, -1)
+	GAMMA_LUT: 0 
+		range: (0, 65535)
+	CTM: 	1.000000 0.000000 0.000000
+		0.000000 1.000000 0.000000
+		0.000000 0.000000 1.000000
+	DEGAMMA_LUT: 0 
+		range: (0, 65535)
+	TearFree: auto 
+		supported: off, on, auto
+	subconnector: Native 
+		supported: Unknown, VGA, DVI-D, HDMI, DP, Wireless, Native
+	HDCP Content Type: HDCP Type0 
+		supported: HDCP Type0, HDCP Type1
+	Content Protection: Undesired 
+		supported: Undesired, Desired, Enabled
+	color format: AUTO 
+		supported: AUTO, RGB, YUV 4:4:4, YUV 4:2:2, YUV 4:2:0
+	vrr_capable: 0 
+		range: (0, 1)
+	Colorspace: Default 
+		supported: Default, BT709_YCC, opRGB, BT2020_RGB, BT2020_YCC
+	max bpc: 16 
+		range: (8, 16)
+	underscan vborder: 0 
+		range: (0, 128)
+	underscan hborder: 0 
+		range: (0, 128)
+	underscan: off 
+		supported: off, on, auto
+	Broadcast RGB: Automatic 
+		supported: Automatic, Full, Limited 16:235
+	scaling mode: None 
+		supported: None, Full, Center, Full aspect
+	link-status: Good 
+		supported: Good, Bad
+	CONNECTOR_ID: 474 
+		supported: 474
+	non-desktop: 0 
+		range: (0, 1)
+   3840x1080     60.00*+
+```
+
+## edid-decode
+
+```
+edid-decode (hex):
+
+00 ff ff ff ff ff ff 00 36 47 35 31 00 88 88 88
+08 21 01 03 80 0c 07 78 0a 9e e0 a7 54 48 99 23
+10 50 54 00 00 00 01 01 01 01 01 01 01 01 01 01
+01 01 01 01 01 01 04 74 00 30 f2 38 2d 40 b0 58
+45 00 00 38 f4 00 00 1e 04 74 00 30 f2 38 2d 40
+b0 58 45 00 00 38 f4 00 00 1e 00 00 00 fd 00 32
+82 14 3c 3c 00 0a 20 20 20 20 20 20 00 00 00 fc
+00 41 69 72 20 32 20 50 72 6f 0a 20 20 20 00 30
+
+----------------
+
+Block 0, Base EDID:
+  EDID Structure Version & Revision: 1.3
+  Vendor & Product Identification:
+    Manufacturer: MRG
+    Model: 12597
+    Serial Number: 2290649088 (0x88888800)
+    Made in: week 8 of 2023
+  Basic Display Parameters & Features:
+    Digital display
+    Maximum image size: 12 cm x 7 cm
+    Gamma: 2.20
+    RGB color display
+    First detailed timing is the preferred timing
+  Color Characteristics:
+    Red  : 0.6542, 0.3291
+    Green: 0.2841, 0.5996
+    Blue : 0.1396, 0.0644
+    White: 0.3125, 0.3281
+  Established Timings I & II: none
+  Standard Timings: none
+  Detailed Timing Descriptors:
+    DTD 1:  3840x1080   60.000000 Hz  32:9     67.500 kHz    297.000000 MHz (3840 mm x 1080 mm)
+                 Hfront  176 Hsync  88 Hback  296 Hpol P
+                 Vfront    4 Vsync   5 Vback   36 Vpol P
+    DTD 2:  3840x1080   60.000000 Hz  32:9     67.500 kHz    297.000000 MHz (3840 mm x 1080 mm)
+                 Hfront  176 Hsync  88 Hback  296 Hpol P
+                 Vfront    4 Vsync   5 Vback   36 Vpol P
+    Display Range Limits:
+      Monitor ranges (GTF): 50-130 Hz V, 20-60 kHz H, max dotclock 600 MHz
+    Display Product Name: 'Air 2 Pro'
+Checksum: 0x30
+```
