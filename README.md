@@ -103,7 +103,7 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 | R | Recenter, yaw only (keeps the current pitch and roll reference) |
 | Shift+R | Recenter, full |
 | [ / ] | Zoom out / in (x1.1 per step, 0.25 to 4); prints `zoom: 1.10` |
-| F | Toggle bicubic / bilinear sampling; prints `filter: bicubic` or `filter: bilinear` |
+| F | Cycle the enlarging filter: bilinear, bicubic, bicubic-ar, mitchell, then bilinear again; prints e.g. `filter: bicubic-ar`. See [Sharpness](#viewing-comfort-and-sharpness) |
 | S | Swap eyes |
 | M | Cycle layout. Flat: 2D, half SBS, full SBS, half top-bottom, full top-bottom; prints e.g. `layout: sbs-lr half` or `layout: mono`. VR180: sbs-lr, sbs-rl, tb-lr, mono; prints e.g. `layout: sbs-rl` |
 | P | Switch projection, flat or VR180; prints `proj: flat` or `proj: hequirect` |
@@ -158,7 +158,7 @@ start gives a tilted picture, and `R` does not correct that. Hold your head leve
 `--require-hwdec` (exit 1 unless mpv decodes with VA-API), `--timing-log PATH`,
 `--content-fov HxV`, `--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)),
 `--mpv-profile NAME`, `--mpv-opt KEY=VALUE` (repeatable, up to 16), `--mpv-log LEVEL`,
-`--mpv-scale off|NAME`, `--convergence DEG`, `--filter bilinear|bicubic`,
+`--mpv-scale off|NAME`, `--convergence DEG`, `--filter bilinear|bicubic|bicubic-ar|mitchell`,
 `--fbo-format rgb10|rgba8`, `--dither on|off`, `--deband on|off`, `--no-memory`, `--forget`,
 `--resume`, `--no-resume` (the last four are described under
 [Per-file settings](#per-file-settings)).
@@ -185,8 +185,9 @@ flat only; R from 1 to 10) bends the screen into part of a cylinder; see
 mipmaps while the picture is shrunk; see [Viewing comfort and sharpness](#viewing-comfort-and-sharpness).
 
 `--convergence DEG` (default 0, -5 to 5) turns each eye's view by half the angle in opposite
-directions; positive turns the eyes inwards. `--filter` chooses how the eye pass samples the
-video: `bicubic` (Catmull-Rom, the default) or `bilinear`. Neither is an ini key.
+directions; positive turns the eyes inwards. `--filter` chooses how the eye pass enlarges the
+video: `bicubic` (Catmull-Rom, the default), `bicubic-ar` (Catmull-Rom without its halo),
+`mitchell` (softer, a much fainter halo) or `bilinear`. Neither is an ini key.
 `--convergence` is also remembered per file (see [Per-file settings](#per-file-settings)), and
 `--filter` is not. See [Viewing comfort and sharpness](#viewing-comfort-and-sharpness).
 
@@ -653,17 +654,28 @@ help:
 
 - Zoom out (`[`): a wider view puts fewer display pixels on each source pixel, so the enlargement
   and the blur that comes with it shrink. Zooming in (`]`) magnifies the softness.
-- Bicubic sampling (the default; `F` toggles it): bilinear filtering, the GPU's built-in
-  enlargement, turns every edge into a straight ramp a whole source pixel wide, which is the
-  blurriest way to enlarge. Catmull-Rom keeps edges steeper, at the cost of a faint halo next to
-  high-contrast edges. Press `F` on a still frame to compare.
+- The enlarging filter (`--filter`, `F` cycles through them; prints `filter: NAME`). Press `F` on
+  a still frame to compare; a VR180 file, enlarged two to six times, shows the difference most.
 
-Bicubic reads 9 texture samples per output pixel instead of 1. On the owner's Radeon it made
-no measurable difference (see "Performance notes"). To measure it yourself, make two separate runs of the same file, one with
-`--filter bilinear` and one with `--filter bicubic`, each with its own `--timing-log`, and
-compare the logs; toggling `F` live mixes both filters in one log. `--mpv-log v` and
-`--mpv-log debug` are for diagnosis only: they print a lot and affect timing, so leave them off
-for measurements.
+| Filter | Texture reads per pixel | What it does to an enlarged picture |
+|---|---|---|
+| `bilinear` | 1 | The GPU's own enlargement: every edge becomes a straight ramp a whole source pixel wide, the blurriest way to enlarge; diagonals show a beaded pattern |
+| `bicubic` (default) | 9 | Catmull-Rom: steeper edges and more fine detail, with a faint halo (a dark and a light fringe of up to 7% of the step) beside high-contrast edges |
+| `bicubic-ar` | 13 | Catmull-Rom with anti-ringing: each pixel is held within the darkest and brightest of the 2 x 2 source pixels around it, so the edges are as steep and the halo is gone |
+| `mitchell` | 9 | Mitchell-Netravali (B = C = 1/3): softer than Catmull-Rom (fine detail close to bilinear), smooth diagonals, a halo about half as strong |
+
+`bicubic` stays the default until the filters have been compared on the glasses. Lanczos-2 was
+also tried and dropped: it looked and measured the same as Catmull-Rom (within one level), at
+more arithmetic. EWA (jinc) filters were not tried: they are not separable, so they need about 16
+or more separate reads per pixel. Comparison pictures and numbers are in `docs/STATUS.md`.
+
+The filters cost GPU time on every display pixel while the picture is enlarged (while it is
+shrunk, mipmaps take over). On the owner's Radeon bicubic made no measurable difference against
+bilinear (see "Performance notes"); `bicubic-ar` and `mitchell` have not been timed on the glasses
+yet. To measure a filter, make separate runs of the same file, one per `--filter`, each with its
+own `--timing-log`, and compare the logs; pressing `F` during a run mixes filters in one log.
+`--mpv-log v` and `--mpv-log debug` are for diagnosis only: they print a lot and affect timing,
+so leave them off for measurements.
 
 **Banding: debanding.** Dark gradients and skies in a low-bitrate file (a 2.5 Mbit/s AV1 file
 looked far worse than 20 Mbit/s H.264) show visible steps that the 10-bit texture and dithering
@@ -685,7 +697,7 @@ picture drawn smaller than its source shimmers on fine detail and edges when the
 While the picture is shrunk (at the centre of the view, with the current zoom, one display pixel
 covers more than one source pixel), the video texture gets mipmaps (smaller copies, levels 0 to
 3, regenerated only when mpv delivers a new frame) and the eye pass samples them trilinearly
-instead of with Catmull-Rom or bilinear. While the picture is enlarged nothing changes: no
+instead of with the `F` filter. While the picture is enlarged nothing changes: no
 mipmaps are made and `F` chooses the filter as before. This applies to both projections; VR180
 is almost always enlarged. `--mipmap off` turns it off (command line only). `I` shows the filter
 in use (`trilinear` while mipmaps are used) and the `video texture:` line shows `mipmap=on` or
@@ -702,7 +714,7 @@ On the owner's Radeon (2026-11-14, AC power) a 4K film at zoom 1.0 missed 8 of 3
 difference seen on one film at zoom 0.5).
 
 **Enlarging flat video: mpv's scalers (`--mpv-scale`).** Normally mpv draws each frame into a
-texture of the coded size and the eye pass enlarges it (Catmull-Rom or bilinear). With
+texture of the coded size and the eye pass enlarges it with the `F` filter. With
 `--mpv-scale NAME`, while a flat picture is enlarged (the opposite of the mipmap case above: at
 the centre of the view one source pixel covers more than one display pixel), mpv draws each
 frame into a texture of the size the picture has on the glasses, enlarging it with its own scaler
