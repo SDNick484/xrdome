@@ -827,6 +827,171 @@ static void curve_half_angle(void **state)
     assert_true(xrd_flat_half_angle(0.5f, NAN) == 0.0);
 }
 
+/* ---- the curved screen in magnify mode (issue #41) ---- */
+
+/* Magnify mode curves its zoom-1 screen with the same radius: half_w and
+ * half_h are the zoom-1 screen's at every zoom, and the curved mapping on
+ * them has its centre, its arc's ends (half_w / R about the axis), its top
+ * and bottom where screen mode's zoom-1 screen has them; zoom only narrows
+ * the view, which straight ahead lies wholly on the screen. Nothing beside
+ * or behind is drawn, and junk is refused. */
+static void curve_magnify_centre_ends_beside_junk(void **state)
+{
+    (void)state;
+    xrd_view_geom s1;
+    xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_SCREEN, VIT_DIAG, VIT_ASPECT, 1.f, 16.0 / 9.0, &s1);
+    const float zooms[] = {1.5f, 2.5f};
+    const float curves[] = {1.f, 2.5f, 10.f};
+    for (size_t z = 0; z < 2; z++)
+        for (size_t c = 0; c < 3; c++) {
+            xrd_view_geom m;
+            xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_MAGNIFY, VIT_DIAG, VIT_ASPECT, zooms[z],
+                              16.0 / 9.0, &m);
+            assert_true(m.half_w == s1.half_w && m.half_h == s1.half_h);
+            const float hw = m.half_w, hh = m.half_h, r = curves[c];
+            float uv[2], d[3];
+            const float fwd[3] = {0.f, 0.f, -1.f};
+            assert_true(xrd_flat_curve_dir_to_uv(fwd, hw, hh, r, uv));
+            assert_float_equal(uv[0], 0.5f, 1e-6);
+            assert_float_equal(uv[1], 0.5f, 1e-6);
+            /* the arc's ends at mid height, top and bottom, and just past them */
+            const double phi_e = hw / (double)r, ys[] = {0.0, hh, -hh};
+            const float vs[] = {0.5f, 1.f, 0.f};
+            for (size_t i = 0; i < 3; i++) {
+                arc_dir(r, phi_e, ys[i], d);
+                assert_true(xrd_flat_curve_dir_to_uv(d, hw, hh, r, uv));
+                assert_float_equal(uv[0], 1.f, 1e-5);
+                assert_float_equal(uv[1], vs[i], 1e-5);
+                arc_dir(r, -phi_e, ys[i], d);
+                assert_true(xrd_flat_curve_dir_to_uv(d, hw, hh, r, uv));
+                assert_float_equal(uv[0], 0.f, 1e-5);
+                assert_float_equal(uv[1], vs[i], 1e-5);
+            }
+            arc_dir(r, 1.001 * phi_e, 0.0, d);
+            assert_false(xrd_flat_curve_dir_to_uv(d, hw, hh, r, uv));
+            arc_dir(r, 0.5 * phi_e, 1.001 * hh, d);
+            assert_false(xrd_flat_curve_dir_to_uv(d, hw, hh, r, uv));
+            /* turning the head to the angle I reports reaches the arc's end */
+            const double ang = xrd_flat_half_angle(hw, r);
+            const float de[3] = {(float)sin(ang), 0.f, (float)-cos(ang)};
+            assert_true(xrd_flat_curve_dir_to_uv(de, hw, hh, r, uv));
+            assert_float_equal(uv[0], 1.f, 1e-5);
+            /* the narrowed view's corners, straight ahead, are on the screen */
+            for (int k = 0; k < 4; k++) {
+                const float corner[3] = {(k & 1 ? 1.f : -1.f) * m.tan_h,
+                                         (k & 2 ? 1.f : -1.f) * m.tan_v, -1.f};
+                assert_true(xrd_flat_curve_dir_to_uv(corner, hw, hh, r, uv));
+            }
+            /* beside and behind */
+            const float side[3] = {1.f, 0.f, 0.f}, behind[3] = {0.f, 0.f, 1.f};
+            const float back_left[3] = {-0.5f, 0.f, 0.8f};
+            assert_false(xrd_flat_curve_dir_to_uv(side, hw, hh, r, uv));
+            assert_false(xrd_flat_curve_dir_to_uv(behind, hw, hh, r, uv));
+            assert_false(xrd_flat_curve_dir_to_uv(back_left, hw, hh, r, uv));
+            /* junk: no screen, a radius out of range, a NaN direction */
+            assert_false(xrd_flat_curve_dir_to_uv(fwd, 0.f, hh, r, uv));
+            assert_false(xrd_flat_curve_dir_to_uv(fwd, hw, NAN, r, uv));
+            assert_false(xrd_flat_curve_dir_to_uv(fwd, hw, hh, 0.5f, uv));
+            assert_false(xrd_flat_curve_dir_to_uv(fwd, hw, hh, NAN, uv));
+            const float nan3[3] = {NAN, 0.f, -1.f};
+            assert_false(xrd_flat_curve_dir_to_uv(nan3, hw, hh, r, uv));
+        }
+}
+
+/* Magnify with the curve off is the plane as before, bit for bit: every view
+ * ray of a magnified view, at several zooms and head poses. */
+static void curve_off_magnify_is_the_plane(void **state)
+{
+    (void)state;
+    const float zooms[] = {0.5f, 1.5f, 2.5f, 4.f};
+    const double yaws[] = {0.0, 15.0, -25.0};
+    for (size_t z = 0; z < 4; z++) {
+        xrd_view_geom m;
+        xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_MAGNIFY, VIT_DIAG, VIT_ASPECT, zooms[z],
+                          2.39, &m);
+        for (size_t y = 0; y < 3; y++) {
+            xrd_quat head = xrd_quat_from_ypr_deg(yaws[y], 3.0, 0);
+            for (int i = -8; i <= 8; i++)
+                for (int j = -8; j <= 8; j++) {
+                    const float local[3] = {m.tan_h * (float)i / 8.f, m.tan_v * (float)j / 8.f,
+                                            -1.f};
+                    float d[3], a[2] = {-7.f, -7.f}, b[2] = {-7.f, -7.f};
+                    xrd_quat_rotate(head, local, d);
+                    bool pa = xrd_flat_dir_to_uv(d, m.half_w, m.half_h, a);
+                    bool pb = xrd_flat_curve_dir_to_uv(d, m.half_w, m.half_h, 0.f, b);
+                    assert_true(pa == pb);
+                    assert_memory_equal(a, b, sizeof a);
+                }
+        }
+    }
+}
+
+/* u and v of the view ray at (ndc_x, ndc_y) of geometry g, straight ahead. */
+static void view_uv(const xrd_view_geom *g, float curve, double nx, double ny, float uv[2])
+{
+    const float d[3] = {(float)(nx * g->tan_h), (float)(ny * g->tan_v), -1.f};
+    assert_true(xrd_flat_curve_dir_to_uv(d, g->half_w, g->half_h, curve, uv));
+}
+
+/* Z at a given zoom does not make the picture straight ahead jump: at the
+ * view centre both modes show the picture's centre, at the same scale (u and
+ * v per unit of the view's width and height match there to 0.1 %). Away from
+ * the centre they differ: at zoom > 1 screen mode's arc is zoom times longer
+ * and bends more across the view, so at the view's side edge it shows less of
+ * the picture than magnify mode, whose view lies on the middle of the zoom-1
+ * arc and is nearer the plane (which shows the same in both modes). */
+static void curve_z_keeps_the_centre(void **state)
+{
+    (void)state;
+    const float zooms[] = {0.5f, 0.9f, 1.5f, 2.5f, 4.f};
+    const float curves[] = {1.f, 2.5f, 10.f};
+    const double aspects[] = {16.0 / 9.0, 2.39, 4.0 / 3.0};
+    const double e = 1e-3;
+    for (size_t z = 0; z < 5; z++)
+        for (size_t c = 0; c < 3; c++)
+            for (size_t a = 0; a < 3; a++) {
+                xrd_view_geom s, m;
+                xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_SCREEN, VIT_DIAG, VIT_ASPECT, zooms[z],
+                                  aspects[a], &s);
+                xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_MAGNIFY, VIT_DIAG, VIT_ASPECT,
+                                  zooms[z], aspects[a], &m);
+                float us[2], um[2], l[2], r[2];
+                view_uv(&s, curves[c], 0.0, 0.0, us);
+                view_uv(&m, curves[c], 0.0, 0.0, um);
+                assert_float_equal(us[0], 0.5f, 1e-6);
+                assert_float_equal(us[1], 0.5f, 1e-6);
+                assert_float_equal(um[0], 0.5f, 1e-6);
+                assert_float_equal(um[1], 0.5f, 1e-6);
+                double ds[2], dm[2];
+                for (int ax = 0; ax < 2; ax++) {
+                    view_uv(&s, curves[c], ax ? 0.0 : -e, ax ? -e : 0.0, l);
+                    view_uv(&s, curves[c], ax ? 0.0 : e, ax ? e : 0.0, r);
+                    ds[ax] = (r[ax] - l[ax]) / (2.0 * e);
+                    view_uv(&m, curves[c], ax ? 0.0 : -e, ax ? -e : 0.0, l);
+                    view_uv(&m, curves[c], ax ? 0.0 : e, ax ? e : 0.0, r);
+                    dm[ax] = (r[ax] - l[ax]) / (2.0 * e);
+                    if (fabs(dm[ax] / ds[ax] - 1.0) > 1e-3)
+                        fail_msg("zoom %.1f curve %.1f aspect %.2f axis %d: the centre's scale "
+                                 "is %.5f in magnify, %.5f in screen mode", (double)zooms[z],
+                                 (double)curves[c], aspects[a], ax, dm[ax], ds[ax]);
+                }
+                if (!(zooms[z] > 1.f))
+                    continue;
+                /* the view's right edge at mid height, where both modes still
+                 * show the screen at these aspects */
+                const double plane = s.tan_h / (2.0 * s.half_w);
+                if (plane >= 0.5)
+                    continue;
+                view_uv(&s, curves[c], 1.0, 0.0, us);
+                view_uv(&m, curves[c], 1.0, 0.0, um);
+                const double es = us[0] - 0.5, em = um[0] - 0.5;
+                if (!(es < em && em < plane))
+                    fail_msg("zoom %.1f curve %.1f aspect %.2f: the view's edge shows u - 0.5 = "
+                             "%.5f in screen mode, %.5f in magnify, %.5f on the plane",
+                             (double)zooms[z], (double)curves[c], aspects[a], es, em, plane);
+            }
+}
+
 /* ---- minification ratio (spec 5.6) ---- */
 
 static void minify_flat_screen(void **state)
@@ -936,6 +1101,60 @@ static void minify_curved_centre_is_the_plane(void **state)
     }
 }
 
+/* The same holds for the zoom-1 screen magnify mode curves (issue #41), so the
+ * mipmap decision needs no change there: at the view centre the source texels
+ * per display pixel measured on the curved mapping are xrd_minify_ratio's
+ * from the view geometry (3840 x 2160 into 1920 x 1080 eyes), at radii 1, 2.5
+ * and 10, zooms 0.5 and 2.5; across the screen, out to 0.8 of its half width,
+ * u and v change no faster than at the centre. */
+static void minify_curved_magnify_centre_is_the_plane(void **state)
+{
+    (void)state;
+    const float zooms[] = {0.5f, 2.5f};
+    const float curves[] = {1.f, 2.5f, 10.f};
+    const float e = 1e-3f;
+    for (size_t z = 0; z < 2; z++) {
+        xrd_view_geom g;
+        xrd_view_geometry(XRD_PROJ_FLAT, XRD_ZOOM_MAGNIFY, VIT_DIAG, VIT_ASPECT, zooms[z],
+                          16.0 / 9.0, &g);
+        const float want = xrd_minify_ratio(XRD_PROJ_FLAT, &g, 3840, 2160, 1920, 1080, 180.f,
+                                            180.f);
+        assert_true(want > 0.f);
+        for (size_t c = 0; c < 3; c++) {
+            const float fx[] = {0.f, 0.3f, 0.8f};
+            double du0 = 0.0, dv0 = 0.0;
+            for (size_t i = 0; i < 3; i++) {
+                const float x = fx[i] * g.half_w;
+                float a[2], b[2];
+                const float l[3] = {x - e, 0.f, -1.f}, r[3] = {x + e, 0.f, -1.f};
+                assert_true(xrd_flat_curve_dir_to_uv(l, g.half_w, g.half_h, curves[c], a));
+                assert_true(xrd_flat_curve_dir_to_uv(r, g.half_w, g.half_h, curves[c], b));
+                const double du = (b[0] - a[0]) / (2.0 * e);
+                const float dn[3] = {x, -e, -1.f}, up[3] = {x, e, -1.f};
+                assert_true(xrd_flat_curve_dir_to_uv(dn, g.half_w, g.half_h, curves[c], a));
+                assert_true(xrd_flat_curve_dir_to_uv(up, g.half_w, g.half_h, curves[c], b));
+                const double dv = (b[1] - a[1]) / (2.0 * e);
+                if (i == 0) {
+                    du0 = du;
+                    dv0 = dv;
+                    /* one display pixel is 2 tan / out of view tangent */
+                    const double rh = du * 2.0 * g.tan_h / 1920 * 3840;
+                    const double rv = dv * 2.0 * g.tan_v / 1080 * 2160;
+                    const double got = rh > rv ? rh : rv;
+                    if (fabs(got / want - 1.0) > 1e-3)
+                        fail_msg("magnify zoom %.1f curve %.1f: measured %.5f at the centre, "
+                                 "xrd_minify_ratio %.5f", (double)zooms[z], (double)curves[c],
+                                 got, (double)want);
+                } else if (!(du < du0 && dv < dv0 * (1.0 + 1e-3))) {
+                    fail_msg("magnify zoom %.1f curve %.1f at %.1f half widths: du %.5f dv %.5f "
+                             "above the centre's %.5f %.5f", (double)zooms[z], (double)curves[c],
+                             (double)fx[i], du, dv, du0, dv0);
+                }
+            }
+        }
+    }
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -984,11 +1203,15 @@ int main(void)
         cmocka_unit_test(curve_behind_and_degenerate),
         cmocka_unit_test(curve_columns_straight_top_bows),
         cmocka_unit_test(curve_half_angle),
+        cmocka_unit_test(curve_magnify_centre_ends_beside_junk),
+        cmocka_unit_test(curve_off_magnify_is_the_plane),
+        cmocka_unit_test(curve_z_keeps_the_centre),
         cmocka_unit_test(minify_flat_screen),
         cmocka_unit_test(minify_flat_takes_larger_axis),
         cmocka_unit_test(minify_hequirect),
         cmocka_unit_test(minify_junk_is_zero),
         cmocka_unit_test(minify_curved_centre_is_the_plane),
+        cmocka_unit_test(minify_curved_magnify_centre_is_the_plane),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

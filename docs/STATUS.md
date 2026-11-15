@@ -306,19 +306,38 @@ Decisions:
   bottom edges bow outwards. Seen from the eye a curved screen is a little wider than the flat
   one: at zoom 1 and R = 1 a 16:9 screen spans 39.3 degrees, not 37.9, so its sides sit just
   outside the view (`I` prints the angle between the arc's ends).
-- Magnify mode draws the screen flat: there the screen stays at its zoom-1 size, which fits the
-  display, and zoom narrows the view, so there is no large screen to bend. With a curve on, `Z`
-  therefore also switches between curved and flat, and the two modes no longer show the same
-  picture away from the centre.
+- REVERSED 2026-11-14 (issue #41), kept for the record: "Magnify mode draws the screen flat:
+  there the screen stays at its zoom-1 size, which fits the display, and zoom narrows the view, so
+  there is no large screen to bend. With a curve on, `Z` therefore also switches between curved
+  and flat, and the two modes no longer show the same picture away from the centre." On the
+  hardware run of 2026-11-14 (Viture Pro XR, 1080p film, zoom 1.5 and 2.5) the owner found the
+  curved screen worked well, preferred R = 1 to R = 2, and named one thing that did not fit: "the
+  only behavior that didn't fit well was Z which flattened the curved image". The owner decided to
+  reverse the decision.
+- Since then (issue #41) magnify mode curves its zoom-1 screen with the same R: the arc keeps the
+  zoom-1 screen's width, the height is unchanged, and zoom narrows the view onto it as before.
+  `C` toggles the curve in both modes and prints the same in both (the `(flat in magnify mode)`
+  suffix is gone); `Z` never changes the curve. Only `xrd_controls_screen_curve` changed: the
+  mapping (`xrd_flat_curve_dir_to_uv`, the shader) already takes the screen's half-extents, which
+  in magnify mode are the zoom-1 screen's. At the view centre, straight ahead, both modes show the
+  picture's centre at the same scale, so `Z` does not jump; away from it they differ: screen
+  mode's arc is zoom times longer and bends more across the view, so at the view's edges it shows
+  a little less of the picture (at zoom 2.5 with R = 1, about 3% less than magnify mode, whose
+  view lies on the nearly flat middle of the zoom-1 arc). `I` prints, in magnify mode, the
+  zoom-1 screen's angle, the same at every zoom.
 - Head-locked screens curve the same way (the mapping is in head space when locked).
 - Nothing beside or behind the viewer is drawn, as for the plane: an arc reaching past 90 degrees
   stops there (the widest, zoom 4 with R = 1, reaches 79 degrees).
 - `xrd_minify_ratio` is unchanged: the cylinder touches the plane at the centre, where u and v
   change at the plane's rates (a unit test measures them on the curved mapping), and they only
   fall away from the centre, so the centre stays the worst case for the mipmap decision.
+  Re-checked for the curved zoom-1 screen of magnify mode (issue #41): the same holds there (a
+  unit test measures the ratio at the centre on the curved mapping and compares it with
+  `xrd_minify_ratio`'s, radii 1, 2.5 and 10, zooms 0.5 and 2.5), so it stays unchanged.
 - The eye-edge and mipmap clamp margins act on uv after the mapping, so the curved mapping needs
   none of its own; the seam and trilinear eye-separation render tests run again on a curved
-  screen and pass.
+  screen and pass. The seam test looks at a 20x magnified view, so it is the curved magnify
+  screen's check too; since issue #41 it runs at radii 1, 2.5 and 10.
 - `C` is not remembered per file, like the screen lock: it depends on the viewer, not the film.
   With `--screen-curve off`, `C` curves with R = 1.
 
@@ -329,12 +348,33 @@ What the sandbox verified (unit tests and both Xvfb smoke tests, software GL, th
   zooms and four head poses (a texture that encodes its own uv).
 - A dumped flat2d frame at `--zoom 0.9 --screen-curve 1.0`: the side borders each in one column,
   the top and bottom borders 6 rows nearer the frame's edge at the sides than at the centre;
-  `off` and magnify mode give straight borders and the frame of a run without the flag.
+  `off` gives straight borders and the frame of a run without the flag.
+- Issue #41, magnify mode curved: `xrd_controls_screen_curve` returns the radius in magnify mode
+  (also with `--zoom-mode magnify` from the start and head-locked); `Z` keeps the curve and `C`
+  flips it in both modes. The C mirror on the magnify geometry (zooms 1.5 and 2.5, radii 1, 2.5 and
+  10): centre, the arc's ends, top and bottom, the narrowed view's corners on the screen, beside and
+  behind, junk input; magnify with the curve off is the plane bit for bit; at the view centre both
+  modes give the picture's centre at the same scale (zooms 0.5 to 4, three picture shapes), and
+  above zoom 1 the view's edge shows less of the picture in screen mode than in magnify mode, and
+  less in magnify mode than on the plane. The shader against the mirror on every pixel for the
+  curved magnify mapping (radii 0, 1, 2.5 and 10, zooms 0.8 and 2.5, four head poses). The smoke
+  frame at `--zoom 0.9 --zoom-mode magnify --screen-curve 1.0` now has bowed borders (side borders
+  in one column, top and bottom 7.5 rows nearer the edge at the sides); this case expected straight
+  borders before, and the changed expectation follows the reversed decision, it is not a loosened
+  test. Magnify with `--screen-curve off` keeps straight borders and the frame of a run without the
+  flag.
 
 Run on the glasses on 2026-11-14 (see Hardware run 2026-11-14): worked well at 1.5 and about 2.5;
 the owner prefers R = 1 to R = 2; `C`, `Z`, `L` and `I` as the README says; `C` in 3D (full SBS)
 fine. The owner found `Z` flattening the curve did not fit: issue #41 reverses that decision. Still
 unverified: a timing pair with the curve on (0 missed in one run with keys pressed), half SBS.
+
+Hardware check for issue #41 (not done; the owner, Viture Pro XR): with a curve on (R = 1), play a
+flat film at zoom 1.5 and 2.5 and compare `Z` back and forth: the screen stays curved in magnify
+mode and `C` still switches it there, the picture straight ahead does not jump, and whether
+magnify mode's curve (its bowed edges and ends come into view only when turning towards them)
+feels right next to screen mode's. Unverified until then: how the curved magnify screen looks and
+feels on the glasses.
 
 ## Automatic SBS switch (issue #18)
 

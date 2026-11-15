@@ -24,7 +24,7 @@ typedef struct {
     float zoom_other;           /* the zoom of the projection not in effect */
     xrd_zoom_mode zoom_mode;
     bool screen_locked;
-    bool screen_curved;         /* C: the flat screen is curved (screen zoom mode only) */
+    bool screen_curved;         /* C: the flat screen is curved (both zoom modes) */
     float screen_curve;         /* the curved screen's radius, XRD_SCREEN_CURVE_MIN..MAX */
     bool layout_chosen;         /* M or S was pressed in this run */
 } xrd_controls;
@@ -53,9 +53,9 @@ bool xrd_controls_toggle_lock(xrd_controls *c);      /* false, unchanged, in heq
 void xrd_controls_init_curve(xrd_controls *c, float curve);
 bool xrd_controls_toggle_curve(xrd_controls *c);     /* C; false, unchanged, in hequirect */
 /* The curve to draw with (xrd_draw_params.screen_curve): the radius while the
- * screen is curved, flat and in screen zoom mode; otherwise 0. Magnify mode
- * keeps the zoom-1 screen and narrows the view, so it has no large screen
- * to bend: the screen stays flat there. */
+ * screen is curved and flat; otherwise 0. Both zoom modes curve: magnify mode
+ * curves its zoom-1 screen with the same radius and narrows the view onto it,
+ * so Z never changes the curve. */
 float xrd_controls_screen_curve(const xrd_controls *c);
 void xrd_controls_zoom_in(xrd_controls *c);       /* zoom * 1.1, at most 4 */
 void xrd_controls_zoom_out(xrd_controls *c);      /* zoom / 1.1, at least 0.25 */

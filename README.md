@@ -138,14 +138,15 @@ The `zoom:` and `filter:` lines are printed only when the value changes (not for
 a press at a limit). `P` also prints the other projection's zoom, since each projection keeps its
 own. In VR180, `Z` prints `zoom mode: magnify (VR180 has no screen mode)`, `L` prints
 `screen: fixed (VR180 cannot be head-locked)` and `C` prints
-`screen curve: none (VR180 has no flat screen)`, and none of them changes anything. In magnify
-mode `C` still switches, and prints e.g. `screen curve: 1.00 (flat in magnify mode)`. `?` is Shift+/ on a
-US keyboard. Key repeat is ignored except for zoom and seek.
+`screen curve: none (VR180 has no flat screen)`, and none of them changes anything. `C` works
+the same in both zoom modes and prints the same lines in both; `Z` leaves the curve as it is.
+`?` is Shift+/ on a US keyboard. Key repeat is ignored except for zoom and seek.
 
 `I` prints, one item per line: the file name; codec, coded frame size and frame rate; `hwdec`;
 projection, layout and (flat 3D) packing, each with where it came from (the sources of the
 `detect:` line, or `key`); zoom, and for flat video the zoom mode and the screen size in degrees
-(for a curved screen, the angle between its ends as seen from the eye); screen fixed or
+(for a curved screen, the angle between its ends as seen from the eye; in magnify mode, the size
+of the zoom-1 screen zoom magnifies, the same at every zoom, not the part in view); screen fixed or
 head-locked and the screen curve; the filter in use (`trilinear` while mipmaps are used) and whether
 mipmaps are on; mpv's scaler (`--mpv-scale`: `off`, the scaler and the sizes it scales between, or
 why it is not in use); the video texture; `deband` on or off; frames presented and missed vsyncs
@@ -353,8 +354,9 @@ Two zoom modes (`Z`, or `--zoom-mode`, remembered per file):
 - `magnify`: the screen stays at the size of zoom 1 and zoom narrows the view instead, as zoom
   does for VR180. The picture moves zoom times faster than your head.
 
-At the same zoom both modes show the same flat picture straight ahead, so switching does not jump
-(a curved screen is flat in magnify mode; see below).
+At the same zoom both modes show the same point of the picture at the centre of the view, at the
+same scale, so switching does not jump. On a flat screen they show the same picture across the
+whole view straight ahead; on a curved one they differ away from the centre (see below).
 
 Screen size of a 16:9 picture on the Viture Pro XR (display 37.9 x 21.9 degrees), in screen mode,
 as `I` prints it:
@@ -384,12 +386,18 @@ zoom 1 with R = 1, a 16:9 screen's left and right edges sit just outside the vie
 apart instead of 37.9). Columns stay straight and upright; the top and bottom edges bow outwards
 towards the sides, as the top and bottom of a cinema's curved screen do from its centre. `C`
 switches between flat and curved; if `--screen-curve` was `off`, `C` curves with R = 1. Like the
-lock, the curve is not saved per file. It applies only in screen zoom mode: magnify keeps the
-zoom-1 screen, which fits the display, and narrows the view onto it, so there is no large screen
-to bend and the screen stays flat (with a curve on, `Z` therefore also switches between curved
-and flat). A head-locked screen curves the same way. Nothing beside or behind you is drawn, so an
-arc that would reach past 90 degrees to either side stops there (at zoom 4 with R = 1 a 16:9
-screen reaches 79 degrees).
+lock, the curve is not saved per file. Magnify mode curves too: its zoom-1 screen is bent with
+the same R (the arc keeps the zoom-1 screen's width, the height is unchanged) and zoom narrows the
+view onto it, so `Z` never changes the curve. Straight ahead the two modes show the same point of
+the picture at the view's centre, at the same scale; away from it they differ. In screen mode the
+arc is zoom times longer and bends more across the view; in magnify mode the view lies on the
+middle of the zoom-1 arc, which bends little there, so across the view the picture is nearer the
+flat screen's: at zoom 2.5 with R = 1 the view's left and right edges show about 3% less of the
+picture in screen mode than in magnify mode. Above zoom 1 the magnified view of a 16:9 picture
+straight ahead lies wholly on the screen, so the arc's ends and the bowed top and bottom come into
+view only when you turn towards them. A head-locked screen curves the same way. Nothing beside or
+behind you is drawn, so an arc that would reach past 90 degrees to either side stops there (at
+zoom 4 with R = 1 a 16:9 screen reaches 79 degrees).
 
 Subtitles: for flat 2D, mpv's own subtitle rendering is left on, so a subtitle track (or an
 `.srt` next to the file) appears on the screen, at the bottom of the picture. In 3D layouts and in

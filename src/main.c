@@ -251,15 +251,11 @@ static void print_keys(void)
         fprintf(stderr, "keys: %s  %s\n", xrd_key_list[i].key, xrd_key_list[i].action);
 }
 
-/* "screen curve: off" or "screen curve: 1.00", and why magnify mode draws a
- * curved screen flat. */
+/* "screen curve: off" or "screen curve: 1.00", the same in both zoom modes. */
 static void print_curve(const xrd_controls *c, const char *prefix)
 {
     if (!c->screen_curved)
         fprintf(stderr, "%sscreen curve: off\n", prefix);
-    else if (c->zoom_mode != XRD_ZOOM_SCREEN)
-        fprintf(stderr, "%sscreen curve: %.2f (flat in magnify mode)\n", prefix,
-                (double)c->screen_curve);
     else
         fprintf(stderr, "%sscreen curve: %.2f\n", prefix, (double)c->screen_curve);
 }
