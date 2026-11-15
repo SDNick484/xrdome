@@ -37,6 +37,8 @@ struct xrd_player {
     float hfov_deg, vfov_deg;
     char hwdec[64];
     double resume_at;  /* xrd_player_options.resume_at, cleared once checked */
+    double duration;   /* mpv's duration at FILE_LOADED (0 unknown), kept after the end */
+    bool at_end;       /* the file played to its end (MPV_END_FILE_REASON_EOF) */
     char scale[64];
     char err[512];
 };
@@ -444,6 +446,10 @@ static void check_resume(xrd_player *p)
 
 double xrd_player_position(xrd_player *p)
 {
+    /* mpv unloads the file at its end, and time-pos goes with it: a file that
+     * played to its end stopped at its duration. */
+    if (p->at_end && p->duration > 0.0)
+        return p->duration;
     double v = 0.0;
     if (mpv_get_property(p->mpv, "time-pos", MPV_FORMAT_DOUBLE, &v) < 0 || !(v >= 0.0))
         return -1.0;
@@ -454,7 +460,7 @@ double xrd_player_duration(xrd_player *p)
 {
     double v = 0.0;
     if (mpv_get_property(p->mpv, "duration", MPV_FORMAT_DOUBLE, &v) < 0 || !(v > 0.0))
-        return -1.0;
+        return p->duration > 0.0 ? p->duration : -1.0;
     return v;
 }
 
@@ -626,12 +632,17 @@ static int handle_events(xrd_player *p)
                 p->finished = true;
                 return -1;
             }
+            if (mpv_get_property(p->mpv, "duration", MPV_FORMAT_DOUBLE, &p->duration) < 0 ||
+                !(p->duration > 0.0))
+                p->duration = 0.0;
             check_resume(p);
             break;
         }
         case MPV_EVENT_END_FILE: {
             const mpv_event_end_file *ef = ev->data;
             p->finished = true;
+            if (ef->reason == MPV_END_FILE_REASON_EOF)
+                p->at_end = true;
             if (ef->reason == MPV_END_FILE_REASON_ERROR) {
                 set_err(p->err, sizeof p->err, "cannot play '%s': %s", p->file,
                         mpv_error_string(ef->error));

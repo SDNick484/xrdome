@@ -211,6 +211,10 @@ Decisions:
   `xrdome: note:` and seeks to 0. The `restored` line is printed before that, so it still shows
   the position.
 - Duration or position unknown at quit (mpv returns none): the record's position is left as loaded.
+- Played to the end of the file: mpv unloads the file at its end, so position and duration are
+  gone at quit. The player keeps the duration from `FILE_LOADED` and, after an end-of-file
+  `END_FILE`, reports it as the position, so the near-end rule removes the position. Found on
+  the glasses on 2026-11-14 (a film fast-forwarded to its end kept its old position); smoke M20.
 
 Verified in the sandbox (Ubuntu 24.04-like, mpv, software GL, Xvfb): unit tests for the record's
 parse and format, the near-start and near-end rule, and the precedence; smoke cases M13 to M19
