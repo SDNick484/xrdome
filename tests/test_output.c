@@ -163,6 +163,19 @@ static void test_list(void **s)
     assert_int_equal(one[0], '\0');
 }
 
+static void test_use_fullscreen(void **s)
+{
+    (void)s;
+    assert_false(xrd_output_use_fullscreen(NULL, NULL));
+    assert_false(xrd_output_use_fullscreen("", NULL));
+    assert_false(xrd_output_use_fullscreen("", "x11"));
+    assert_false(xrd_output_use_fullscreen(NULL, "tty"));
+    assert_true(xrd_output_use_fullscreen("wayland-0", NULL));
+    assert_true(xrd_output_use_fullscreen("wayland-1", "x11"));
+    assert_true(xrd_output_use_fullscreen(NULL, "wayland"));
+    assert_true(xrd_output_use_fullscreen("", "wayland"));
+}
+
 int main(void)
 {
     const struct CMUnitTest t[] = {
@@ -178,6 +191,7 @@ int main(void)
         cmocka_unit_test(test_prefix_match_not_sbs),
         cmocka_unit_test(test_first_match_wins),
         cmocka_unit_test(test_list),
+        cmocka_unit_test(test_use_fullscreen),
     };
     return cmocka_run_group_tests(t, NULL, NULL);
 }

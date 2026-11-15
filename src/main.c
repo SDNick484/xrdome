@@ -697,6 +697,12 @@ int main(int argc, char **argv)
     }
 
     SDL_SetHint(SDL_HINT_VIDEO_X11_FORCE_EGL, "1");
+    /* xrdome needs SDL's X11 driver (Xorg, or XWayland under a Wayland
+     * compositor). SDL builds with a Wayland backend, such as sdl2-compat on
+     * Arch and SteamOS, prefer it when WAYLAND_DISPLAY is set; an explicit
+     * SDL_VIDEODRIVER still wins. */
+    if (!getenv("SDL_VIDEODRIVER"))
+        SDL_SetHint(SDL_HINT_VIDEODRIVER, "x11");
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         fail("SDL_Init: %s", SDL_GetError());
         goto out;
@@ -747,6 +753,12 @@ int main(int argc, char **argv)
         w = outs[idx].w;
         h = outs[idx].h;
         wflags |= SDL_WINDOW_BORDERLESS;
+        /* Under a Wayland compositor (XWayland) a borderless window at the
+         * output's position may be ignored or tiled; fullscreen on the
+         * display the window is created on is placed and can be scanned out
+         * directly. Xorg keeps the borderless window. */
+        if (xrd_output_use_fullscreen(getenv("WAYLAND_DISPLAY"), getenv("XDG_SESSION_TYPE")))
+            wflags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
     }
 
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -770,7 +782,8 @@ int main(int argc, char **argv)
     SDL_SysWMinfo wm;
     SDL_VERSION(&wm.version);
     if (!SDL_GetWindowWMInfo(win, &wm) || wm.subsystem != SDL_SYSWM_X11) {
-        fail("%s", "an X11 (Xorg) session is required");
+        fail("%s", "SDL did not use its X11 driver (Xorg or XWayland); "
+                  "unset SDL_VIDEODRIVER or set it to x11");
         goto out;
     }
 
