@@ -123,6 +123,7 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 | Shift+R | Recenter, full |
 | [ / ] | Zoom out / in (x1.1 per step, 0.25 to 4); prints `zoom: 1.10` |
 | F | Cycle the enlarging filter: bilinear, bicubic, bicubic-ar, mitchell, then bilinear again; prints e.g. `filter: bicubic-ar`. See [Sharpness](#viewing-comfort-and-sharpness) |
+| Shift+F | Sharpening strength: off, 0.25, 0.5, 0.75, 1, then off again (from a `--sharpen` value in between, the next step above it); prints `sharpen: 0.25` or `sharpen: off`. Not remembered per file |
 | S | Swap eyes |
 | M | Cycle layout. Flat: 2D, half SBS, full SBS, half top-bottom, full top-bottom; prints e.g. `layout: sbs-lr half` or `layout: mono`. VR180: sbs-lr, sbs-rl, tb-lr, mono; prints e.g. `layout: sbs-rl` |
 | P | Switch projection, flat or VR180; prints `proj: flat` or `proj: hequirect` |
@@ -134,7 +135,7 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 | I | Print playback information to stderr (`info:` lines) |
 | Q | Quit |
 
-The `zoom:` and `filter:` lines are printed only when the value changes (not for
+The `zoom:`, `filter:` and `sharpen:` lines are printed only when the value changes (not for
 a press at a limit). `P` also prints the other projection's zoom, since each projection keeps its
 own. In VR180, `Z` prints `zoom mode: magnify (VR180 has no screen mode)`, `L` prints
 `screen: fixed (VR180 cannot be head-locked)` and `C` prints
@@ -148,7 +149,7 @@ projection, layout and (flat 3D) packing, each with where it came from (the sour
 (for a curved screen, the angle between its ends as seen from the eye; in magnify mode, the size
 of the zoom-1 screen zoom magnifies, the same at every zoom, not the part in view); screen fixed or
 head-locked and the screen curve; the filter in use (`trilinear` while mipmaps are used) and whether
-mipmaps are on; mpv's scaler (`--mpv-scale`: `off`, the scaler and the sizes it scales between, or
+mipmaps are on; the sharpening strength (`sharpen: off` or e.g. `sharpen: 0.50`); mpv's scaler (`--mpv-scale`: `off`, the scaler and the sizes it scales between, or
 why it is not in use); the video texture; `deband` on or off; frames presented and missed vsyncs
 so far. For example:
 
@@ -159,6 +160,7 @@ info: zoom: 1.50, zoom mode screen, screen 54.5 x 32.3 degrees
 info: screen: fixed
 info: screen curve: off
 info: filter: trilinear, mipmaps on
+info: sharpen: off
 info: mpv scale: spline36, not in use (picture shrunk)
 ```
 
@@ -179,7 +181,7 @@ start gives a tilted picture, and `R` does not correct that. Hold your head leve
 `--content-fov HxV`, `--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)),
 `--mpv-profile NAME`, `--mpv-opt KEY=VALUE` (repeatable, up to 16), `--mpv-log LEVEL`,
 `--mpv-scale off|NAME`, `--convergence DEG`, `--filter bilinear|bicubic|bicubic-ar|mitchell`,
-`--fbo-format rgb10|rgba8`, `--dither on|off`, `--deband on|off`, `--no-memory`, `--forget`,
+`--sharpen S`, `--fbo-format rgb10|rgba8`, `--dither on|off`, `--deband on|off`, `--no-memory`, `--forget`,
 `--resume`, `--no-resume` (the last four are described under
 [Per-file settings](#per-file-settings)).
 
@@ -210,6 +212,11 @@ video: `bicubic` (Catmull-Rom, the default), `bicubic-ar` (Catmull-Rom without i
 `mitchell` (softer, a much fainter halo) or `bilinear`. Neither is an ini key.
 `--convergence` is also remembered per file (see [Per-file settings](#per-file-settings)), and
 `--filter` is not. See [Viewing comfort and sharpness](#viewing-comfort-and-sharpness).
+
+`--sharpen S` (default 0, off; 0 to 1; ini key `sharpen`) sharpens each eye's picture after it
+has been drawn, with contrast-adaptive sharpening (AMD FidelityFX CAS); 1 is the strongest. At 0
+the eye pass is exactly what it is without the flag, at no cost. `Shift+F` steps it during
+playback. See [Viewing comfort and sharpness](#viewing-comfort-and-sharpness).
 
 `--fbo-format rgb10|rgba8` (default `rgb10`) is the format of the texture mpv renders each
 video frame into before the eye pass reads it. `rgb10` (`GL_RGB10_A2`, 10 bits per colour, the
@@ -302,8 +309,9 @@ to highest: built-in defaults, built-in device values, the ini file, the command
 [Resume](#resume-where-you-left-off)), `screen_curve` (`off` or a radius from 1 to 10, as
 `--screen-curve`, default `off`), `sbs_switch` (`auto` or `off`, as `--sbs-switch`, default
 `auto`), `ffprobe` (the program run for format detection, default `ffprobe` looked up on
-`PATH`), `deband` (`yes` or `no`, also `on` or `off`, as `--deband`, default `no`) and
-`mpv_scale` (`off` or an mpv scaler name, as `--mpv-scale`, default `off`).
+`PATH`), `deband` (`yes` or `no`, also `on` or `off`, as `--deband`, default `no`),
+`mpv_scale` (`off` or an mpv scaler name, as `--mpv-scale`, default `off`) and `sharpen` (0 to 1,
+as `--sharpen`, default 0, off).
 
 `[device.<name>]` keys, read for the device selected with `--device` (default `viture-pro`):
 `fov_diag` (diagonal FOV in degrees, 10 to 120), `zoom` (the VR180 zoom, 0.25 to 4, default 1)
@@ -323,6 +331,7 @@ sbs_switch = auto
 ffprobe = /usr/bin/ffprobe
 deband = no
 mpv_scale = off
+sharpen = 0
 
 [device.viture-pro]
 fov_diag = 43
@@ -704,6 +713,33 @@ own `--timing-log`, and compare the logs; pressing `F` during a run mixes filter
 `--mpv-log v` and `--mpv-log debug` are for diagnosis only: they print a lot and affect timing,
 so leave them off for measurements.
 
+**Sharpening (`--sharpen`, `Shift+F`).** After the eye pass has drawn both eyes, a second pass
+can sharpen them with contrast-adaptive sharpening (CAS, from AMD FidelityFX): each display pixel
+is pushed away from its four neighbours by an amount that shrinks where the local contrast is
+already high or the pixel is near black or white, so flat areas and noise gain little and hard
+edges get a smaller halo than with a plain sharpening filter. `--sharpen S` sets the strength
+from 0 (off, the default) to 1 (CAS at its own maximum, `sharpness = 1`); `0.625` is CAS's own
+default (`sharpness = 0`). `Shift+F` steps through off, 0.25, 0.5, 0.75 and 1 and prints
+`sharpen: 0.50`; `I` shows it; `sharpen = 0.5` in `[general]` sets it at start. It is a viewing
+preference, so it is not saved per file.
+
+- It works in display pixels (3 x 3 around each pixel), after the enlarging filter, mipmaps and
+  `--mpv-scale`, and before dithering. So it sharpens detail at the size of one or two display
+  pixels: most on a picture shown about 1:1 (flat video near zoom 1, or with `--mpv-scale`), and
+  less the more the picture is enlarged. In the sandbox a hard edge drawn 1:1 became a third
+  steeper at strength 1, one enlarged 2x a sixth steeper, and one enlarged 4x a tenth; the soft
+  edges of a VR180 picture enlarged 2 to 6 times change by a few levels. Try it on a low-bitrate
+  or VR180 file, where softness shows most.
+- Strength 1 on a hard edge between levels 50 and 200 leaves a dark and a light fringe of about
+  25 levels on each side; at 0.5 about 9. Lower strengths are the safer default when you try it.
+- Nothing crosses between the eyes, and the black around the picture (behind you, outside
+  `--content-fov`, around the flat screen) stays black and is never sharpened into the picture's
+  edge: the picture's border pixels are sharpened as if the picture continued.
+- Cost: one more pass over the whole 3840x1080 output, 9 reads per pixel from a 10-bit
+  intermediate texture (16 MB written and read again every frame). It has not been timed on the
+  glasses yet; time it with a pair of runs, `--sharpen 0` against `--sharpen 0.5`, each with its
+  own `--timing-log` (see [Performance notes](#performance-notes)). At 0 there is no extra pass.
+
 **Banding: debanding.** Dark gradients and skies in a low-bitrate file (a 2.5 Mbit/s AV1 file
 looked far worse than 20 Mbit/s H.264) show visible steps that the 10-bit texture and dithering
 cannot remove, because the steps are in the decoded picture. mpv's `deband` filter smooths them
@@ -1032,4 +1068,6 @@ Known limits:
 
 GPL-2.0-or-later, the same terms as mpv built with its GPL files (see `Copyright` in the
 [mpv repository](https://github.com/mpv-player/mpv)); xrdome links libmpv. The full text is in
-`LICENSE`.
+`LICENSE`. The sharpening filter in `src/render/shaders/sharpen.frag` is a port of AMD FidelityFX
+CAS and stays under AMD's MIT licence, whose notice is in that file (and in the shader text
+compiled into the program); MIT is compatible with the GPL.
