@@ -590,6 +590,101 @@ Hardware check (owner, after merge):
    `--timing-log` each, no keys: `--filter bicubic` against `--filter bicubic-ar` (the most
    expensive), missed vsyncs from the `timing:` line. The defaults missed 1.6% there on 2026-11-14.
 
+## Sharpening after the eye pass (`--sharpen`, `Shift+F`, issue #26)
+
+`--sharpen S` (0 to 1, default 0 = off) and `[general] sharpen` (same range; the flag wins);
+`Shift+F` steps off, 0.25, 0.5, 0.75, 1 and back to off, printing `sharpen: 0.50` or
+`sharpen: off`; `I` prints `info: sharpen: ...`. Not remembered per file (a viewing preference,
+like `--filter` and `--deband`).
+
+Decisions:
+- Design (a), a second pass: with sharpening on, the eye pass draws both eyes into an
+  intermediate texture of the output's size (`GL_RGB10_A2`, the same 10 bits as the video
+  texture, alpha used as the picture mask) without dithering, and `sharpen.frag` draws each eye
+  from it into the window: 9 `texelFetch` reads per pixel (the 3 x 3), at 3840x1080, plus the
+  intermediate written and read once (16.6 MB each way per frame). At 0 there is no second pass
+  and no intermediate: the draw is the old one-pass draw, byte for byte.
+- Not (b), sharpening in source space inside the eye pass: CAS needs the 3 x 3 around every
+  texel it sharpens, so sharpening the texels a filter reads means a 4 x 4 texel neighbourhood
+  for bilinear (16 reads instead of 1) and 6 x 6 for the 4 x 4 bicubic/Mitchell kernels (36
+  instead of 9; 40 for bicubic-ar), per display pixel, every texel's sharpening recomputed for
+  every display pixel that covers it (2 to 6 times over in VR180). Not built or measured: at 2
+  to 4 times the reads of today's filters, against 9 cache-friendly reads in (a), it is the
+  more expensive design on this GPU, and it would differ per filter and change again with
+  `--mpv-scale` and mipmaps. Its advantage: it sharpens at the source's scale (see the next
+  point).
+- What display-space CAS does to an enlarged picture: its 3 x 3 sees one to two display pixels,
+  so it acts on edges one or two pixels wide. Measured on a hard 50/200 step drawn flat at
+  several enlargements, strength 1, steepest step in levels per pixel: 1:1 150 -> 200 (+33%);
+  2x 74 -> 88 bilinear, 90 -> 104 bicubic (+16 to +19%); 3x 50 -> 66 bilinear, 61 -> 67 bicubic;
+  4x 38 -> 42, 47 -> 51 (+9 to +10%). A VR180 step enlarged far more (a 32-texel test eye)
+  changed by under 4 levels. So it helps most at about 1:1 (flat near zoom 1, or with
+  `--mpv-scale`) and on VR180's 2x (8K) more than its 5x (4K). Whether that is visible on the
+  glasses is the owner's call.
+- The filter is CAS's sharpen-only path ported from AMD's `ffx_cas.h` 1.20190610 (soft min and
+  max over the cross and the 3 x 3, `CAS_BETTER_DIAGONALS`; per-channel weights, `CAS_SLOW`;
+  exact reciprocal and square root, `CAS_GO_SLOWER`), so the MIT notice is in `sharpen.frag`,
+  the README's Licence section names it and the ebuild says `GPL-2+ MIT`. The shader's text,
+  notice included, is compiled into the program by `embed_shaders.py`. One deviation: the
+  amount divides by `max(mx, 1e-5)`, so an all-black neighbourhood gives 0, not NaN. It runs on
+  the display-encoded (gamma) values, as most CAS ports do; AMD suggests linear input.
+- Strength: CAS's own `sharpness` 0..1 maps to a lobe of -1/8..-1/5, and its 0 still sharpens.
+  Ours is linear from 0 (off) to 1 = CAS at `sharpness 1` (-1/5); 0.625 is CAS's `sharpness 0`.
+  That makes 0 off with no jump to the first step. Fringe on a hard 1:1 50/200 edge: about 25
+  levels at strength 1, about 9 at 0.5.
+- Eye edges: every neighbour read is clamped into the eye's own viewport (nothing crosses
+  between eyes), and a neighbour the eye pass drew black (behind, outside `--content-fov`,
+  around the flat or curved screen) is read as the centre pixel, so black is never sharpened
+  into the picture and the picture's border pixels are sharpened as if it continued. Black
+  itself stays exactly black and undithered. (Pure black alone would already give CAS an amount
+  of 0 next to it; the mask also keeps the border rows sharpened along the edge and does not
+  depend on the outside being exactly 0.)
+- Dithering moves to the second pass, so it still comes last; the intermediate keeps 10 bits.
+- `Shift+F`: `F` ignored Shift before, so the combination was free; it steps rather than cycles
+  a list so a `--sharpen` value in between steps to the next quarter. `sharpen` is an ini key as
+  the issue asked (unlike `filter`, nothing ruled it out); it is in `[general]` only.
+- If the GPU cannot render to the intermediate, one warning
+  (`xrdome: warning: sharpening is off: ...`) and drawing goes on without it.
+
+Rough relative cost on Mesa llvmpipe (CPU, not the GPU): a 7680x3840 10-bit texture drawn as
+VR180 into 3840x1080, `glFinish` after every frame, 10 frames, three runs each (within 0.1 ms):
+bilinear 4.5 ms, bilinear + sharpen 15.0 ms; bicubic 14.9 ms, bicubic + sharpen 25.0 ms. The
+second pass costs about 10.3 ms there, of which a plain copy pass through the intermediate (1
+read) is 3.6 ms. On a GPU the ratio will differ (the eye pass's 8K reads miss the cache, the
+second pass's mostly hit); only the timing pair below decides.
+
+Verified in the sandbox (llvmpipe): render tests `sharpen_matches_cas_reference` (every pixel
+against a double-precision CAS reference computed from the unsharpened draw read back from an
+`RGB10_A2` target, within 1e-3, at strengths 1 and 0.5: a 1:1 flat step, a VR180 step across
+the eye boundary, VR180 next to the rolled content edge of a 90x90 file and the rolled "behind"
+edge, the rolled flat screen's border and the curved screen's border),
+`sharpen_zero_is_todays_output` (strength 0 after 0.5, and -1, byte-identical to the one-pass
+draw for all four filters in both projections with dithering), `sharpen_keeps_constant`
+(constant colour stays within 2 levels with dithering, black stays exactly black, at the test
+size and then 3840x1080, which remakes the intermediate), `sharpen_keeps_eyes_apart` (a
+different grey per eye, each viewport constant to the boundary, swapped and not),
+`sharpen_steepens_a_step` (darker dark side, brighter bright side, steeper edge, within 0..1)
+and `sharpen_ignores_caller_state`; unit tests for the flag, the ini key and their precedence
+and errors, `Shift+F`'s steps, the session copying `--sharpen` into the controls, and the key
+list against README. Mutations that drop the eye clamp, drop the mask, use green-only weights,
+drop the diagonals, dither in the first pass, dither the black, scale the lobe by 1/8 or draw
+the second pass into framebuffer 0 each fail at least one test. Smoke SH1 to SH5: flat 4/3
+enlargement with `--sharpen 0.5` fills the eye and shows E1's picture but not its frame; half
+SBS at 1 keeps each viewport to its eye; a shrunk picture with mipmaps keeps black corners and
+every trilinear draw finds its chain; VR180 with `sharpen = 0.5` from the ini passes the frame
+check and differs from the unsharpened frame, and `--sharpen 0` beats the ini; `--sharpen 2`
+exits 1 naming the flag and range. Not verified: `Shift+F` and its `sharpen:` line, the `I`
+line (the smoke test sends no keys); the look on the glasses; GPU cost.
+
+Hardware check (owner, after merge):
+1. Timing pair first, on the 8K AV1 VR180 file at zoom 1.0 (the defaults missed 1.6% there):
+   AC power, `--no-memory --frames 3600`, a `--timing-log` each, no keys, `--sharpen 0` against
+   `--sharpen 0.5`; missed vsyncs from the `timing:` line. Then the same pair on the 4K AV1 flat
+   film at zoom 1.5.
+2. Look: on a still frame of the VR180 file and of a low-bitrate flat file, `Shift+F` from off
+   to 1 and back: is there a visible gain at 0.5 or 0.75, and are halos or noise visible at 1?
+   With `I`, note the strength judged best; it can become the default only after that.
+
 ## XREAL Air 2 Pro (owner, 2026-11-14, `main` at `bb95090`)
 - VR180 and flat files played on the XREAL Air 2 Pro with head tracking, "pretty much the same" as
   on the Viture Pro XR, both with `--device xreal-air2pro` and without it.
@@ -817,8 +912,9 @@ convergence on the XREAL.
   detail; a real half-SBS film, and `M` into half SBS on one; subtitles on the glasses (also with
   `--mpv-scale`); top-bottom if such a file turns up. Full SBS works (2026-11-14).
 - Curved screen: issue #41 (`Z` keeps the curve, the owner's call from the run); a timing pair.
-- Enlarging and sharpening: issues #25 (a better eye-pass filter) and #26 (`--sharpen`, after #25);
-  the run's mpv-scaling and debanding numbers are in their bodies.
+- Enlarging and sharpening: issue #25 (a better eye-pass filter); `--sharpen` (issue #26) is
+  built, and its timing pair on the 8K VR180 file and the owner's look at 0.5 to 1 are open (see
+  its section). The run's mpv-scaling and debanding numbers are in #25's and #26's bodies.
 - Dimming and brightness keys wait on an XRLinuxDriver feature (control-file requests for
   brightness and the electrochromic film); the request is drafted in issue #22's PR for the owner
   to file. Keys `D` and `Shift+[` / `Shift+]` are reserved for it.

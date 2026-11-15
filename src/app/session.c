@@ -94,6 +94,7 @@ void xrd_session_controls(const xrd_session *ss, const xrd_config *cfg, xrd_cont
     xrd_controls_init_format(c, s->proj, s->packing, flat ? s->zoom : s->flat_zoom, s->zoom_mode,
                              cfg->screen_locked);
     xrd_controls_init_curve(c, cfg->screen_curve);
+    xrd_controls_init_sharpen(c, cfg->sharpen);
     c->swap_eyes = s->swap;
 }
 

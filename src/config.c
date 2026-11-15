@@ -201,6 +201,7 @@ void xrd_config_defaults(xrd_config *c)
     c->fbo_format = XRD_FBO_RGB10;
     c->dither = true;
     c->deband = false;
+    c->sharpen = 0.f;
     c->proj_auto = true;
     c->proj = XRD_PROJ_HEQUIRECT;
     c->layout_auto = true;
@@ -332,6 +333,8 @@ static int ini_read(xrd_config *c, const char *path, bool *device_found, char *e
             rc = parse_sbs_switch("sbs_switch", val, &c->sbs_switch, msg, sizeof msg);
         } else if (sec == SEC_GENERAL && !strcmp(key, "ffprobe")) {
             rc = set_string("ffprobe", c->ffprobe, sizeof c->ffprobe, val, msg, sizeof msg);
+        } else if (sec == SEC_GENERAL && !strcmp(key, "sharpen")) {
+            rc = parse_ranged("sharpen", val, 0.f, XRD_SHARPEN_MAX, &c->sharpen, msg, sizeof msg);
         } else if (sec == SEC_GENERAL && !strcmp(key, "mpv_scale")) {
             rc = parse_mpv_scale("mpv_scale", val, c->mpv_scale, sizeof c->mpv_scale, msg,
                                  sizeof msg);
@@ -364,7 +367,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
            OPT_MPV_PROFILE, OPT_MPV_OPT, OPT_MPV_LOG, OPT_CONVERGENCE, OPT_FILTER,
            OPT_FBO_FORMAT, OPT_DITHER, OPT_NO_MEMORY, OPT_FORGET, OPT_RESUME, OPT_NO_RESUME,
            OPT_PACKING, OPT_ZOOM_MODE, OPT_SCREEN, OPT_MIPMAP, OPT_DEBAND, OPT_SCREEN_CURVE,
-           OPT_SBS_SWITCH, OPT_MPV_SCALE };
+           OPT_SBS_SWITCH, OPT_MPV_SCALE, OPT_SHARPEN };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
         {"layout", required_argument, NULL, OPT_LAYOUT},
@@ -390,6 +393,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"fbo-format", required_argument, NULL, OPT_FBO_FORMAT},
         {"dither", required_argument, NULL, OPT_DITHER},
         {"deband", required_argument, NULL, OPT_DEBAND},
+        {"sharpen", required_argument, NULL, OPT_SHARPEN},
         {"no-memory", no_argument, NULL, OPT_NO_MEMORY},
         {"forget", no_argument, NULL, OPT_FORGET},
         {"resume", no_argument, NULL, OPT_RESUME},
@@ -597,6 +601,9 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
             break;
         case OPT_DEBAND:
             rc = parse_onoff("--deband", optarg, false, &c->deband, err, errlen);
+            break;
+        case OPT_SHARPEN:
+            rc = parse_ranged("--sharpen", optarg, 0.f, XRD_SHARPEN_MAX, &c->sharpen, err, errlen);
             break;
         case OPT_MIPMAP:
             if (!strcmp(optarg, "on"))

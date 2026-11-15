@@ -64,6 +64,7 @@ static void defaults_match_spec(void **state)
     assert_string_equal(c.mpv_log, "warn");
     assert_int_equal(c.fbo_format, XRD_FBO_RGB10);
     assert_true(c.dither);
+    assert_true(c.sharpen == 0.f);
     assert_int_equal(c.explicit_flags, 0);
     assert_false(c.no_memory);
     assert_false(c.forget);
@@ -503,6 +504,53 @@ static void flag_screen_curve(void **state)
     char *argv2[] = {"xrdome", "--screen-curve", "x", "a.mp4", NULL};
     assert_int_equal(xrd_config_parse_args(&c, 4, argv2, err, sizeof err), -1);
     assert_float_equal(c.screen_curve, 1.5f, TOL);
+}
+
+/* --sharpen and [general] sharpen: 0 to 1, the flag wins over the ini, and a
+ * bad value names the flag or the file, line and key. */
+static void sharpen_flag_and_ini(void **state)
+{
+    (void)state;
+    xrd_config c;
+    char err[256] = "";
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--sharpen", "0.5"), 0);
+    assert_float_equal(c.sharpen, 0.5f, TOL);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--sharpen", "1"), 0);
+    assert_float_equal(c.sharpen, 1.0f, TOL);
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--sharpen", "0"), 0);
+    assert_true(c.sharpen == 0.f);
+    const char *bad[] = {"1.5", "-0.1", "off", ""};
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        err[0] = '\0';
+        assert_int_equal(parse_flags(&c, err, sizeof err, "--sharpen", bad[i]), -1);
+        assert_non_null(strstr(err, "--sharpen"));
+    }
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--sharpen", "1.5"), -1);
+    assert_string_equal(err, "--sharpen: 1.5 is out of range (0 to 1)");
+
+    char path[64];
+    write_tmp(path, "[general]\nsharpen = 0.25\n");
+    char *none[] = {"xrdome", "movie.mp4", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 2, none, err, sizeof err), 0);
+    assert_float_equal(c.sharpen, 0.25f, TOL);
+    char *flag[] = {"xrdome", "--sharpen", "0", "movie.mp4", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 4, flag, err, sizeof err), 0);
+    assert_true(c.sharpen == 0.f);
+    unlink(path);
+
+    const char *texts[] = {"[general]\nsharpen = 2\n", "[general]\nsharpen = yes\n",
+                           "[device.viture-pro]\nsharpen = 0.5\n"};
+    for (int i = 0; i < 3; i++) {
+        char want[80];
+        write_tmp(path, texts[i]);
+        xrd_config_defaults(&c);
+        assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), -1);
+        snprintf(want, sizeof want, "%s:2:", path);
+        assert_non_null(strstr(err, want));
+        assert_non_null(strstr(err, "sharpen"));
+        assert_true(c.sharpen == 0.f);
+        unlink(path);
+    }
 }
 
 static void ini_screen_curve(void **state)
@@ -1489,6 +1537,7 @@ int main(void)
         cmocka_unit_test(deband_flag_ini_and_precedence),
         cmocka_unit_test(flag_screen_curve),
         cmocka_unit_test(ini_screen_curve),
+        cmocka_unit_test(sharpen_flag_and_ini),
         cmocka_unit_test(flat_ini_keys),
         cmocka_unit_test(flat_zoom_default_survives_zoom_flag),
         cmocka_unit_test(flat_ini_bad_values_name_file_and_line),

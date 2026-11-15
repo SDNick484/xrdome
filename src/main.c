@@ -260,6 +260,15 @@ static void print_curve(const xrd_controls *c, const char *prefix)
         fprintf(stderr, "%sscreen curve: %.2f\n", prefix, (double)c->screen_curve);
 }
 
+/* "sharpen: off" or "sharpen: 0.50". */
+static void print_sharpen(float s, const char *prefix)
+{
+    if (s > 0.f)
+        fprintf(stderr, "%ssharpen: %.2f\n", prefix, (double)s);
+    else
+        fprintf(stderr, "%ssharpen: off\n", prefix);
+}
+
 /* The I key (spec 5.7): one item per line. */
 static void print_info(xrd_app *a)
 {
@@ -309,6 +318,7 @@ static void print_info(xrd_app *a)
     fprintf(stderr, "info: filter: %s, mipmaps %s\n",
             a->trilinear ? "trilinear" : xrd_value_filter_name(c->filter),
             a->mip_want ? "on" : "off");
+    print_sharpen(c->sharpen, "info: ");
     int tw, th;
     xrd_player_texture_size(a->p, &tw, &th);
     if (!a->cfg->mpv_scale[0]) {
@@ -330,7 +340,7 @@ static void print_info(xrd_app *a)
             xrd_timing_missed_vsyncs(a->timing));
 }
 
-/* Prints the zoom and filter lines for the values that differ
+/* Prints the zoom, filter and sharpen lines for the values that differ
  * between before and after (a key press at a limit prints nothing). */
 static void report_display_changes(const xrd_controls *before, const xrd_controls *after)
 {
@@ -338,6 +348,8 @@ static void report_display_changes(const xrd_controls *before, const xrd_control
         fprintf(stderr, "zoom: %.2f\n", (double)after->zoom);
     if (after->filter != before->filter)
         fprintf(stderr, "filter: %s\n", xrd_value_filter_name(after->filter));
+    if (after->sharpen != before->sharpen)
+        print_sharpen(after->sharpen, "");
 }
 
 /* P (spec 5.7): the other projection, with its own zoom. A layout that was
@@ -403,7 +415,11 @@ static bool handle_key_action(const SDL_KeyboardEvent *k, xrd_app *a)
         xrd_controls_zoom_in(ctl);
         break;
     case SDLK_f:
-        if (!k->repeat)
+        if (k->repeat)
+            break;
+        if (shift) /* Shift+F: sharpening strength; F: filter */
+            xrd_controls_step_sharpen(ctl);
+        else
             xrd_controls_cycle_filter(ctl);
         break;
     case SDLK_s:
@@ -930,6 +946,7 @@ int main(int argc, char **argv)
             xrd_quat_to_mat3(view, rot);
             xrd_renderer_set_convergence(r, ctl.convergence_deg);
             xrd_renderer_set_filter(r, ctl.filter);
+            xrd_renderer_set_sharpen(r, ctl.sharpen);
             const xrd_draw_params dp = {
                 .proj = ctl.proj,
                 .layout = ctl.layout,

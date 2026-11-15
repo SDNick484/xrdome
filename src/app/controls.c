@@ -13,6 +13,7 @@ void xrd_controls_init(xrd_controls *c, float zoom, xrd_layout layout)
     xrd_controls_init_display(c, 0.0f, XRD_FILTER_BICUBIC);
     xrd_controls_init_format(c, XRD_PROJ_HEQUIRECT, XRD_PACKING_AUTO, 1.0f, XRD_ZOOM_SCREEN, false);
     xrd_controls_init_curve(c, 0.0f);
+    xrd_controls_init_sharpen(c, 0.0f);
     c->layout_chosen = false;
 }
 
@@ -152,6 +153,18 @@ void xrd_controls_cycle_filter(xrd_controls *c)
     c->filter = (xrd_filter)((c->filter + 1) % XRD_FILTER_COUNT);
 }
 
+void xrd_controls_init_sharpen(xrd_controls *c, float strength)
+{
+    c->sharpen = strength > 0.0f ? fminf(strength, XRD_SHARPEN_MAX) : 0.0f;
+}
+
+void xrd_controls_step_sharpen(xrd_controls *c)
+{
+    /* The tolerance keeps 0.5 stepping to 0.75, not to 0.5 again. */
+    float next = (floorf(c->sharpen / XRD_SHARPEN_STEP + 1e-3f) + 1.0f) * XRD_SHARPEN_STEP;
+    c->sharpen = next > XRD_SHARPEN_MAX + 1e-3f ? 0.0f : fminf(next, XRD_SHARPEN_MAX);
+}
+
 void xrd_controls_mouse_drag(xrd_controls *c, int dx, int dy)
 {
     /* Positive yaw turns left, so dragging right (dx > 0) lowers it; SDL's
@@ -183,6 +196,7 @@ const xrd_key_help xrd_key_list[] = {
     {"Shift+R", "recenter, full"},
     {"[ / ]", "zoom out / in"},
     {"F", "cycle the enlarging filter"},
+    {"Shift+F", "sharpening: off, 0.25, 0.5, 0.75, 1"},
     {"S", "swap eyes"},
     {"M", "cycle layout (flat: 2D, half SBS, full SBS, half TB, full TB)"},
     {"P", "projection: flat / VR180"},

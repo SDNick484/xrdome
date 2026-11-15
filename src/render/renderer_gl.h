@@ -57,6 +57,22 @@ void xrd_renderer_set_filter(xrd_renderer *r, xrd_filter f);
  * xrd_renderer_draw. */
 void xrd_renderer_set_dither(xrd_renderer *r, bool on);
 
+/* Contrast-adaptive sharpening after the eye pass (--sharpen), strength 0
+ * to 1, clamped (default 0). At 0 the draw is exactly the one-pass draw
+ * without sharpening. Above 0 the eye pass draws into an intermediate
+ * texture of the output's size (GL_RGB10_A2) and a second pass, a port of
+ * AMD FidelityFX CAS's sharpen-only filter (sharpen.frag), draws each eye
+ * from it: 9 reads per pixel from that texture, the 3 x 3 around the pixel.
+ * Strength 1 is CAS at its sharpness 1 (negative lobe -1/5); lower
+ * strengths scale the lobe down linearly. The reads stay within each eye's
+ * viewport (clamped to its edge), black the eye pass drew (behind, outside
+ * the content or the flat screen) stays black and is never read as a
+ * neighbour, and dithering (xrd_renderer_set_dither) moves to the second
+ * pass. If the GPU cannot render to the intermediate, one warning is
+ * printed and drawing goes on without sharpening. Takes effect on the next
+ * xrd_renderer_draw. */
+void xrd_renderer_set_sharpen(xrd_renderer *r, float strength);
+
 typedef struct {
     xrd_proj proj;
     xrd_layout layout;
@@ -100,7 +116,10 @@ typedef struct {
  *  - draw disables GL_SCISSOR_TEST, GL_BLEND, GL_CULL_FACE, GL_DEPTH_TEST,
  *    GL_STENCIL_TEST and GL_FRAMEBUFFER_SRGB and enables all colour writes.
  *  - draw changes the bound program, VAO, active texture unit, the unit-0 2D
- *    texture binding, the viewport and the flags above, and does not restore them. */
+ *    texture binding, the viewport and the flags above, and does not restore them.
+ *    It draws into the draw framebuffer bound when it is called and leaves that
+ *    binding as it found it (sharpening draws into its own framebuffer in
+ *    between); the read framebuffer binding is not touched. */
 void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
                        const xrd_draw_params *dp, int out_w, int out_h);
 

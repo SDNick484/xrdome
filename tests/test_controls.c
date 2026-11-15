@@ -373,6 +373,32 @@ static void filter_cycles(void **state)
     }
 }
 
+/* Shift+F from off: 0.25, 0.5, 0.75, 1, then off again; from a value set
+ * with --sharpen, the next step above it. Init clamps into 0..1. */
+static void sharpen_steps(void **state)
+{
+    (void)state;
+    xrd_controls c;
+    xrd_controls_init(&c, 1.0f, XRD_LAYOUT_SBS_LR);
+    assert_true(c.sharpen == 0.0f);
+    const float want[] = {0.25f, 0.5f, 0.75f, 1.0f, 0.0f, 0.25f};
+    for (size_t i = 0; i < sizeof want / sizeof want[0]; i++) {
+        xrd_controls_step_sharpen(&c);
+        assert_float_equal(c.sharpen, want[i], 1e-6f);
+    }
+    const float from[][2] = {{0.3f, 0.5f}, {0.6f, 0.75f}, {0.9f, 1.0f}, {0.1f, 0.25f}};
+    for (size_t i = 0; i < sizeof from / sizeof from[0]; i++) {
+        xrd_controls_init_sharpen(&c, from[i][0]);
+        assert_float_equal(c.sharpen, from[i][0], 1e-6f);
+        xrd_controls_step_sharpen(&c);
+        assert_float_equal(c.sharpen, from[i][1], 1e-6f);
+    }
+    xrd_controls_init_sharpen(&c, 2.0f);
+    assert_float_equal(c.sharpen, 1.0f, 1e-6f);
+    xrd_controls_init_sharpen(&c, -1.0f);
+    assert_true(c.sharpen == 0.0f);
+}
+
 /* The ? list has the README's Keys table's keys, in its order. */
 static void key_list_matches_readme(void **state)
 {
@@ -450,6 +476,7 @@ int main(void)
         cmocka_unit_test(recenter_zeroes_mouse_angles_only),
         cmocka_unit_test(init_display_defaults_and_values),
         cmocka_unit_test(filter_cycles),
+        cmocka_unit_test(sharpen_steps),
         cmocka_unit_test(key_list_matches_readme),
         cmocka_unit_test(key_repeat_only_for_zoom_and_seek),
     };

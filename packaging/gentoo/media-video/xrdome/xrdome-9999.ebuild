@@ -10,7 +10,7 @@ DESCRIPTION="VR180 and flat video player for XR glasses with head tracking"
 HOMEPAGE="https://github.com/SDNick484/xrdome"
 EGIT_REPO_URI="https://github.com/SDNick484/xrdome.git"
 
-LICENSE="GPL-2+"
+LICENSE="GPL-2+ MIT"
 SLOT="0"
 # Live ebuild: no KEYWORDS. Accept it with ** in package.accept_keywords.
 IUSE="test"
