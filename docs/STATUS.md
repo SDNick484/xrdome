@@ -159,7 +159,7 @@ Still unverified (spec section 11):
   so xrdome is GPLv2+. `LICENSE` is the GPLv2 text (Gentoo's `licenses/GPL-2`, which differs from
   mpv's `LICENSE.GPL` only in form-feed characters; gnu.org was unreachable from the sandbox).
   `license : 'GPL-2.0-or-later'` is in `project()`; no per-file headers.
-- `packaging/gentoo/media-video/xrdome/` has `xrdome-9999.ebuild` (EAPI 8, `git-r3 meson`, no
+- `packaging/gentoo/media-video/xrdome/` has `xrdome-9999.ebuild` (EAPI 8, `git-r3 meson python-any-r1`, no
   KEYWORDS, `IUSE=test`) and `metadata.xml`; `packaging/gentoo/README.md` says how to add it to a
   local overlay. In-repo because the ebuild is tiny (owner, 2026-11-14). cmocka is a build
   dependency even without the `test` flag because `meson.build` requires it.

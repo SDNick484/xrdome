@@ -21,7 +21,7 @@ Run the `cp` from this directory (`packaging/gentoo/`). The overlay copy does no
 changes here, so copy again when the ebuild changes. `emerge --ask @live-rebuild` (or
 `emerge -a media-video/xrdome` again) rebuilds the live package from the newest `main`.
 
-To run the tests during the build (the two smoke tests skip without `xvfb-run`), enable the
+To run the tests during the build (the three smoke tests skip without `xvfb-run`), enable the
 `test` flag for this package and `FEATURES=test`:
 
 ```
