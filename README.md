@@ -813,6 +813,19 @@ larger size as well.
   [Performance notes](#performance-notes). On the owner's Radeon it costs almost nothing for a
   1080p film; the look was "hard to tell, maybe slight improvements". Off by default.
 
+### Wayland sessions (XWayland)
+
+xrdome is an X11 client: it forces SDL's X11 driver, so under a Wayland compositor it runs through
+XWayland (`SDL_VIDEODRIVER` still overrides). When `WAYLAND_DISPLAY` is set or `XDG_SESSION_TYPE` is
+`wayland`, the glasses' window is a real fullscreen window on the glasses' output, because a
+compositor may ignore or tile a borderless window placed at the output's position; on Xorg it stays
+borderless at the output's position. Set the glasses' output to 3840x1080 at 100% scale in the
+compositor (for example `wlr-randr --output NAME --mode 3840x1080@60`), because XWayland cannot
+change modes with `xrandr` and a scaled output shows a size other than 3840x1080 to xrdome. Not
+yet run on hardware: frame timing (compare `--timing-log` against Xorg), `--require-hwdec`, output
+names, and the SBS switch under XWayland. Notes: the project's
+`xrdome-xwayland-and-steamdeck-notes.md`.
+
 ## Diagnostics
 
 `--sync-after-swap` calls `glFinish()` right after `SDL_GL_SwapWindow`, before the frame is reported

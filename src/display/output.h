@@ -39,4 +39,14 @@ int xrd_output_enumerate(xrd_output_info *outs, int max);
 /* Returns a pointer to a static buffer; not thread-safe. */
 const char *xrd_output_strerror(int code, const char *want);
 
+/* Whether the glasses' window should be a real fullscreen window (the EWMH
+ * fullscreen state, desktop size, no mode change) and not a borderless window
+ * placed at the output's position. A Wayland compositor running XWayland
+ * ignores or tiles a borderless X11 window and only gives a fullscreen one
+ * direct scanout; Xorg honours the position, and that path is the one
+ * verified on hardware, so it stays the default there. True when
+ * wayland_display (the WAYLAND_DISPLAY value, or NULL) is non-empty, or
+ * session_type (XDG_SESSION_TYPE, or NULL) is "wayland". */
+bool xrd_output_use_fullscreen(const char *wayland_display, const char *session_type);
+
 #endif

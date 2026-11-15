@@ -97,6 +97,13 @@ int xrd_output_enumerate(xrd_output_info *outs, int max)
     return n;
 }
 
+bool xrd_output_use_fullscreen(const char *wayland_display, const char *session_type)
+{
+    if (wayland_display && wayland_display[0] != '\0')
+        return true;
+    return session_type && strcmp(session_type, "wayland") == 0;
+}
+
 const char *xrd_output_strerror(int code, const char *want)
 {
     static char buf[256]; /* not thread-safe */
