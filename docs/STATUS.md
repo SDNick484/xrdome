@@ -3,7 +3,8 @@
 Linux player for VR180 (half-equirectangular) and ordinary flat video on XR glasses with head
 tracking. Repo: https://github.com/SDNick484/xrdome; work lands on `main` through pull requests.
 Design: `docs/superpowers/specs/2026-11-11-xrdome-design.md`.
-Plan: `docs/superpowers/plans/2026-11-11-xrdome.md` (Tasks 0-9 done, Task 10 open).
+Plan: `docs/superpowers/plans/2026-11-11-xrdome.md` (Tasks 0-10 done; Task 10's hardware part on
+2026-11-14, see Hardware run 2026-11-14 below).
 
 ## What works (verified on Viture Pro XR, ThinkPad P14s Gen 6 AMD, Gentoo, MATE/Xorg)
 - Playback through libmpv (VA-API decode) into a per-eye OpenGL 3.3 pass, 3840x1080@60 SBS output.
@@ -183,12 +184,9 @@ Still unverified (spec section 11):
   smoothing of the steps is small at this size). llvmpipe only honours `deband` outside
   `gpu-dumb-mode`, so B1 to B3 pass `--mpv-opt gpu-dumb-mode=no`; with xrdome's usual
   `gpu-dumb-mode` on llvmpipe the frames with deband on and off are identical.
-- Not verified: the `B` key itself and the `I` line (the smoke test has no way to send keys); any
-  effect on the glasses; GPU cost.
-- Awaits the glasses: a timing pair, `--timing-log` each, `--deband off` against `on`, on the 4K
-  film and on the 8K VR180 file (missed vsyncs; the integrated GPU is the constraint, and
-  `fast` is the default profile for that reason); and the owner's judgement on a dark,
-  low-bitrate file, toggling `B` on a still frame.
+- Run on the glasses on 2026-11-14 (see Hardware run 2026-11-14): `B` and `I` work; 4K film
+  0.03% -> 0.75% missed with deband on, 8K VR180 1.6% -> 28%; the owner saw little difference on a
+  dark low-bitrate frame. Off by default stays.
 
 ## Resume from the last position (`--resume`, issue #19)
 
@@ -223,9 +221,10 @@ position; `--no-resume` and `--no-memory` leave the record byte-identical; an ex
 quitting in the first 30 s drops the position; a position past the end gives one note and starts at
 0).
 
-Awaits the glasses: resuming a real long film (hardware decode, seeking with `start` on a large
-file, how long mpv takes to reach the position on an 8K file), and a real quit with `Q` or the
-window close in the middle of a film (the sandbox quits by `--frames`).
+Run on the glasses on 2026-11-14 (see Hardware run 2026-11-14): saved at `Q` and resumed on an
+81-minute film and an 8K VR180 file (first frame 0.6 to 1.0 s after start, 0.3 to 0.5 s more than
+from the start of the file); the near-end rule held for a `Q` in the last minute. A film played to
+its end kept its old position: fixed in PR #39. Not tried: the near-start rule, the window close.
 
 ## Dimming and brightness on the Viture Pro XR (issue #22, research only, 2026-11-14)
 Question: can xrdome set the electrochromic dimming and the display brightness while XRLinuxDriver
@@ -332,13 +331,10 @@ What the sandbox verified (unit tests and both Xvfb smoke tests, software GL, th
   the top and bottom borders 6 rows nearer the frame's edge at the sides than at the centre;
   `off` and magnify mode give straight borders and the frame of a run without the flag.
 
-Hardware check (not done; the owner, Viture Pro XR): play a flat film at zoom 1.5 and 2.5 and
-press `C` to compare curved and flat: whether the curved screen is more comfortable to look
-around, whether the bowed top and bottom edges look natural or distracting, whether R = 1 suits
-or a larger `--screen-curve` (say 2) is better, and that `C`, `Z` and `L` print and act as the
-README says. Unverified until then: everything about comfort; the look of a curved screen in 3D
-(half SBS); frame timing with the curve on (the shader adds a square root and an arctangent per
-pixel; not measured).
+Run on the glasses on 2026-11-14 (see Hardware run 2026-11-14): worked well at 1.5 and about 2.5;
+the owner prefers R = 1 to R = 2; `C`, `Z`, `L` and `I` as the README says; `C` in 3D (full SBS)
+fine. The owner found `Z` flattening the curve did not fit: issue #41 reverses that decision. Still
+unverified: a timing pair with the curve on (0 missed in one run with keys pressed), half SBS.
 
 ## Automatic SBS switch (issue #18)
 
@@ -403,22 +399,12 @@ full screen there (the dumped frame is 3840x1080) and `sbs_mode=disable` is writ
 nothing and says why; S4 a driver that never switches gives the 8 s timeout line and no switch
 back; S5 `--windowed` writes nothing. `smoke` case 3 (no driver at all) checks the reason line.
 
-Awaits the glasses (hardware check, after merge; all of the real switch is unverified):
-1. Reconnect the Viture Pro XR so it is in 1080p, start XRLinuxDriver, check
-   `/dev/shm/xr_driver_state` has a current `heartbeat=`, `sbs_mode_supported=true` and
-   `sbs_mode_enabled=false`.
-2. `./build/xrdome --no-memory --frames 600 file.mp4`: expect
-   `display: switched the glasses to SBS in N.N s` and normal playback; note N (is 8 s enough on
-   Xorg/MATE?), and whether the picture lands on the glasses (MATE may place the new 3840x1080
-   output elsewhere, or need a moment to settle).
-3. At exit: `display: asked XRLinuxDriver to switch the glasses back to 1080p`, and the desktop
-   mirror returns.
-4. Run again with the glasses already in SBS: no request, plays at once.
-5. Stop the driver and run with the glasses in 1080p: the old error, then
-   `automatic SBS switch: XRLinuxDriver is not running (...)`.
-6. `--sbs-switch off`: the old error only, nothing in `/dev/shm/xr_driver_control`.
-7. Unplug during playback: no switch-back request (`ls /dev/shm/xr_driver_control` stays empty
-   after exit).
+Run on the glasses on 2026-11-14 (see Hardware run 2026-11-14). XREAL Air 2 Pro: the whole
+cycle works (switch in 2.2 to 2.8 s, switch back at exit, no switch back after an unplug). Viture
+Pro XR: the switch worked once (3.3 s), then XRLinuxDriver 2.11.9 hung on 3 of 4 `sbs_mode`
+requests (also with xrdome not running), so the switch back is unverified there; the glasses'
+own button switches reliably. Already in SBS, driver not running and `--sbs-switch off` behaved as
+designed.
 
 ## mpv scaling of enlarged flat video (`--mpv-scale`, issue #23)
 
@@ -490,17 +476,10 @@ back to the coded texture, and a probe of every drawn frame found no black one. 
 for an unknown name was seen on libmpv 2.6 only; on 0.37 its source logs `No scaler named
 '...' found!` on the same path.
 
-Hardware check (owner, after merge):
-1. Timing on the 1080p AV1 film at the default zoom 1.5, AC power, `--no-memory --frames 3600`,
-   a `--timing-log` each, no keys: `--mpv-scale off`, `--mpv-scale spline36`,
-   `--mpv-scale ewa_lanczossharp`; the missed vsyncs of each from the `timing:` line. If cheap,
-   the same at `--zoom 2.0` (a 3840x2160 texture).
-2. The owner's judgement of the look on a still frame and in motion: `off` (Catmull-Rom from
-   1920x1080) against `spline36` against `ewa_lanczossharp`, and `F` with each.
-3. Subtitles on a flat 2D film with `--mpv-scale spline36`: in the same place and size as
-   without it, and sharper or not.
-4. `I` shows `info: mpv scale: spline36, 1920x1080 to 2880x1620` at zoom 1.5, and `[` `]`
-   change the `video texture:` line once per burst with no black flash.
+Run on the glasses on 2026-11-14 (see Hardware run 2026-11-14): cheap on this GPU (1080p film:
+0 to 2 missed of 3600 at zoom 1.5, 1 to 7 at zoom 2.0 with the 3840x2160 texture); the owner saw
+at most a slight improvement over `off`; no flash on resize; no fringe at the eyes' shared edge in
+a full SBS film. Not checked: subtitles with it, the `I` line at zoom 1.5. Off by default stays.
 
 ## XREAL Air 2 Pro (owner, 2026-11-14, `main` at `bb95090`)
 - VR180 and flat files played on the XREAL Air 2 Pro with head tracking, "pretty much the same" as
@@ -509,7 +488,154 @@ Hardware check (owner, after merge):
   picture is drawn about 4% smaller than intended and moves slightly less than the head turns;
   nothing was reported about that difference. `--device xreal-air2pro` is the correct setting.
 - Not covered by this run: yaw drift over 5 minutes, EDID/`xrandr --props` capture, convergence,
-  per-file settings, and the features in the open PRs #28-#34 (this was `main`).
+  per-file settings, and the features in the open PRs #28-#34 (this was `main`). All but
+  convergence and per-file settings were run that evening: see Hardware run 2026-11-14.
+
+## Hardware run 2026-11-14, afternoon and evening (Viture Pro XR, XREAL Air 2 Pro)
+
+Setup: ThinkPad P14s Gen 6 AMD, Gentoo (gcc 16.2.1, mpv 0.42.0 / libmpv 2.6.0, FFmpeg 9.0.2,
+SDL 2.32.10), MATE/Xorg, XRLinuxDriver 2.11.9 run by hand; `main` at `e8803c5` (PR #36). The owner
+wore the glasses, pressed the keys and said what was seen; the session ran each command after the
+owner's go-ahead for that step and read the logs itself (stderr, `--timing-log`, the driver's state
+file and log, dmesg). Timing runs: AC power, governor `performance` (platform profile `balanced`),
+`--no-memory --frames 3600`, a `--timing-log` each, no keys; "missed" is swap intervals over 20 ms.
+Files, by format: a 1080p AV1 film (10-bit, 24 fps, 1.1 Mbit/s), a 4K AV1 film (10-bit, 30 fps,
+3.1 Mbit/s), an 8K AV1 VR180 file (7680x3840, 24 fps, 15 Mbit/s), a dark 1080p AV1 film
+(1.2 Mbit/s), an 81-minute 720p AV1 film, a full side-by-side HEVC film (3840x1080, 30 fps). The
+gate on `main` passed first: 0 warnings, 23/23 OK (xvfb-run 21.1.21.1 installed for it).
+
+### Automatic SBS switch (#18)
+Viture Pro XR, from 1080p mirror mode (its output came up at 120 Hz; SBS mode offers 60 Hz only):
+- The switch: `display: switched the glasses to SBS in 3.3 s`; the picture landed on the glasses,
+  full screen, with head tracking (owner); 600 frames, 4 missed.
+- The switch back was not seen. XRLinuxDriver hung during that run: its heartbeat stopped at
+  14:50:26, a second before xrdome wrote `sbs_mode=disable` at exit, the request was never read and
+  the glasses stayed in SBS. The driver hung again on the next request (14:59, after a restart and
+  a replug) and on a bare `printf 'sbs_mode=enable\n' > /dev/shm/xr_driver_control` with xrdome not
+  running (15:02): 3 hangs in 4 requests, each with `get_display_mode ... returned -7` (a USB
+  timeout) in its log and the glasses' HID interface re-enumerating about 3 s later. It is the
+  driver, not xrdome; written up for upstream by the owner. In the run that timed out, xrdome
+  waited 8 s, printed the reason and asked for no switch back, as designed.
+- Started with the glasses already in SBS: no request, no `display:` line at start or exit.
+- With the driver hung (heartbeat 91 s old): the old error, then `automatic SBS switch:
+  XRLinuxDriver is not running (the heartbeat in /dev/shm/xr_driver_state is 91 s old)`, then the
+  outputs line; nothing written. `--sbs-switch off`: the old two lines only; nothing written.
+- A restarted driver deleted a request still waiting in the control file without acting on it
+  (twice): it reads the file before the glasses have connected.
+- The Viture's own button (front left, hold 2 s) switched between 1080p and SBS every time.
+
+XREAL Air 2 Pro:
+- The whole cycle: `switched the glasses to SBS in 2.8 s` (2.2 s in a later run), 600 frames,
+  0 missed, and at exit the driver switched back at once; its heartbeat stayed current.
+- Once (16:22:57) the driver switched the glasses to SBS and back to 1080p a second later with no
+  request from xrdome; xrdome timed out after 8 s, as designed. The next try worked. Seen once.
+- Unplug during playback: `xrdome: warning: glasses disconnected, exiting` about 0.3 s after the
+  unplug (the display went 2.4 s before the kernel logged the USB disconnect), exit 0, no switch
+  back asked, nothing left pending. The driver itself crashed on that unplug (glibc `corrupted
+  size vs. prev_size while consolidating`), and again on an unplug at 23:35 with xrdome not running.
+- Once the glasses came up in SBS at plug-in and showed nothing at all while X listed a 3840x1080
+  output and xrdome drew 2654 frames to it; resetting the glasses brought the picture back. Seen
+  once.
+- The volume-up button (right arm, hold 2 s) switches the XREAL between 1080p and SBS.
+
+### Debanding (#24)
+| File | `--deband off` | `--deband on` |
+|---|---|---|
+| 4K AV1 flat film, zoom 1.5 (mipmaps on) | 1 missed (0.03%) | 27 (0.75%) |
+| 8K AV1 VR180, zoom 1.0 | 59 (1.64%) | 1015 (28.2%); swap p99 37.6 ms against 16.9 |
+
+- At 8K, mpv's deband over 7680x3840 saturates the integrated GPU. Off by default stays.
+- `B` on a paused dark, low-bitrate 1080p frame, zoomed to 4: "Smoothness difference was
+  minimal" (owner). `B` printed `deband: on` / `off` alternately and `I` printed the state of the
+  last press.
+- The 4K runs have a load spike every 32 display frames (16 source frames of the 30 fps film),
+  with or without deband: on those frames the mean interval is 17.2 ms against 16.66; deband pushes
+  them over 20 ms (all 27 misses fall on them). Not explained; an AV1 mini-GOP of 16 frames is a
+  guess, not checked.
+
+### mpv scaling (#23)
+1080p AV1 film:
+
+| `--mpv-scale` | zoom 1.5 (texture 2880x1620) | zoom 2.0 (texture 3840x2160, the cap) |
+|---|---|---|
+| off | 0 missed | 1 (0.03%) |
+| spline36 | 2 (0.06%) | 1 (0.03%) |
+| ewa_lanczossharp | 2 (0.06%) | 7 (0.19%) |
+
+- The look, still and in motion: "Hard to tell, maybe slight improvements across scalers." `F`:
+  "helped a little, but again, it was minor." (owner)
+- Resizing with `[` `]`: one `video texture:` line per settled zoom (e.g. 3168x1782 at 1.65,
+  3840x2159 at 2.66, capped), the coded texture with mipmaps again below zoom 1 (`I`:
+  `mpv scale: spline36, not in use (picture shrunk)`), and "No flash noticed" (owner).
+- Full SBS 3D film on the XREAL with `spline36`: texture capped to two 2715x1527 eyes, no fringe
+  from the other eye at the screen's borders (owner).
+
+### Curved screen (#20)
+- 1080p film at 1.5 and about 2.5, `C` against flat, R = 1 and `--screen-curve 2`: "Everything
+  worked well in both; I preferred the stronger curve" (R = 1). `C` printed `screen curve: 1.00` /
+  `off` (`2.00` / `off` with R = 2), `I` gave the arc's angle (64.9 x 35.3 degrees at 1.65 with
+  R = 1, 88.3 x 50.0 at 2.42 with R = 2), `Z` and `L` printed their lines.
+- What did not fit: "The only behavior that didn't fit well was Z which flattened the curved
+  image" (owner). That reverses a decision of this section; issue #41.
+- 3D: `C` on the full SBS film on the XREAL worked as expected (owner).
+- Timing: 0 missed in 4751 frames with the curve on for much of the run (keys pressed; not a
+  controlled pair).
+
+### Resume (#19)
+| Run | Result |
+|---|---|
+| 81-min film, `--resume --mpv-opt start=2400`, `Q` | `saved proj=flat position=0:40:17`; first frame 0.60 s after start |
+| the same, `--resume` | `restored ... position=0:40:17`, playback continued there (owner); first frame 0.82 s |
+| 8K VR180 from 0:00, no resume | first frame 0.58 s |
+| 8K VR180, `--resume --mpv-opt start=240`, then `--resume` | saved `0:04:28`, restored there (owner); first frame 0.86 s and 1.04 s |
+| 81-min film from 1:20:40, `Q` at about 1:21:01 | `settings: saved proj=flat`, position removed (near-end rule) |
+| the same, `--resume` | no position restored, playback from the start (owner) |
+
+- Bug: a film that played to its end (the owner fast-forwarded past it) kept its old position,
+  and the next `--resume` opened it there. mpv unloads the file at its end, so position and
+  duration are both gone when the record is saved. Reproduced under Xvfb; fixed in PR #39 (smoke
+  M20).
+- Not tried: the near-start rule (a quit in the first 30 s).
+
+### 3D on the XREAL (flat projection)
+The full side-by-side film opened in 3D with no flags: `detect: proj=flat (frame shape)
+layout=sbs-lr (file name "SBS") packing=full (auto)`. Depth right, each eye its own picture; with
+`--layout mono`, `M` gave `sbs-lr half` (squeezed, as expected) and then `sbs-lr full` (right);
+0 missed in all three runs. "Everything worked as expected" (owner).
+
+### Tracking, drift and EDID (Task 10)
+- Packet rate: Viture about 350 per second, XREAL about 1000.
+- Viture on the desk for 5 minutes, hours after it connected: yaw -0.02 degrees, pitch -0.06,
+  roll +0.06.
+- XREAL: a yaw slide of 3 to 17 degrees over the first ~30 s after a calibration done while the
+  glasses were handled or worn (worn and still: -11.6 degrees in 30 s from 8 s after calibration,
+  +17 degrees in 29 s from calibration; on the desk from 21 s after calibration: -2.7 in the first
+  minute, -2.83 after 5 minutes). Lying still through the calibration: 0.00 degrees in 21 s and
+  +0.06 in 60 s. Worn and still long after calibration: -0.08 degrees per minute in 1080p mode,
+  back within 0.1 degree after 2 minutes in SBS mode. In xrdome this showed as the picture
+  drifting sideways a few seconds after `Shift+R` or unlocking with `L` (owner). Plan Task 10
+  already said to keep the glasses still for the first 15 s; that is now measured. Open: the
+  playback drift at 16:21 and 16:23 came right after xrdome's SBS switch, six minutes after
+  calibration; whether a switch (it restarts the IMU stream) needs stillness too is not known.
+- Holding `Shift+R` recentred on every key repeat, which hid the slide in one run; fixed in PR #42.
+- Pose gaps: `pose stale` then `pose resumed` (about 0.6 s without packets) in 6 of the 10 timing
+  runs on the Viture. Not explained.
+- EDID and `xrandr --props` for both glasses in both modes: `docs/hardware/`. Viture: `CVT`,
+  `VITURE`; 1080p mode 60, 90 and 120 Hz, SBS mode 3840x1080 at 60 Hz only. XREAL: `MRG`,
+  `Air 2 Pro`; the same modes. Both report the placeholder serial 0x88888800.
+- The README's XREAL udev rule is what gives the driver access: the XREAL's hidraw and USB nodes
+  are `root:plugdev 0660` and no other rule names its vendor ID 3318 (inferred; the rule was not
+  removed to show it).
+- After a replug the glasses' output name changed (`DisplayPort-1` to `DisplayPort-0`); xrdome
+  finds it by size, so nothing changed for it. SDL names the laptop panel `0` in xrdome's
+  `outputs:` line (the README's example says `eDP-1 14"`).
+
+### Not done in this run
+Subtitles on the glasses (no subtitled film to hand); shimmer with and without mipmaps; a real
+half side-by-side film, and `M` into half SBS on one; top-bottom; the Viture's switch back at exit
+(the driver hung); the Viture unplugged during playback; the near-start resume rule; the `I` line
+of `--mpv-scale` at zoom 1.5 and subtitles with it; a timing pair for the curved screen;
+convergence on the XREAL.
 
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
@@ -553,23 +679,37 @@ Hardware check (owner, after merge):
   `Shift+R` (full recenter with the head level) corrects it: confirmed by the owner on
   2026-11-14 ("works great"). A gravity-level start or a "level" key would need the driver's world frame
   calibrated (see README, Tracking notes).
+- XRLinuxDriver 2.11.9 (2026-11-14): on the Viture Pro XR it hangs on 3 of 4 `sbs_mode` requests
+  (also without xrdome); it aborted with glibc heap corruption on two XREAL unplugs and, per its
+  log, once after a Viture reconnect (2026-11-13) and once when a second instance was started.
+  These are the driver's; the owner is taking them upstream.
+- The XREAL Air 2 Pro must lie still while the driver calibrates after a plug-in (about 16 s,
+  until "Device calibration complete"): moved during it, its yaw slides 3 to 17 degrees over the
+  next half minute. The Viture's yaw drifted 0.02 degrees in 5 minutes at rest.
+- A 4K AV1 film has a load spike every 32 display frames (16 source frames) with and without
+  deband; it is where deband's misses fall. Not explained.
+- Pose gaps of about 0.6 s (`pose stale`, `pose resumed`) in 6 of 10 timing runs on the Viture.
 
 ## Open
-- Task 10: the XREAL Air 2 Pro plays (2026-11-14, see its section); still open: yaw drift over
-  5 minutes on both glasses, EDID/`xrandr --props` capture, README hardware notes.
-- Untested: unplug behaviour during playback (a disconnect between runs happened on 2026-11-13,
-  see Findings), automatic 8-bit FBO fallback.
-- Unanalysed: the remaining 0.6-1.3% late frames.
-- Per-file settings: the items listed as not covered above, and resume (see its section).
+- Untested: automatic 8-bit FBO fallback; the Viture unplugged during playback (the XREAL's unplug
+  works, see Hardware run 2026-11-14).
+- Unanalysed: the remaining 0.6-1.3% late frames. A clue (2026-11-14): on a 4K AV1 film the late
+  frames fall on a spike every 32 display frames.
+- Per-file settings: layout, swap-eyes, content FOV and convergence records, `--forget` and the
+  bad-record paths on the glasses; resume's near-start rule and the window close.
 - Recenter: `Shift+R` levels a tilted picture (2026-11-14). A gravity-level start or a
   "level" key is optional now.
-- `no pose data` after a glasses reconnect: once (2026-11-13) it was XRLinuxDriver crashing at
-  connect, and restarting the driver restored it; the earlier case was not checked.
-- Automatic SBS switch (issue #18): the hardware check in its section above; the real switch,
-  its timing and the switch back at exit are unverified on the glasses.
-- Flat projection and format detection, after the hardware run: shimmer with and without
-  mipmaps on content with fine detail; a real half-SBS film, and `M` into half SBS from mono;
-  subtitles on the glasses; top-bottom and full SBS if such files turn up.
+- XRLinuxDriver 2.11.9: the Viture `sbs_mode` hang, the crashes on unplug and connect, the XREAL's
+  slide after a calibration done while moving, a pending request dropped at start (all in Hardware
+  run 2026-11-14 and Findings); the owner is taking them upstream. Until the hang is fixed, switch
+  the Viture to SBS with its button. Open on xrdome's side: whether its SBS switch (an IMU restart)
+  causes the XREAL's slide too.
+- Flat projection and format detection: shimmer with and without mipmaps on content with fine
+  detail; a real half-SBS film, and `M` into half SBS on one; subtitles on the glasses (also with
+  `--mpv-scale`); top-bottom if such a file turns up. Full SBS works (2026-11-14).
+- Curved screen: issue #41 (`Z` keeps the curve, the owner's call from the run); a timing pair.
+- Enlarging and sharpening: issues #25 (a better eye-pass filter) and #26 (`--sharpen`, after #25);
+  the run's mpv-scaling and debanding numbers are in their bodies.
 - Dimming and brightness keys wait on an XRLinuxDriver feature (control-file requests for
   brightness and the electrochromic film); the request is drafted in issue #22's PR for the owner
   to file. Keys `D` and `Shift+[` / `Shift+]` are reserved for it.
