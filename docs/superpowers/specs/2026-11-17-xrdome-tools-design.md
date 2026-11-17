@@ -1,7 +1,7 @@
 # xrdome-tools: transcoding, 2D-to-3D and enhancement (design spec)
 
 Date: 2026-11-17
-Status: draft, for owner review
+Status: approved 2026-11-17 (owner answered the two open questions: optional model download, default divergence 2.0)
 Builds on: `docs/superpowers/specs/2026-11-13-flat-projection-design.md` (format detection, 5.8)
 and the owner's 2D-to-3D quality test in `~/src/sbs-test` on the desktop (iw3, `NOTES.md`,
 `scripts/sbs-convert.sh`, `scripts/setup.sh`).
@@ -216,8 +216,7 @@ sbs-test) and asks for `--yes` in non-interactive use. **(call)**
 
 **Conversion.** `xrdome-tools to3d INPUT [--model Any_V2_S|VDA_S] [--divergence D]
 [--convergence C] [--foreground-scale F] [--half] [--cpu]`. Defaults from the owner's test:
-`Any_V2_S`, divergence 2.0, convergence 0.5, foreground scale 0. **(call: the owner picked
-1.0 and 2.0 to compare and has not settled one)**
+`Any_V2_S`, divergence 2.0, convergence 0.5, foreground scale 0. **(owner: divergence 2.0)**
 
 - Output: full SBS, 1920x1080 per eye (3840x1080 total), letterboxed or pillarboxed when the
   source is not 16:9, never stretched. `--half` gives half SBS at 1920x1080. **(call)**
@@ -278,7 +277,10 @@ Nothing is shipped. **(owner)** A registry in the code lists each allowed model:
 
 `xrdome-tools models` lists every entry as `ok`, `missing` or `bad hash`, and for each
 missing one prints the upstream link, the exact path to put it at, and the command to check
-it. A file that is present but not in the registry is ignored and named in a warning.
+it. `xrdome-tools models --fetch [NAME...]` (and `setup to3d --fetch-models`) downloads the
+named or all missing entries from their upstream URL at the pinned revision, verifies the
+sha256 and deletes the file on a mismatch, as sbs-test's `setup.sh` did. Fetching is never
+automatic. **(owner: optional download)** A file that is present but not in the registry is ignored and named in a warning.
 
 Initial registry: Depth Anything V2 Small and Video Depth Anything Small (Apache-2.0; hashes
 from sbs-test `NOTES.md`); RIFE v4 models as packaged for rife-ncnn-vulkan (MIT, per
