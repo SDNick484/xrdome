@@ -157,8 +157,10 @@ def instructions(m: Model, p: Paths) -> str:
     else:
         lines += [f"  file:   {m.file}", f"  sha256: {m.sha256}",
                   f"  put it at: {target(m, p)}"]
+    fetchable = m.url and not m.fetched_by
     lines.append("  check with: xrdome-tools models --check"
-                 + ("" if m.fetched_by else f"; or download it with: xrdome-tools models --fetch {m.name}"))
+                 + (f"; or download it with: xrdome-tools models --fetch {m.name}" if fetchable
+                    else "" if m.fetched_by else "; no direct download: take it from the archive on the page"))
     return "\n".join(lines)
 
 
@@ -181,9 +183,10 @@ def fetch(runner: Runner, m: Model, p: Paths) -> Path:
     """Download one model, verify its sha256, and move it into place."""
     if m.licence not in ALLOWED_LICENCES:
         raise ToolError(f"{m.name}: not an allowed model")
-    if m.fetched_by or not m.url:
-        raise ToolError(f"{m.name}: downloaded by {m.fetched_by or 'its own tool'}, not by xrdome-tools\n"
-                        + instructions(m, p))
+    if m.fetched_by:
+        raise ToolError(f"{m.name}: downloaded by {m.fetched_by}, not by xrdome-tools\n" + instructions(m, p))
+    if not m.url:
+        raise ToolError(f"{m.name}: no direct download; place it by hand\n" + instructions(m, p))
     if len(m.sha256) != 64:
         raise ToolError(f"{m.name}: no full sha256 in the registry; refusing to download")
     t = target(m, p)
@@ -235,7 +238,7 @@ def run(args: argparse.Namespace) -> int:
     p = paths()
     runner = Runner()
     if args.fetch is not None:
-        names = args.fetch or [m.name for m in REGISTRY if not m.fetched_by]
+        names = args.fetch or [m.name for m in REGISTRY if m.url and not m.fetched_by]
         for n in names:
             m = find(n)
             if m is None:

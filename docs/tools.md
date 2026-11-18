@@ -132,8 +132,10 @@ Paths are relative to the data directory (`~/.local/share/xrdome-tools/`):
 | `realesr-animevideov3-x2` | enhance | BSD-3-Clause | https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.2.5.0 (`realesrgan-ncnn-vulkan-20220424-ubuntu.zip`, `models/`) | `realesr-animevideov3-x2.bin` | `models/realesrgan/` |
 | `realesr-animevideov3-x2.param` | enhance | BSD-3-Clause | as above | `realesr-animevideov3-x2.param` | `models/realesrgan/` |
 
-The last three are downloaded by iw3 itself on first use, so `--fetch` refuses them; `models`
-only checks them. `xrdome-tools doctor` also lists each model's status.
+`iw3_row_flow_v3`, `iw3_depth_aa` and `transnetv2` are downloaded by iw3 itself on first use,
+so `--fetch` refuses them; `models` only checks them. The two `realesr-animevideov3-x2` files
+only ship inside the release archive named on their page, so they have no direct download:
+`--fetch` alone skips them, and naming them is refused with "place it by hand". `xrdome-tools doctor` also lists each model's status.
 
 ## setup
 
