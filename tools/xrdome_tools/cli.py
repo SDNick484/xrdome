@@ -15,6 +15,7 @@ SUBCOMMANDS: list[str] = [
     "models",
     "setup",
     "to3d",
+    "enhance",
 ]
 
 

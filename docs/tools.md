@@ -127,9 +127,15 @@ Paths are relative to the data directory (`~/.local/share/xrdome-tools/`):
 | `iw3_row_flow_v3` | to3d | MIT | https://github.com/nagadomi/nunif | `iw3_row_flow_v3_20250627.pth` | `iw3/nunif/iw3/pretrained_models/` |
 | `iw3_depth_aa` | to3d | MIT | https://github.com/nagadomi/nunif | `iw3_depth_aa_20250530.pth` | `iw3/nunif/iw3/pretrained_models/` |
 | `transnetv2` | to3d | MIT | https://github.com/nagadomi/nunif | `transnetv2-pytorch-weights.pth` | `iw3/nunif/iw3/pretrained_models/` |
+| `rife-v4.6` | enhance | MIT | https://github.com/nihui/rife-ncnn-vulkan/releases/tag/20221029 | `flownet.bin` | `models/rife-v4.6/` |
+| `rife-v4.6.param` | enhance | MIT | https://github.com/nihui/rife-ncnn-vulkan/releases/tag/20221029 | `flownet.param` | `models/rife-v4.6/` |
+| `realesr-animevideov3-x2` | enhance | BSD-3-Clause | https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.2.5.0 (`realesrgan-ncnn-vulkan-20220424-ubuntu.zip`, `models/`) | `realesr-animevideov3-x2.bin` | `models/realesrgan/` |
+| `realesr-animevideov3-x2.param` | enhance | BSD-3-Clause | as above | `realesr-animevideov3-x2.param` | `models/realesrgan/` |
 
-The last three are downloaded by iw3 itself on first use, so `--fetch` refuses them; `models`
-only checks them. `xrdome-tools doctor` also lists each model's status.
+`iw3_row_flow_v3`, `iw3_depth_aa` and `transnetv2` are downloaded by iw3 itself on first use,
+so `--fetch` refuses them; `models` only checks them. The two `realesr-animevideov3-x2` files
+only ship inside the release archive named on their page, so they have no direct download:
+`--fetch` alone skips them, and naming them is refused with "place it by hand". `xrdome-tools doctor` also lists each model's status.
 
 ## setup
 
@@ -205,7 +211,67 @@ not 16:9 into the 1920x1080 eye (letterbox expected, not checked).
 
 ## enhance
 
-Not yet available.
+    xrdome-tools enhance INPUT [--fps N] [--upscale 2|3|4] [--method lanczos|model]
+        [--chunk SECONDS] [--tmp DIR] [--treat-as-2d] [--codec hevc|av1]
+        [--quality high|normal|small] [--encoder NAME] [-o PATH | --outdir DIR] [--force] [--dry-run]
+
+Raises the frame rate with RIFE, upscales, or both in one pass, for 2D video. The result goes
+through `transcode` for the final encode, tags and checks, so it opens in xrdome like any
+`transcode` output. The name gets `_<N>fps` and/or `_x<S>` (`clip_60fps_x2.mkv`; 59.94 is
+written `59p94fps`).
+
+**Enhance first, then `to3d`.** Converting the enhanced 2D file halves the work and makes both
+eyes from the same frames.
+
+- `--fps N`: interpolate to N frames per second (`60`, or `60000/1001`). It must be above the
+  source's rate. Uses `rife-ncnn-vulkan` with the RIFE v4.6 model, which runs through Vulkan on
+  AMD, Intel and NVIDIA and handles rates that are not a whole multiple (24 to 60). A variable
+  frame rate source (phone video) is first made constant at its nominal rate, with a
+  `path: fps=` line. Scene cuts are not detected: the frame interpolated across a cut is
+  ghosted.
+- `--upscale 2|3|4` with `--method`:
+  - `lanczos` (default): ffmpeg's `libplacebo` filter (`ewa_lanczos` on Vulkan) when it is built
+    in and a short test run works, otherwise `scale=...:flags=lanczos` on the CPU; a
+    `path: upscale=` line says which and why. This adds no detail: mpv already scales at
+    playback. Its only use is to save GPU work at playback, for example on the Steam Deck.
+  - `model`: `realesrgan-ncnn-vulkan` with `realesr-animevideov3`, x2 only (the one model in
+    the registry). `--upscale 3` or `4` with `--method model` is refused.
+- `--fps` and `--upscale` together run interpolation, then upscaling, on each chunk.
+- `--treat-as-2d`: input detected as stereo or VR180 (same rules as `transcode`) is refused
+  with exit 2; this enhances it anyway, for a file that is wrongly detected.
+- `--chunk SECONDS` (default 10) and `--tmp DIR` (default `~/.cache/xrdome-tools/`): see below.
+- `--codec`, `--quality`, `--encoder`, `-o`, `--outdir`, `--force`, `--dry-run`: as for
+  `transcode`. A broken `--encoder` is refused before any work starts.
+
+**Programs and models.** `rife-ncnn-vulkan` and `realesrgan-ncnn-vulkan` are not shipped. Get a
+release from https://github.com/nihui/rife-ncnn-vulkan/releases (tested against `20221029`) and
+https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan/releases (`v0.2.0`), and put the program on
+`PATH` or name it in `tools.ini` (`[programs]`). Only the program is needed from those archives;
+the models come from the registry (see `## models`): `rife-v4.6` and `rife-v4.6.param` can be
+fetched with `xrdome-tools models --fetch rife-v4.6 rife-v4.6.param`; the two
+`realesr-animevideov3-x2` files only ship inside an archive and are placed by hand. A missing
+program or model stops the run with exit 2 before any work, naming where to get it.
+
+**How it runs.** The ncnn programs read and write folders of images, so the video goes through
+them a chunk at a time (default 10 s, one frame of overlap so no frame pair is missed at a
+chunk boundary): frames are decoded to PNG in a job folder under `--tmp`, the tool(s) run, the
+result is encoded to a high-quality intermediate segment (`libx264 -crf 12`), and the PNG
+folders are deleted. The segments are joined with the source's audio and subtitles, and that
+file goes through `transcode` for the one final encode. Lanczos upscaling alone needs no frame
+folders: one ffmpeg run writes the intermediate.
+
+**Disk.** Before starting, the PNG space for one chunk is estimated (3 bytes per pixel, input
+plus output frames) and printed in a `path: tmp=` line. Less free space than that in `--tmp`
+stops the run with exit 2, naming the estimate; use `--tmp` on a larger disk or a shorter
+`--chunk`. The intermediate segments also go to `--tmp`. A failure, Ctrl-C or a full disk
+removes every temporary frame and segment; nothing is resumed.
+
+**Colour.** Frames go through 8-bit RGB PNG, so a 10-bit source comes out 8-bit (with a
+`path: bit-depth=8` line). The RGB conversion uses the source's matrix (BT.709 for untagged HD,
+BT.601 below 720 lines) and the intermediate is tagged with it. HDR sources are not verified.
+
+**Unverified on hardware:** speed of both ncnn programs on AMD and NVIDIA, and the real
+programs' output against these command lines (the tests use stand-ins).
 
 ## Output names and tags
 

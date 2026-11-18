@@ -143,3 +143,23 @@ def test_iw3_entries_not_fetched(tmp_path):
     m = next(m for m in models.REGISTRY if m.fetched_by == "iw3")
     with pytest.raises(ToolError, match="iw3"):
         models.fetch(Runner(), m, _paths(tmp_path))
+
+
+def test_fetch_all_skips_hand_placed(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "d"))
+    direct, by_hand = _entry(url="https://example.invalid/t.pth"), _entry(name="H", file="h.bin")
+    monkeypatch.setattr(models, "REGISTRY", [direct, by_hand])
+    calls = []
+    monkeypatch.setattr(models, "fetch", lambda runner, mod, p: calls.append(mod.name) or models.target(mod, p))
+    assert cli.main(["models", "--fetch"]) == 0
+    assert calls == ["T"]
+    assert cli.main(["models"]) == 0
+    out = capsys.readouterr().out
+    assert "--fetch T" in out and "--fetch H" not in out
+    assert "take it from the archive on the page" in out
+
+
+def test_fetch_hand_placed_refused(tmp_path):
+    with pytest.raises(ToolError, match="no direct download; place it by hand") as e:
+        models.fetch(Runner(), _entry(name="H"), _paths(tmp_path))
+    assert e.value.code == 2
