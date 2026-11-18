@@ -2,8 +2,12 @@
 #include <stddef.h>
 #include <setjmp.h>
 #include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <cmocka.h>
+
+#include "values.h"
 
 #include "detect/detect.h"
 
@@ -29,6 +33,46 @@ static void expect(const xrd_detect *d, xrd_proj proj, xrd_layout layout)
     assert_int_equal(d->layout, layout);
 }
 
+
+/* ---- shared cases: the TSV files in tests/data, also read by test_formats.py ---- */
+
+/* Next data row of `f` split at tabs into cols[0..n-1]; false at end of file.
+ * Blank lines and lines starting with '#' are skipped. `line` is the buffer. */
+static bool tsv_row(FILE *f, char *line, size_t len, char **cols, int n)
+{
+    while (fgets(line, (int)len, f)) {
+        size_t l = strlen(line);
+        while (l && (line[l - 1] == '\n' || line[l - 1] == '\r'))
+            line[--l] = '\0';
+        if (!l || line[0] == '#')
+            continue;
+        char *p = line;
+        for (int i = 0; i < n; i++) {
+            cols[i] = p;
+            char *tab = strchr(p, '\t');
+            if (!tab) {
+                assert_int_equal(i, n - 1);
+                break;
+            }
+            *tab = '\0';
+            p = tab + 1;
+        }
+        return true;
+    }
+    return false;
+}
+
+static FILE *open_data(const char *file)
+{
+    const char *dir = getenv("XRD_TEST_DATA");
+    assert_non_null(dir);
+    char path[1024];
+    snprintf(path, sizeof path, "%s/%s", dir, file);
+    FILE *f = fopen(path, "r");
+    assert_non_null(f);
+    return f;
+}
+
 /* ---- name hints ---- */
 
 static void hints(const char *path, xrd_detect_given *g)
@@ -40,40 +84,27 @@ static void hints(const char *path, xrd_detect_given *g)
 static void name_table(void **s)
 {
     (void)s;
-    struct { const char *name; bool proj; xrd_proj p; bool lay; xrd_layout l; bool pk; xrd_packing k; } rows[] = {
-        { "a.VR180.mp4", true, XRD_PROJ_HEQUIRECT, false, 0, false, 0 },
-        { "a.vr180.mp4", true, XRD_PROJ_HEQUIRECT, false, 0, false, 0 },
-        { "a_180.mp4", true, XRD_PROJ_HEQUIRECT, false, 0, false, 0 },
-        { "a 180x180 b.mp4", true, XRD_PROJ_HEQUIRECT, false, 0, false, 0 },
-        { "a-VR-b.mp4", true, XRD_PROJ_HEQUIRECT, false, 0, false, 0 },
-        { "a.SBS.mp4", false, 0, true, XRD_LAYOUT_SBS_LR, false, 0 },
-        { "a.sbs.mp4", false, 0, true, XRD_LAYOUT_SBS_LR, false, 0 },
-        { "a.3DH.mp4", false, 0, true, XRD_LAYOUT_SBS_LR, false, 0 },
-        { "a.LR.mp4", false, 0, true, XRD_LAYOUT_SBS_LR, false, 0 },
-        { "a.RL.mp4", false, 0, true, XRD_LAYOUT_SBS_RL, false, 0 },
-        { "a.HSBS.mp4", false, 0, true, XRD_LAYOUT_SBS_LR, true, XRD_PACKING_HALF },
-        { "a.hsbs.mp4", false, 0, true, XRD_LAYOUT_SBS_LR, true, XRD_PACKING_HALF },
-        { "a.FSBS.mp4", false, 0, true, XRD_LAYOUT_SBS_LR, true, XRD_PACKING_FULL },
-        { "a.FULLSBS.mp4", false, 0, true, XRD_LAYOUT_SBS_LR, true, XRD_PACKING_FULL },
-        { "a.TB.mp4", false, 0, true, XRD_LAYOUT_TB_LR, false, 0 },
-        { "a.OU.mp4", false, 0, true, XRD_LAYOUT_TB_LR, false, 0 },
-        { "a.3DV.mp4", false, 0, true, XRD_LAYOUT_TB_LR, false, 0 },
-        { "a.HTB.mp4", false, 0, true, XRD_LAYOUT_TB_LR, true, XRD_PACKING_HALF },
-        { "a.HOU.mp4", false, 0, true, XRD_LAYOUT_TB_LR, true, XRD_PACKING_HALF },
-        { "a.MONO.mp4", false, 0, true, XRD_LAYOUT_MONO, false, 0 },
-        { "a.2d.mp4", false, 0, true, XRD_LAYOUT_MONO, false, 0 },
-        { "a.3D.mp4", false, 0, true, XRD_LAYOUT_SBS_LR, false, 0 },
-    };
-    for (size_t i = 0; i < sizeof rows / sizeof rows[0]; i++) {
+    FILE *f = open_data("detect_names.tsv");
+    char line[512], *c[4];
+    int rows = 0;
+    while (tsv_row(f, line, sizeof line, c, 4)) {
+        bool proj = strcmp(c[1], "-") != 0, lay = strcmp(c[2], "-") != 0, pk = strcmp(c[3], "-") != 0;
+        xrd_proj p = 0; xrd_layout l = 0; xrd_packing k = 0;
+        assert_true(!proj || xrd_value_proj(c[1], &p));
+        assert_true(!lay || xrd_value_layout(c[2], &l));
+        assert_true(!pk || xrd_value_packing(c[3], &k));
         xrd_detect_given g;
-        hints(rows[i].name, &g);
-        assert_int_equal(g.have_proj, rows[i].proj);
-        if (rows[i].proj) assert_int_equal(g.proj, rows[i].p);
-        assert_int_equal(g.have_layout, rows[i].lay);
-        if (rows[i].lay) assert_int_equal(g.layout, rows[i].l);
-        assert_int_equal(g.have_packing, rows[i].pk);
-        if (rows[i].pk) assert_int_equal(g.packing, rows[i].k);
+        hints(c[0], &g);
+        assert_int_equal(g.have_proj, proj);
+        if (proj) assert_int_equal(g.proj, p);
+        assert_int_equal(g.have_layout, lay);
+        if (lay) assert_int_equal(g.layout, l);
+        assert_int_equal(g.have_packing, pk);
+        if (pk) assert_int_equal(g.packing, k);
+        rows++;
     }
+    fclose(f);
+    assert_int_equal(rows, 22);
 }
 
 static void name_examples(void **s)
@@ -124,26 +155,24 @@ static void shape_nothing_known(void **s)
     expect(&d, XRD_PROJ_HEQUIRECT, XRD_LAYOUT_SBS_LR);
     assert_int_equal(d.proj_src, XRD_SRC_SHAPE); assert_int_equal(d.layout_src, XRD_SRC_SHAPE);
 
-    struct { int w, h; xrd_proj proj; xrd_layout lay; } rows[] = {
-        { 1920, 1080, XRD_PROJ_FLAT, XRD_LAYOUT_MONO },
-        { 3840, 1080, XRD_PROJ_FLAT, XRD_LAYOUT_SBS_LR },
-        { 1920, 2160, XRD_PROJ_FLAT, XRD_LAYOUT_TB_LR },
-        { 1080, 1080, XRD_PROJ_FLAT, XRD_LAYOUT_MONO },
-        { 3840, 2160, XRD_PROJ_FLAT, XRD_LAYOUT_MONO },
-        { 1960, 1000, XRD_PROJ_HEQUIRECT, XRD_LAYOUT_SBS_LR },
-        { 1940, 1000, XRD_PROJ_FLAT, XRD_LAYOUT_MONO },
-        { 2040, 1000, XRD_PROJ_HEQUIRECT, XRD_LAYOUT_SBS_LR },
-        { 2050, 1000, XRD_PROJ_FLAT, XRD_LAYOUT_MONO },
-    };
-    for (size_t i = 0; i < sizeof rows / sizeof rows[0]; i++) {
-        p = mk(rows[i].w, rows[i].h);
+    FILE *f = open_data("detect_shapes.tsv");
+    char line[256], *c[4];
+    int rows = 0;
+    while (tsv_row(f, line, sizeof line, c, 4)) {
+        xrd_proj want_proj; xrd_layout want_lay;
+        assert_true(xrd_value_proj(c[2], &want_proj));
+        assert_true(xrd_value_layout(c[3], &want_lay));
+        p = mk(atoi(c[0]), atoi(c[1]));
         d = resolve(&p, "x.mkv");
-        expect(&d, rows[i].proj, rows[i].lay);
+        expect(&d, want_proj, want_lay);
         assert_int_equal(d.proj_src, XRD_SRC_SHAPE);
         assert_int_equal(d.layout_src, XRD_SRC_SHAPE);
         assert_int_equal(d.packing, XRD_PACKING_AUTO);
         assert_int_equal(d.packing_src, XRD_SRC_AUTO);
+        rows++;
     }
+    fclose(f);
+    assert_int_equal(rows, 9);
     /* 0.889 +- 3% */
     p = mk(1920, 2160 * 1.025);
     expect((d = resolve(&p, "x"), &d), XRD_PROJ_FLAT, XRD_LAYOUT_TB_LR);

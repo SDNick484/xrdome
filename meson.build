@@ -87,7 +87,8 @@ foreach t : test_names
     c_args : fixture_args,
     link_with : xrdcore,
     dependencies : [cmocka_dep, m_dep, threads_dep, epoxy_dep, egl_dep, sdl2_dep, mpv_dep])
-  test(t, exe, env : ['LIBGL_ALWAYS_SOFTWARE=1', 'EGL_PLATFORM=surfaceless'])
+  test(t, exe, env : ['LIBGL_ALWAYS_SOFTWARE=1', 'EGL_PLATFORM=surfaceless',
+                      'XRD_TEST_DATA=' + (meson.current_source_dir() / 'tests/data')])
 endforeach
 
 xrdome_exe = executable('xrdome', 'src/main.c',

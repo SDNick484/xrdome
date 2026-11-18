@@ -1,0 +1,10 @@
+# width	height	proj	layout   (nothing else known). Read by tests/test_detect.c and tools/tests/test_formats.py.
+1920	1080	flat	mono
+3840	1080	flat	sbs-lr
+1920	2160	flat	tb-lr
+1080	1080	flat	mono
+3840	2160	flat	mono
+1960	1000	hequirect	sbs-lr
+1940	1000	flat	mono
+2040	1000	hequirect	sbs-lr
+2050	1000	flat	mono

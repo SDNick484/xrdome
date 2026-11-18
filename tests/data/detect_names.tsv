@@ -1,0 +1,23 @@
+# name	proj	layout	packing   ('-' = the name gives no hint). Read by tests/test_detect.c and tools/tests/test_formats.py.
+a.VR180.mp4	hequirect	-	-
+a.vr180.mp4	hequirect	-	-
+a_180.mp4	hequirect	-	-
+a 180x180 b.mp4	hequirect	-	-
+a-VR-b.mp4	hequirect	-	-
+a.SBS.mp4	-	sbs-lr	-
+a.sbs.mp4	-	sbs-lr	-
+a.3DH.mp4	-	sbs-lr	-
+a.LR.mp4	-	sbs-lr	-
+a.RL.mp4	-	sbs-rl	-
+a.HSBS.mp4	-	sbs-lr	half
+a.hsbs.mp4	-	sbs-lr	half
+a.FSBS.mp4	-	sbs-lr	full
+a.FULLSBS.mp4	-	sbs-lr	full
+a.TB.mp4	-	tb-lr	-
+a.OU.mp4	-	tb-lr	-
+a.3DV.mp4	-	tb-lr	-
+a.HTB.mp4	-	tb-lr	half
+a.HOU.mp4	-	tb-lr	half
+a.MONO.mp4	-	mono	-
+a.2d.mp4	-	mono	-
+a.3D.mp4	-	sbs-lr	-
