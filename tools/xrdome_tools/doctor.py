@@ -4,7 +4,7 @@ import argparse
 import json
 from typing import Callable
 
-from . import hw
+from . import hw, models
 from .errors import ToolError
 from .run import Runner, say_path
 
@@ -50,6 +50,7 @@ SECTIONS: list[Section] = [
     _vaapi,
     _vulkan,
     _compute,
+    models.doctor_section,
 ]
 
 

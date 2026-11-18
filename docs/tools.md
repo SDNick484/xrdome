@@ -102,7 +102,34 @@ written to `<output>.part` and renamed when ffmpeg succeeds; an interrupt or fai
 
 ## models
 
-Not yet available.
+    xrdome-tools models [--check] [--fetch [NAME ...]]
+
+No model weights ship with xrdome. `models` lists every model with its status (`ok`,
+`missing` or `bad hash`), licence and destination, and for each one that is not `ok` prints
+the page to get it from, the file name, the sha256 and the exact path to put it at.
+`--check` does the same and exits 2 if any model is not `ok`. Files in a model folder that
+the registry does not know are named in a warning.
+
+Nothing is downloaded unless you ask: `--fetch NAME ...` (or `--fetch` alone for every
+fetchable model) downloads to `<file>.part`, checks the sha256, and only then renames it into
+place; on a mismatch the download is deleted and the exit status is 2. No other subcommand
+ever downloads a model, it stops and prints these instructions instead.
+
+Only models under MIT, BSD-2-Clause, BSD-3-Clause or Apache-2.0 are accepted. Any other
+licence is refused as "not an allowed model", even if the file is already present.
+
+Paths are relative to the data directory (`~/.local/share/xrdome-tools/`):
+
+| Model | Used by | Licence | Page | File | Destination |
+|---|---|---|---|---|---|
+| `Any_V2_S` | to3d | Apache-2.0 | https://huggingface.co/depth-anything/Depth-Anything-V2-Small/tree/03876f8651c73a60fe4c2c48294e09fcb6838fcf | `depth_anything_v2_vits.pth` | `iw3/nunif/iw3/pretrained_models/hub/checkpoints/` |
+| `VDA_S` | to3d | Apache-2.0 | https://huggingface.co/depth-anything/Video-Depth-Anything-Small/tree/256875362cff76724b920335dfb4b29dd611f66e | `video_depth_anything_vits.pth` | `iw3/nunif/iw3/pretrained_models/hub/checkpoints/` |
+| `iw3_row_flow_v3` | to3d | MIT | https://github.com/nagadomi/nunif | `iw3_row_flow_v3_20250627.pth` | `iw3/nunif/iw3/pretrained_models/` |
+| `iw3_depth_aa` | to3d | MIT | https://github.com/nagadomi/nunif | `iw3_depth_aa_20250530.pth` | `iw3/nunif/iw3/pretrained_models/` |
+| `transnetv2` | to3d | MIT | https://github.com/nagadomi/nunif | `transnetv2-pytorch-weights.pth` | `iw3/nunif/iw3/pretrained_models/` |
+
+The last three are downloaded by iw3 itself on first use, so `--fetch` refuses them; `models`
+only checks them. `xrdome-tools doctor` also lists each model's status.
 
 ## setup
 

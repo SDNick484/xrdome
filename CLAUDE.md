@@ -28,7 +28,7 @@ Run both before every commit:
 
 - doctor: available (`xrdome-tools doctor [--json]`)
 - transcode: available (`xrdome-tools transcode INPUT`)
-- models: not yet available
+- models: available (`xrdome-tools models [--check] [--fetch]`)
 - setup: not yet available
 - to3d: not yet available
 - enhance: not yet available

@@ -12,6 +12,7 @@ from .run import ChildFailed
 SUBCOMMANDS: list[str] = [
     "doctor",
     "transcode",
+    "models",
 ]
 
 
