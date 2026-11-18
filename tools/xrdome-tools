@@ -1,0 +1,4 @@
+#!/bin/sh
+# Launcher: run the package next to this script, whatever the current directory.
+here=$(cd "$(dirname "$0")" && pwd -P) || exit 2
+PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m xrdome_tools "$@"

@@ -13,6 +13,8 @@ have only passed the unit and Xvfb smoke tests. On the XREAL Air 2 Pro (2026-11-
 files played with head tracking much as on the Viture, with and without `--device xreal-air2pro`. See `docs/STATUS.md`, `docs/superpowers/specs/2026-11-11-xrdome-design.md` and
 `docs/superpowers/plans/2026-11-11-xrdome.md`.
 
+The companion `xrdome-tools` command (preparing video for xrdome) is documented in [docs/tools.md](docs/tools.md).
+
 Flat video and format detection (an ordinary film opens as a flat screen fixed in the room, a
 VR180 file opens as before, both without flags; see [Flat video](#flat-video) and
 [Format detection](#format-detection)) were run on the Viture Pro XR on 2026-11-14: flat 1080p
