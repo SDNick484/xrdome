@@ -1,0 +1,34 @@
+# CLAUDE.md
+
+xrdome is a Linux player for VR180 and flat video on XR glasses (C, meson). `tools/` also holds
+`xrdome-tools`, a standard-library Python package that prepares video for it.
+
+## Gate
+
+Run both before every commit:
+
+    meson setup build -Dwerror=true && meson compile -C build && meson test -C build --print-errorlogs
+    python3 -m pytest tools/tests -q
+
+## xrdome-tools rules
+
+- Python >= 3.11, standard library only under `tools/xrdome_tools/`; pytest is the only test dependency.
+- Children run through `run.Runner` with an argv list, never `shell=True`.
+- Update `docs/tools.md` with any user-visible change, in the same PR.
+- Spec and plan: `docs/superpowers/specs/2026-11-17-xrdome-tools-design.md`,
+  `docs/superpowers/plans/2026-11-17-xrdome-tools.md`.
+
+## Append points (parallel work: one entry per line, touch only your own)
+
+- `cli.SUBCOMMANDS` in `tools/xrdome_tools/cli.py`: one module name per line.
+- `docs/tools.md`: one `## <subcommand>` section each.
+- The status list below: one line per subcommand.
+
+## xrdome-tools status
+
+- doctor: not yet available
+- transcode: not yet available
+- models: not yet available
+- setup: not yet available
+- to3d: not yet available
+- enhance: not yet available
