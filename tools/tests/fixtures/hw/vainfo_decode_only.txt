@@ -1,0 +1,10 @@
+# source: synthetic, from the vainfo output format in https://github.com/intel/libva-utils
+Trying display: drm
+vainfo: VA-API version: 1.22 (libva 2.22.0)
+vainfo: Driver version: Mesa Gallium driver 24.2.3 for AMD Radeon Graphics
+vainfo: Supported profile and entrypoints
+      VAProfileH264Main               : VAEntrypointVLD
+      VAProfileHEVCMain               : VAEntrypointVLD
+      VAProfileHEVCMain10             : VAEntrypointVLD
+      VAProfileAV1Profile0            : VAEntrypointVLD
+      VAProfileNone                   : VAEntrypointVideoProc

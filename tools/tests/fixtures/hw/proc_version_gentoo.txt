@@ -1,0 +1,2 @@
+# source: synthetic, from the /proc/version format in proc(5), https://man7.org/linux/man-pages/man5/proc.5.html
+Linux version 6.6.52-gentoo-x86_64 (root@laptop) (x86_64-pc-linux-gnu-gcc (Gentoo 13.3.1_p20240614 p17) 13.3.1 20240614, GNU ld (Gentoo 2.42 p6) 2.42.0) #1 SMP PREEMPT_DYNAMIC Tue Sep 24 10:00:00 -00 2024

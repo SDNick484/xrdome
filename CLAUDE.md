@@ -26,7 +26,7 @@ Run both before every commit:
 
 ## xrdome-tools status
 
-- doctor: not yet available
+- doctor: available (`xrdome-tools doctor [--json]`)
 - transcode: not yet available
 - models: not yet available
 - setup: not yet available

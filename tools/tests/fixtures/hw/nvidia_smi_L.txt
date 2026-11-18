@@ -1,0 +1,2 @@
+# source: synthetic, from the `nvidia-smi -L` format in https://docs.nvidia.com/deploy/nvidia-smi/
+GPU 0: NVIDIA GeForce RTX 4080 (UUID: GPU-0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0)
