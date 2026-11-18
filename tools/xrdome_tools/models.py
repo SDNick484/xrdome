@@ -82,6 +82,44 @@ REGISTRY: list[Model] = [
         file="transnetv2-pytorch-weights.pth", sha256="5e896c00",
         dest=_IW3, fetched_by="iw3",
     ),
+    # sha256 read from rife-ncnn-vulkan-20221029-ubuntu.zip (folder rife-v4.6/); the files in
+    # the repository at the release tag are identical, so the URL is the tagged repository file.
+    Model(
+        name="rife-v4.6", used_by="enhance", licence="MIT",
+        page="https://github.com/nihui/rife-ncnn-vulkan/releases/tag/20221029",
+        url="https://raw.githubusercontent.com/nihui/rife-ncnn-vulkan/20221029/models/rife-v4.6/flownet.bin",
+        revision="20221029", file="flownet.bin",
+        sha256="f334ed2260149ce0188a6dcf049844e8b0cdd912e01cbcfb63553157d2508958",
+        dest="models/rife-v4.6",
+    ),
+    Model(
+        name="rife-v4.6.param", used_by="enhance", licence="MIT",
+        page="https://github.com/nihui/rife-ncnn-vulkan/releases/tag/20221029",
+        url="https://raw.githubusercontent.com/nihui/rife-ncnn-vulkan/20221029/models/rife-v4.6/flownet.param",
+        revision="20221029", file="flownet.param",
+        sha256="724569596bcd1e7b9fa50455c604777ebed99746d2ef40aa86e31b5725f1053c",
+        dest="models/rife-v4.6",
+    ),
+    # BSD-3-Clause, per project licence (no separate statement for the weights). The
+    # realesrgan-ncnn-vulkan v0.2.0 archive holds no models; these come from folder models/
+    # of realesrgan-ncnn-vulkan-20220424-ubuntu.zip (xinntao/Real-ESRGAN release v0.2.5.0,
+    # same v0.2.0 binary). Only inside that archive, so no direct URL: placed by hand.
+    Model(
+        name="realesr-animevideov3-x2", used_by="enhance", licence="BSD-3-Clause",
+        page="https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.2.5.0 "
+             "(realesrgan-ncnn-vulkan-20220424-ubuntu.zip, folder models/)",
+        url="", revision="v0.2.5.0", file="realesr-animevideov3-x2.bin",
+        sha256="548a36f9c3f4ab8da56cd3b13badf23968bee207b396dad14d04b830e5f2ab2d",
+        dest="models/realesrgan",
+    ),
+    Model(
+        name="realesr-animevideov3-x2.param", used_by="enhance", licence="BSD-3-Clause",
+        page="https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.2.5.0 "
+             "(realesrgan-ncnn-vulkan-20220424-ubuntu.zip, folder models/)",
+        url="", revision="v0.2.5.0", file="realesr-animevideov3-x2.param",
+        sha256="b88ff4f00ebf019a7fdac17fdd45a7fd3665d37509efc5baf2e4da2e24420a04",
+        dest="models/realesrgan",
+    ),
 ]
 
 

@@ -31,4 +31,4 @@ Run both before every commit:
 - models: available (`xrdome-tools models [--check] [--fetch]`)
 - setup: available (`xrdome-tools setup to3d [--cpu] [--yes] [--fetch-models]`)
 - to3d: available (`xrdome-tools to3d INPUT`)
-- enhance: not yet available
+- enhance: available (`xrdome-tools enhance INPUT [--fps N] [--upscale 2|3|4]`)
