@@ -133,11 +133,75 @@ only checks them. `xrdome-tools doctor` also lists each model's status.
 
 ## setup
 
-Not yet available.
+    xrdome-tools setup to3d [--cpu] [--yes] [--fetch-models] [--dry-run]
+
+Builds the environment `to3d` runs in, under `~/.local/share/xrdome-tools/iw3/`
+(`$XDG_DATA_HOME/xrdome-tools/iw3/`). Needs `git` and `python3` with `venv`; both can be
+overridden in the `[programs]` section of `tools.ini`. The steps, each printed by `--dry-run`:
+
+- [nunif](https://github.com/nagadomi/nunif) (which contains iw3) at commit
+  `0f8b86b952d3f3e294c8d887fbf615a679e7f4ca`, in `iw3/nunif/`.
+- The two torch hub repos iw3 loads, `nagadomi/Depth-Anything_iw3` at
+  `92eaac92bcc2c275f48c1f866ec708861055e435` and `nagadomi/Video-Depth-Anything_iw3` at
+  `e9541668c380524f128a3a75886c5f9143214554`, in `iw3/nunif/iw3/pretrained_models/hub/`.
+- A venv in `iw3/venv/` with PyTorch and nunif's `requirements.txt`. The PyTorch build follows
+  the GPU found (a `path: torch=` line says which and why):
+  - NVIDIA, native or under WSL2: the CUDA wheels nunif's `requirements-torch.txt` names.
+  - AMD: ROCm wheels from `https://download.pytorch.org/whl/rocm6.4`. If PyTorch then cannot
+    see the GPU (ROCm does not support every Radeon yet; the Radeon 860M, gfx1152, is not
+    verified), setup says so and exits 2. It never sets `HSA_OVERRIDE_GFX_VERSION` for you.
+  - Neither: refused unless `--cpu`, which installs the CPU wheels. With a GPU present,
+    `--cpu` changes nothing.
+
+The fetches are pinned by commit, so running `setup to3d` again is harmless and picks up new
+pins after an xrdome update. Before downloading it prints the size (about 4 to 5 GB for CUDA,
+measured; ROCm and CPU not measured) and asks; without a terminal it exits 2 unless `--yes`.
+The log goes to `iw3/setup.log`. Setup writes `iw3/xrdome-setup.ini` last, once every step
+has passed; `to3d` refuses to run without it.
+
+`--fetch-models` also downloads the `Any_V2_S` and `VDA_S` depth models, as
+`xrdome-tools models --fetch` does (sha256 checked). Without it, place them by hand as
+`xrdome-tools models` explains. iw3 downloads its three small support models itself on first
+use.
 
 ## to3d
 
-Not yet available.
+    xrdome-tools to3d INPUT [--model Any_V2_S|VDA_S] [--divergence D] [--convergence C]
+        [--foreground-scale F] [--half] [--cpu] [--quality high|normal|small] [--tmp DIR]
+        [-o PATH | --outdir DIR] [--force] [--dry-run]
+
+Converts 2D video to side-by-side 3D with iw3, then finishes it through `transcode`, so the
+result is HEVC Matroska tagged and named for xrdome. Needs `setup to3d` first, and the chosen
+depth model in place (see `models`).
+
+- `--model`: `Any_V2_S` (default, Depth Anything V2 Small) or `VDA_S` (Video Depth Anything
+  Small, run with `--ema-normalize --scene-detect`). Any other name, including the
+  non-commercial Base and Large models, is refused as "not an allowed model".
+- `--divergence` (default 2.0), `--convergence` (default 0.5), `--foreground-scale` (default
+  0, not passed to iw3): iw3's own options, defaults from the owner's sbs-test.
+- `--half`: half SBS instead of full SBS.
+- `--cpu`: run without CUDA or ROCm. Without it, `to3d` refuses (exit 2): on the CPU a few
+  minutes of video takes hours, against about 60 fps on an RTX 5070 Ti.
+- `--quality`: the final encode, as for `transcode`.
+- `--tmp DIR`: where the intermediate file goes (default `~/.cache/xrdome-tools/`). It is
+  deleted when the run ends, also on failure or Ctrl-C.
+- `-o`, `--outdir`, `--force`, `--dry-run`: as for `transcode`. `--dry-run` prints the iw3
+  command and the transcode that would follow.
+
+The frame rate is kept: iw3's `--max-fps` is set to the source rate rounded up (120 for
+119.88). On NVIDIA, iw3 encodes HEVC with NVENC itself and `transcode` only remuxes and tags
+it; elsewhere iw3 writes a libx264 CRF 12 intermediate that `transcode` encodes with VA-API or
+in software. The output name is `<name>_<AnyV2S|VDAS>_div<D>[_c<C>][_fs<F>]_FSBS.mkv`
+(`_HSBS` with `--half`), with `_c` and `_fs` only when not the default, for example
+`pan_AnyV2S_div2.0_FSBS.mkv` or `pan_VDAS_div3.0_c0.65_fs1.0_FSBS.mkv`. iw3's command and the
+decisions go to `<output>.log`, with the transcode's.
+
+Enhance first, then convert: below 1080p or below 50 fps, `to3d` prints a hint to run
+`enhance` first. Interpolating or upscaling before the conversion is half the work and keeps
+both eyes made from the same frames.
+
+Not yet verified on hardware: ROCm, conversion speed on AMD, and how iw3 fits a source that is
+not 16:9 into the 1920x1080 eye (letterbox expected, not checked).
 
 ## enhance
 

@@ -13,6 +13,8 @@ SUBCOMMANDS: list[str] = [
     "doctor",
     "transcode",
     "models",
+    "setup",
+    "to3d",
 ]
 
 
