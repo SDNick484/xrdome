@@ -1,0 +1,21 @@
+# source: synthetic, from the `ffmpeg -encoders` format in https://ffmpeg.org/ffmpeg.html
+Encoders:
+ V..... = Video
+ A..... = Audio
+ S..... = Subtitle
+ .F.... = Frame-level multithreading
+ ..S... = Slice-level multithreading
+ ...X.. = Codec is experimental
+ ....B. = Supports draw_horiz_band
+ .....D = Supports direct rendering method 1
+ ------
+ V....D libx264              libx264 H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10 (codec h264)
+ V....D libx265              libx265 H.265 / HEVC (codec hevc)
+ V....D libsvtav1            SVT-AV1(Scalable Video Technology for AV1) encoder (codec av1)
+ V....D av1_nvenc            NVIDIA NVENC av1 encoder (codec av1)
+ V....D hevc_nvenc           NVIDIA NVENC hevc encoder (codec hevc)
+ V....D av1_vaapi            AV1 (VAAPI) (codec av1)
+ V....D hevc_vaapi           H.265/HEVC (VAAPI) (codec hevc)
+ A....D aac                  AAC (Advanced Audio Coding)
+ A....D libopus              libopus Opus (codec opus)
+ S..... srt                  SubRip subtitle (codec subrip)

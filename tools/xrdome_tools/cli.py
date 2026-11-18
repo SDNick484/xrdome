@@ -10,6 +10,7 @@ from .run import ChildFailed
 
 # Append one module name per line (keep the trailing comma).
 SUBCOMMANDS: list[str] = [
+    "doctor",
 ]
 
 
