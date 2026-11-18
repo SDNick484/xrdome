@@ -1,0 +1,86 @@
+{
+ "_source": "ffprobe version 9.0.2 Copyright (c) 2007-2026 the FFmpeg developers, lavfi testsrc, sbs_rl.mkv; 2026-11-17",
+ "streams": [
+  {
+   "index": 0,
+   "codec_name": "h264",
+   "codec_long_name": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+   "profile": "High 4:4:4 Predictive",
+   "codec_type": "video",
+   "codec_tag_string": "[0][0][0][0]",
+   "codec_tag": "0x0000",
+   "mime_codec_string": "avc1.f40028",
+   "width": 1920,
+   "height": 1080,
+   "coded_width": 1920,
+   "coded_height": 1080,
+   "has_b_frames": 2,
+   "sample_aspect_ratio": "1:1",
+   "display_aspect_ratio": "16:9",
+   "pix_fmt": "yuv444p",
+   "level": 40,
+   "color_range": "tv",
+   "chroma_location": "left",
+   "field_order": "progressive",
+   "is_avc": "true",
+   "nal_length_size": "4",
+   "r_frame_rate": "25/1",
+   "avg_frame_rate": "25/1",
+   "time_base": "1/1000",
+   "start_pts": 0,
+   "start_time": "0.000000",
+   "bits_per_raw_sample": "8",
+   "extradata_size": 48,
+   "disposition": {
+    "default": 0,
+    "dub": 0,
+    "original": 0,
+    "comment": 0,
+    "lyrics": 0,
+    "karaoke": 0,
+    "forced": 0,
+    "hearing_impaired": 0,
+    "visual_impaired": 0,
+    "clean_effects": 0,
+    "attached_pic": 0,
+    "timed_thumbnails": 0,
+    "non_diegetic": 0,
+    "captions": 0,
+    "descriptions": 0,
+    "metadata": 0,
+    "dependent": 0,
+    "still_image": 0,
+    "multilayer": 0
+   },
+   "tags": {
+    "stereo_mode": "right_left",
+    "DURATION": "00:00:01.000000000"
+   },
+   "side_data_list": [
+    {
+     "side_data_type": "Stereo 3D",
+     "type": "side by side",
+     "inverted": 1,
+     "view": "packed",
+     "primary_eye": "none",
+     "baseline": 0,
+     "horizontal_disparity_adjustment": "0/1",
+     "horizontal_field_of_view": "0/1"
+    }
+   ]
+  }
+ ],
+ "format": {
+  "nb_streams": 1,
+  "nb_programs": 0,
+  "nb_stream_groups": 0,
+  "format_name": "matroska,webm",
+  "format_long_name": "Matroska / WebM",
+  "start_time": "0.000000",
+  "duration": "1.000000",
+  "size": "26936",
+  "bit_rate": "215488",
+  "probe_score": 100,
+  "tags": {}
+ }
+}

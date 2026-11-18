@@ -70,3 +70,35 @@ Not yet available.
 ## enhance
 
 Not yet available.
+
+## Output names and tags
+
+Every subcommand that writes a video (`transcode`, `to3d`, `enhance`) names and tags it so it opens
+in xrdome with no flags. The rules live in `tools/xrdome_tools/formats.py`.
+
+**Detecting the input.** With `--as auto` the format is read the way xrdome reads it: container
+metadata (`Stereo 3D` and `Spherical Mapping` side data), then tokens in the file name, then the
+frame shape (2:1 is VR180 side by side; 3:1 or wider is flat side by side; and so on). The video stream
+used is the first one that is not cover art. The Python copy of the name-token and frame-shape
+rules is checked against the same cases as the player's C code: `tests/data/detect_names.tsv`
+and `tests/data/detect_shapes.tsv`. Add a case there and both test suites pick it up.
+
+**Names.** The output is Matroska (`.mkv`), named from the input's stem plus tokens, unless a
+token is already in the name:
+
+| Format | Tokens added | Matroska `stereo_mode` |
+|---|---|---|
+| VR180 side by side | `_VR180_LR` | `left_right` |
+| Full / half side by side | `_FSBS` / `_HSBS` | `left_right` |
+| Full / half top-bottom | `_TB` / `_HTB` | `top_bottom` |
+| Flat 2D | none | `mono` |
+| Right-eye-first | `_RL` | `right_left` / `bottom_top` |
+
+For right-eye-first side by side the `RL` token goes before the others (`clip_RL_FSBS.mkv`,
+`clip_VR180_RL.mkv`), because xrdome reads the first layout token it finds. Top-bottom has no
+right-first name token, so `clip_TB_RL.mkv` is a label only; the `stereo_mode` tag carries the
+order and xrdome reads the tag before the name.
+
+**Refusals.** An output path is checked before any work starts. It is never the input file (also
+through a symlink or hard link, even with `--force`): exit 2. Its directory must exist and be
+writable: exit 2. An existing output without `--force`: exit 1.
