@@ -53,7 +53,52 @@ The last lines are decision lines, `path: <key>=<value> (<reason>)`, one each fo
 
 ## transcode
 
-Not yet available.
+    xrdome-tools transcode INPUT [--as FORMAT] [--codec hevc|av1] [--quality high|normal|small]
+        [--max-width W] [--encoder NAME] [--reencode] [-o PATH | --outdir DIR] [--force] [--dry-run]
+
+Writes a Matroska file (`.mkv`) that xrdome decodes in hardware and detects without flags: HEVC
+(default) or AV1, tagged and named by the rules in "Output names and tags" below. Name, tags and
+refusals are checked before any work starts. Needs `ffmpeg` and `ffprobe`.
+
+- `--as auto|vr180|flat|hsbs|fsbs|htb|ftb` (and `-rl` variants): how to read the input. `auto`
+  uses container metadata, then file name tokens, then frame shape.
+- `--codec hevc|av1`: default `hevc`. If `--encoder` names an encoder and `--codec` is not given,
+  the codec follows the encoder.
+- `--quality`: `high` (default), `normal`, `small`. One setting per encoder family: NVENC
+  `-rc vbr -cq`, VA-API `-rc_mode QVBR -global_quality` (falls back to `-rc_mode CQP -qp` when a
+  test encode shows the driver rejects QVBR), x265 and SVT-AV1 `-crf`. The values are provisional
+  until the hardware run (plan Task 8) settles them; see `QUALITY` in `encode.py`.
+- `--max-width W`: scale down to at most W pixels wide, keeping the aspect ratio and the stereo
+  layout. Side-by-side widths stay a multiple of 4; a half side-by-side picture keeps its height.
+- `--encoder NAME`: use this ffmpeg encoder (`libx265`, `hevc_vaapi`, `hevc_nvenc`, ...). Refused
+  with exit 2 if it is not built in or its test encode failed.
+- `--reencode`: never remux.
+- `-o PATH` or `--outdir DIR`: where to write; default is next to the input. `--force` replaces an
+  existing output (never the input).
+- `--dry-run`: prints the ffmpeg command, quoted, and writes nothing. Probes still run.
+
+Encoder choice is the one `doctor` shows: NVENC, then VA-API, then software (slow), each only if
+its test encode passed.
+
+**Remux when friendly.** A source that is already the wanted codec (HEVC by default) and within
+`--max-width` is copied (`-c copy`) with the tag and name added, and a line says so. Anything else is
+re-encoded: H.264 wider than 4096 (which decodes in software on AMD) is never remuxed.
+
+**What is kept.** Bit depth follows the source (10-bit stays 10-bit). Resolution and frame rate are
+unchanged, timestamps pass through (variable frame rate stays variable). Audio and subtitles are
+copied; audio Matroska cannot hold is re-encoded to Opus, `mov_text` subtitles become `srt`, and
+other streams (cover art, data, unsupported subtitles) are dropped, each with a `path: stream=` line.
+HDR (PQ or HLG) colour primaries, transfer and matrix are copied for software and NVENC; for VA-API
+only if a test encode with them works, otherwise a line says HDR metadata is not passed through.
+Mastering display metadata is not copied.
+
+**Verify.** After writing, `ffprobe` checks the codec, that the size is not larger than the source,
+the `Stereo 3D` side data against the format, the duration within 0.5 s, and that every audio and
+subtitle stream that was meant to be kept is present. A failure exits 3, keeps the output and prints
+the reasons.
+
+**Log.** Every ffmpeg command, its stderr and the decisions go to `<output>.log`. The video is
+written to `<output>.part` and renamed when ffmpeg succeeds; an interrupt or failure deletes it.
 
 ## models
 
