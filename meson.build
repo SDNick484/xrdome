@@ -1,6 +1,7 @@
 project('xrdome', 'c',
   version : '0.1.0',
   license : 'GPL-2.0-or-later AND MIT',
+  meson_version : '>=1.1.0', # meson.options
   default_options : ['c_std=c11', 'warning_level=3'])
 
 cc = meson.get_compiler('c')
@@ -224,3 +225,10 @@ test('smoke_depth_video', find_program('tests/smoke_depth_video.sh'),
   args : [xrdome_exe, files('tests/fake_depth_helper.py')],
   is_parallel : false,
   timeout : 300)
+
+# xrdome-pose-viture: a separate MIT program that reads VITURE's SDK (never
+# linked: loaded at run time) and sends the pose to xrdome as OpenTrack UDP.
+# Built only with -Dviture_sdk_include=PATH to VITURE's headers.
+if get_option('viture_sdk_include') != ''
+  subdir('helpers/xrdome-pose-viture')
+endif

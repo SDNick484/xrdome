@@ -1,0 +1,4 @@
+option('viture_sdk_include', type : 'string', value : '',
+  description : 'Directory with VITURE Glasses SDK headers (viture_glasses_provider.h and the others). ' +
+                'Set it to build helpers/xrdome-pose-viture. A relative path is taken from the source ' +
+                'root; helpers/xrdome-pose-viture/tests/fake_include holds stand-ins for CI.')
