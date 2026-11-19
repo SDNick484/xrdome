@@ -10,6 +10,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -320,3 +321,35 @@ jobs:
         with:
           name: testlog-windows
           path: build/meson-logs/testlog.txt
+
+      # The Windows zip (packaging/windows/build.sh): xrdome.exe, ffprobe.exe and
+      # the MSYS2 DLLs they load, licences and the source offer. It packages the
+      # build above, not a second one, and refuses a non-free ffprobe.
+      - name: Package
+        run: packaging/windows/build.sh --package-only
+
+      # Made with MSYS2's ffmpeg now, read below with the zip's own ffprobe.
+      - name: Make a sample video
+        run: ffmpeg -v error -f lavfi -i testsrc2=size=64x64:rate=5 -t 1 -c:v mpeg4 -pix_fmt yuv420p "$RUNNER_TEMP/sample.mp4"
+
+      # A plain cmd shell with only Windows' own directories on PATH: the staged
+      # folder must run by itself, which proves the DLL set is complete.
+      - name: Smoke-test the folder without MSYS2
+        shell: cmd
+        run: |
+          set "PATH=%SystemRoot%\System32;%SystemRoot%"
+          where libmpv-2.dll >nul 2>&1 && (echo MSYS2 is still on PATH & exit /b 1)
+          dist\xrdome\xrdome.exe --version || exit /b 1
+          dist\xrdome\ffprobe.exe -version || exit /b 1
+          dist\xrdome\ffprobe.exe -v error -show_streams "%RUNNER_TEMP%\sample.mp4" | findstr /b "codec_type=video" || exit /b 1
+          dir dist\xrdome-*-win64.zip
+
+      # upload-artifact zips what it uploads: the download is a zip holding the
+      # zip (stored, not compressed again).
+      - name: Upload the Windows zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: xrdome-win64
+          path: dist/xrdome-*-win64.zip
+          if-no-files-found: error
+          compression-level: 0

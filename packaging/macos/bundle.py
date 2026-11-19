@@ -30,26 +30,18 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # packaging/bundle_common.py
+from bundle_common import (  # noqa: E402
+    LICENSE_FILE_RE, REPO_URL, BundleError, check_nonfree as _check_nonfree, copy_own_licences,
+    ffprobe_buildconf, sources_buildconf_lines, sources_xrdome_lines, version_from_meson)
+
 LIB_PREFIX = "@executable_path/lib/"
-REPO_URL = "https://github.com/SDNick484/xrdome"
 ISSUE_URL = REPO_URL + "/issues/65"
-LICENSE_FILE_RE = re.compile(r"^(COPYING|COPYRIGHT|LICEN[CS]E|NOTICE|AUTHORS)", re.IGNORECASE)
 KEG_RE = re.compile(r"/Cellar/([^/]+)/([^/]+)(?:/|$)")
 MACHO_MAGIC = (b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe")  # 64-bit little endian, fat
 
 
-class BundleError(Exception):
-    pass
-
-
 # ---- pure helpers -----------------------------------------------------------
-
-
-def version_from_meson(text: str) -> str:
-    m = re.search(r"project\s*\(.*?version\s*:\s*'([^']+)'", text, re.DOTALL)
-    if not m:
-        raise BundleError("no project version in meson.build")
-    return m.group(1)
 
 
 def parse_otool_deps(text: str) -> list[str]:
@@ -92,10 +84,7 @@ def is_system(path: str) -> bool:
 
 
 def check_nonfree(buildconf: str) -> None:
-    if "--enable-nonfree" in buildconf:
-        raise BundleError(
-            "ffprobe is built with --enable-nonfree and cannot be redistributed; "
-            "use a GPL build (Homebrew's ffmpeg)")
+    _check_nonfree(buildconf, "use a GPL build (Homebrew's ffmpeg)")
 
 
 def _expand(path: str, loader_dir: str, exe_dir: str) -> str:
@@ -222,9 +211,7 @@ def build_sources_md(version: str, commit: str, kegs: dict[str, str], info: dict
     out = [
         f"# xrdome {version} (macOS arm64 test bundle): sources",
         "",
-        f"xrdome: {REPO_URL}, commit {commit}. It is GPL-2.0-or-later (see COPYING); the",
-        "sharpening shader is a port of AMD FidelityFX CAS under the MIT licence (see",
-        "LICENSES/xrdome/).",
+        *sources_xrdome_lines(commit),
         "",
         "The libraries in lib/ and the ffprobe program are unmodified Homebrew bottles.",
         "Each formula's source is at the URL below, at the version listed; the build",
@@ -238,12 +225,7 @@ def build_sources_md(version: str, commit: str, kegs: dict[str, str], info: dict
         url = ((rec.get("urls") or {}).get("stable") or {}).get("url", "unknown")
         out.append(f"| {name} | {kegs[name]} | {license_text(rec.get('license'))} | {url} | "
                    f"LICENSES/{name}/ |")
-    out += ["", "## ffprobe build configuration", "", "```", buildconf.strip(), "```", ""]
-    if "--enable-version3" in buildconf:
-        out += ["This FFmpeg is built with --enable-gpl --enable-version3, so the libraries in",
-                "this bundle are combined under GPL version 3 or later; xrdome's own terms",
-                "(GPL-2.0-or-later) allow that. Nothing here is --enable-nonfree (the bundle",
-                "script refuses it).", ""]
+    out += sources_buildconf_lines(buildconf)
     return "\n".join(out)
 
 
@@ -271,13 +253,6 @@ def otool_rpaths(path: str) -> list[str]:
 
 def brew_lib_dirs() -> list[str]:
     return [run(["brew", "--prefix"]).strip() + "/lib"]
-
-
-def ffprobe_buildconf(ffprobe: str) -> str:
-    p = subprocess.run([ffprobe, "-hide_banner", "-buildconf"], capture_output=True, text=True)
-    if p.returncode != 0:
-        raise BundleError(f"{ffprobe} -buildconf failed: {p.stderr.strip()}")
-    return (p.stdout + p.stderr).strip()  # ffmpeg logs to stderr
 
 
 def copy_writable(src: str, dst: Path) -> None:
@@ -365,10 +340,7 @@ def stage(args: argparse.Namespace) -> int:
         raise BundleError("the bundle still reaches outside itself:\n  " + "\n  ".join(problems))
 
     # Licences and sources.
-    shutil.copyfile(root / "LICENSE", out / "COPYING")
-    own = out / "LICENSES" / "xrdome"
-    own.mkdir(parents=True)
-    shutil.copyfile(root / "src/render/shaders/sharpen.frag", own / "sharpen.frag")
+    copy_own_licences(root, out)
     kegs: dict[str, str] = {}
     for real in [ffprobe] + list(libs.values()):
         f = formula_of(real)
