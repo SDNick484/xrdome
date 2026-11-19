@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "render/projection.h"
 
@@ -73,6 +74,15 @@ void xrd_renderer_set_dither(xrd_renderer *r, bool on);
  * xrd_renderer_draw. */
 void xrd_renderer_set_sharpen(xrd_renderer *r, float strength);
 
+/* Depth 3D (spec 6 of the depth 3D design): the depth of the picture, w x h
+ * samples, row 0 the top, 0 far and 65535 near (xrd_depthmap), uploaded into
+ * a GL_R16 texture (GL_LINEAR, clamp to edge) oriented like the video
+ * texture. px NULL drops it. false, with err, when it cannot be uploaded (it
+ * is then dropped). Leaves the unit-1 2D texture binding changed. */
+bool xrd_renderer_set_depth(xrd_renderer *r, const uint16_t *px, int w, int h, char *err,
+                            size_t errlen);
+bool xrd_renderer_has_depth(const xrd_renderer *r);
+
 typedef struct {
     xrd_proj proj;
     xrd_layout layout;
@@ -80,6 +90,12 @@ typedef struct {
     xrd_view_geom geom;
     bool trilinear;   /* sample through the mipmap chain; the caller guarantees it is valid */
     float screen_curve; /* flat: 0 for the plane, else the radius of xrd_flat_curve_dir_to_uv */
+    /* Depth 3D: drawn only when depth is set, the renderer holds a depth
+     * (xrd_renderer_set_depth), proj is flat, layout mono and depth_strength
+     * > 0; otherwise the draw is exactly the draw without it. */
+    bool depth;
+    float depth_strength; /* picture widths of disparity per unit of depth */
+    float depth_plane;    /* the depth that sits on the screen */
 } xrd_draw_params;
 
 /* Draws both eyes into the currently bound framebuffer: left eye in the left half.
@@ -92,7 +108,10 @@ typedef struct {
  * picture draw black. dp->layout and dp->swap_eyes pick each eye's sub-image
  * (xrd_eye_uv_transform); when a split axis has an odd number of texels, the
  * middle texel column (sbs) or row (tb) belongs to neither eye, so no filter
- * ever reads one eye's pixels for the other.
+ * ever reads one eye's pixels for the other. With depth 3D (dp->depth) each
+ * eye's lookup moves along the row to xrd_depth_source_u's answer, with
+ * k = xrd_depth_shift(eye, dp->swap_eyes, dp->depth_strength) and
+ * XRD_DEPTH_SEARCH_N tries, before the filter samples there.
  *
  * Contract:
  *  - video_tex must not be 0. It is GL-oriented (t = 1 is the image top). Its
@@ -115,8 +134,8 @@ typedef struct {
  *    texture must still be complete for it).
  *  - draw disables GL_SCISSOR_TEST, GL_BLEND, GL_CULL_FACE, GL_DEPTH_TEST,
  *    GL_STENCIL_TEST and GL_FRAMEBUFFER_SRGB and enables all colour writes.
- *  - draw changes the bound program, VAO, active texture unit, the unit-0 2D
- *    texture binding, the viewport and the flags above, and does not restore them.
+ *  - draw changes the bound program, VAO, active texture unit, the unit-0 and
+ *    unit-1 2D texture bindings, the viewport and the flags above, and does not restore them.
  *    It draws into the draw framebuffer bound when it is called and leaves that
  *    binding as it found it (sharpening draws into its own framebuffer in
  *    between); the read framebuffer binding is not touched. */

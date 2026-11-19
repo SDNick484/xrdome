@@ -399,6 +399,54 @@ static void sharpen_steps(void **state)
     assert_true(c.sharpen == 0.0f);
 }
 
+static void depth_steps(void **state)
+{
+    (void)state;
+    xrd_controls c;
+    xrd_controls_init(&c, 1.0f, XRD_LAYOUT_MONO);
+    assert_true(c.depth_on);
+    assert_float_equal(c.depth_strength, XRD_DEPTH_STRENGTH_DEFAULT, 1e-6f);
+    assert_float_equal(c.depth_plane, XRD_DEPTH_PLANE_DEFAULT, 1e-6f);
+    xrd_controls_toggle_depth(&c);
+    assert_false(c.depth_on);
+    xrd_controls_toggle_depth(&c);
+    assert_true(c.depth_on);
+
+    xrd_controls_depth_stronger(&c);
+    assert_float_equal(c.depth_strength, 0.025f, 1e-6f);
+    for (int i = 0; i < 10; i++)
+        xrd_controls_depth_stronger(&c);
+    assert_float_equal(c.depth_strength, XRD_DEPTH_STRENGTH_MAX, 1e-6f);
+    for (int i = 0; i < 12; i++)
+        xrd_controls_depth_weaker(&c);
+    assert_true(c.depth_strength == 0.0f);
+    /* between steps: to the next multiple in that direction */
+    xrd_controls_init_depth(&c, 0.0123f, 0.52f);
+    xrd_controls_depth_stronger(&c);
+    assert_float_equal(c.depth_strength, 0.015f, 1e-6f);
+    xrd_controls_init_depth(&c, 0.0123f, 0.52f);
+    xrd_controls_depth_weaker(&c);
+    assert_float_equal(c.depth_strength, 0.01f, 1e-6f);
+
+    xrd_controls_plane_nearer(&c);
+    assert_float_equal(c.depth_plane, 0.55f, 1e-6f);
+    xrd_controls_init_depth(&c, 0.02f, 0.52f);
+    xrd_controls_plane_further(&c);
+    assert_float_equal(c.depth_plane, 0.5f, 1e-6f);
+    for (int i = 0; i < 30; i++)
+        xrd_controls_plane_further(&c);
+    assert_true(c.depth_plane == 0.0f);
+    for (int i = 0; i < 30; i++)
+        xrd_controls_plane_nearer(&c);
+    assert_float_equal(c.depth_plane, 1.0f, 1e-6f);
+
+    xrd_controls_init_depth(&c, 0.5f, 3.0f);
+    assert_float_equal(c.depth_strength, XRD_DEPTH_STRENGTH_MAX, 1e-6f);
+    assert_float_equal(c.depth_plane, 1.0f, 1e-6f);
+    xrd_controls_init_depth(&c, -1.0f, -1.0f);
+    assert_true(c.depth_strength == 0.0f && c.depth_plane == 0.0f);
+}
+
 /* The ? list has the README's Keys table's keys, in its order. */
 static void key_list_matches_readme(void **state)
 {
@@ -444,10 +492,11 @@ static void key_repeat_only_for_zoom_and_seek(void **state)
 {
     (void)state;
     const SDL_Keycode repeats[] = {SDLK_LEFT, SDLK_RIGHT, SDLK_UP, SDLK_DOWN,
-                                   SDLK_LEFTBRACKET, SDLK_RIGHTBRACKET};
+                                   SDLK_LEFTBRACKET, SDLK_RIGHTBRACKET, SDLK_MINUS,
+                                   SDLK_EQUALS, SDLK_COMMA, SDLK_PERIOD};
     const SDL_Keycode once[] = {SDLK_q, SDLK_SPACE, SDLK_r, SDLK_f, SDLK_s, SDLK_m,
                                 SDLK_p, SDLK_z, SDLK_l, SDLK_c, SDLK_b, SDLK_i,
-                                SDLK_SLASH, SDLK_QUESTION};
+                                SDLK_SLASH, SDLK_QUESTION, SDLK_d};
     for (size_t i = 0; i < sizeof repeats / sizeof repeats[0]; i++)
         assert_true(xrd_key_repeats(repeats[i]));
     for (size_t i = 0; i < sizeof once / sizeof once[0]; i++)
@@ -477,6 +526,7 @@ int main(void)
         cmocka_unit_test(init_display_defaults_and_values),
         cmocka_unit_test(filter_cycles),
         cmocka_unit_test(sharpen_steps),
+        cmocka_unit_test(depth_steps),
         cmocka_unit_test(key_list_matches_readme),
         cmocka_unit_test(key_repeat_only_for_zoom_and_seek),
     };

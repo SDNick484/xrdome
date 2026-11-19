@@ -2375,6 +2375,226 @@ static void no_gl_error(void **state)
     assert_int_equal(glGetError(), GL_NO_ERROR);
 }
 
+/* ---- depth 3D (spec 6 of the depth 3D design) ---- */
+
+/* A 256 x 16 picture whose red channel is the texel column (so a pixel's red
+ * says which picture u it shows), and a depth of the same size: far (0) left
+ * of the middle, near (1) from it on. */
+#define DEP_W 256
+#define DEP_H 16
+
+static uint16_t g_depth[DEP_W * DEP_H];
+
+static GLuint make_column_tex(void)
+{
+    uint8_t *px = malloc((size_t)DEP_W * DEP_H * 4);
+    assert_non_null(px);
+    for (int y = 0; y < DEP_H; y++)
+        for (int x = 0; x < DEP_W; x++) {
+            uint8_t *p = &px[(y * DEP_W + x) * 4];
+            p[0] = (uint8_t)x;
+            p[1] = 0;
+            p[2] = 0;
+            p[3] = 255;
+        }
+    GLuint t = make_tex(DEP_W, DEP_H, px);
+    free(px);
+    for (int y = 0; y < DEP_H; y++)
+        for (int x = 0; x < DEP_W; x++)
+            g_depth[y * DEP_W + x] = x < DEP_W / 2 ? 0 : 65535;
+    char err[128] = "";
+    if (!xrd_renderer_set_depth(g_r, g_depth, DEP_W, DEP_H, err, sizeof err))
+        fail_msg("set_depth: %s", err);
+    return t;
+}
+
+/* GL_LINEAR on the depth row, clamped to the edge, as the shader reads it. */
+static float depth_gl(const void *ctx, float u)
+{
+    (void)ctx;
+    float p = u * DEP_W - 0.5f;
+    int i = (int)floorf(p);
+    float f = p - (float)i;
+    int a = i < 0 ? 0 : (i > DEP_W - 1 ? DEP_W - 1 : i);
+    int b = i + 1 < 0 ? 0 : (i + 1 > DEP_W - 1 ? DEP_W - 1 : i + 1);
+    return ((1.f - f) * g_depth[a] + f * g_depth[b]) / 65535.f;
+}
+
+static void draw_depth(GLuint tex, xrd_layout layout, bool swap, bool depth, float strength,
+                       float plane, xrd_view_geom *g)
+{
+    flat_geom(XRD_ZOOM_SCREEN, 1.f, (double)DEP_W / DEP_H, g);
+    const xrd_draw_params dp = {.proj = XRD_PROJ_FLAT, .layout = layout, .swap_eyes = swap,
+                                .geom = *g, .depth = depth, .depth_strength = strength,
+                                .depth_plane = plane};
+    draw_dp(tex, XRD_QUAT_IDENTITY, &dp);
+}
+
+/* Every pixel of the middle row of both eyes against xrd_depth_source_u, in
+ * picture texels; pixels whose answer lies within 3 texels of the step are
+ * left out (the depth's bilinear ramp and GPU rounding decide them). */
+static void check_depth_row(bool swap, float strength, float plane, const xrd_view_geom *g)
+{
+    int y = H / 2, checked = 0;
+    for (int eye = 0; eye < 2; eye++) {
+        float k = xrd_depth_shift(eye, swap, strength);
+        for (int px = 0; px < W / 2; px++) {
+            float d[3] = {((2.f * (float)px + 1.f) / (W / 2) - 1.f) * g->tan_h,
+                          ((2.f * (float)y + 1.f) / H - 1.f) * g->tan_v, -1.f};
+            float uv[2];
+            if (!xrd_flat_dir_to_uv(d, g->half_w, g->half_h, uv))
+                fail_msg("eye %d pixel %d is off the picture", eye, px);
+            float x = xrd_depth_source_u(uv[0], k, plane, XRD_DEPTH_SEARCH_N, depth_gl, NULL);
+            x = x < 0.f ? 0.f : (x > 1.f ? 1.f : x);
+            float want = x * DEP_W - 0.5f;
+            want = want < 0.f ? 0.f : (want > DEP_W - 1 ? DEP_W - 1 : want);
+            if (fabsf(x * DEP_W - DEP_W / 2) < 3.f)
+                continue;
+            int got = px_at(eye * (W / 2) + px, y)[0];
+            if (fabsf((float)got - want) > 1.5f)
+                fail_msg("eye %d pixel %d: red %d, the mirror says %.2f (u %.4f to %.4f)", eye,
+                         px, got, (double)want, (double)uv[0], (double)x);
+            checked++;
+        }
+    }
+    assert_true(checked > W / 2);
+}
+
+static void depth_matches_mirror(void **state)
+{
+    (void)state;
+    GLuint tex = make_column_tex();
+    xrd_view_geom g;
+    const float cases[][2] = {{0.05f, 0.f}, {0.05f, 0.5f}, {0.02f, 1.f}, {0.035f, 0.3f}};
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        for (int swap = 0; swap < 2; swap++) {
+            draw_depth(tex, XRD_LAYOUT_MONO, swap, true, cases[i][0], cases[i][1], &g);
+            check_depth_row(swap, cases[i][0], cases[i][1], &g);
+        }
+    }
+    glDeleteTextures(1, &tex);
+    xrd_renderer_set_depth(g_r, NULL, 0, 0, NULL, 0);
+}
+
+/* Strength 5%, plane 0: the far half stays, the near half moves by 2.5% of
+ * the width, right in the left eye and left in the right eye; the left eye's
+ * gap at the edge shows the far side (red at most 128). */
+static void depth_near_half_moves(void **state)
+{
+    (void)state;
+    GLuint tex = make_column_tex();
+    xrd_view_geom g;
+    draw_depth(tex, XRD_LAYOUT_MONO, false, true, 0.05f, 0.f, &g);
+    int y = H / 2, gap = 0;
+    for (int eye = 0; eye < 2; eye++) {
+        for (int px = 0; px < W / 2; px++) {
+            float u = ((float)px + 0.5f) / (W / 2); /* the picture spans the eye */
+            int got = px_at(eye * (W / 2) + px, y)[0];
+            float sh = eye == 0 ? 0.025f : -0.025f;
+            if (u < 0.5f - 0.03f) {
+                assert_true(abs(got - (int)lroundf(u * DEP_W - 0.5f)) <= 2);
+            } else if (u > 0.5f + 0.03f) {
+                float want = fminf((u - sh) * DEP_W - 0.5f, DEP_W - 1);
+                assert_true(abs(got - (int)lroundf(want)) <= 2);
+            } else if (eye == 0 && u > 0.5f + 0.003f && u < 0.525f - 0.003f) {
+                if (got > 128)
+                    fail_msg("left eye pixel %d in the gap shows red %d, not the far side", px,
+                             got);
+                gap++;
+            }
+        }
+    }
+    assert_true(gap >= 3);
+    glDeleteTextures(1, &tex);
+    xrd_renderer_set_depth(g_r, NULL, 0, 0, NULL, 0);
+}
+
+/* Strength 0, D off, a 3D layout or VR180: exactly the draw without depth. */
+static void depth_off_is_exact_2d(void **state)
+{
+    (void)state;
+    GLuint tex = make_column_tex();
+    static uint8_t ref[W * H * 4];
+    xrd_view_geom g;
+    const xrd_layout layouts[] = {XRD_LAYOUT_MONO, XRD_LAYOUT_SBS_LR};
+    for (size_t l = 0; l < 2; l++) {
+        draw_depth(tex, layouts[l], false, false, 0.05f, 0.5f, &g);
+        memcpy(ref, g_img, sizeof ref);
+        draw_depth(tex, layouts[l], false, true, 0.f, 0.5f, &g);
+        assert_memory_equal(g_img, ref, sizeof ref);
+        if (layouts[l] != XRD_LAYOUT_MONO) {
+            draw_depth(tex, layouts[l], false, true, 0.05f, 0.5f, &g);
+            assert_memory_equal(g_img, ref, sizeof ref);
+        }
+    }
+    xrd_view_geom vg = {.tan_h = g_th, .tan_v = g_tv};
+    const xrd_draw_params vr = {.proj = XRD_PROJ_HEQUIRECT, .layout = XRD_LAYOUT_MONO, .geom = vg};
+    draw_dp(tex, XRD_QUAT_IDENTITY, &vr);
+    memcpy(ref, g_img, sizeof ref);
+    xrd_draw_params vr3 = vr;
+    vr3.depth = true;
+    vr3.depth_strength = 0.05f;
+    draw_dp(tex, XRD_QUAT_IDENTITY, &vr3);
+    assert_memory_equal(g_img, ref, sizeof ref);
+    /* no depth in the renderer: depth asked for, none drawn */
+    draw_depth(tex, XRD_LAYOUT_MONO, false, false, 0.05f, 0.5f, &g);
+    memcpy(ref, g_img, sizeof ref);
+    xrd_renderer_set_depth(g_r, NULL, 0, 0, NULL, 0);
+    assert_false(xrd_renderer_has_depth(g_r));
+    draw_depth(tex, XRD_LAYOUT_MONO, false, true, 0.05f, 0.5f, &g);
+    assert_memory_equal(g_img, ref, sizeof ref);
+    glDeleteTextures(1, &tex);
+}
+
+/* The depth's rows: row 0 of the map is the top of the picture. A depth near
+ * only in its top row moves only the picture's top. */
+static void depth_rows_top_down(void **state)
+{
+    (void)state;
+    GLuint tex = make_column_tex();
+    for (int y = 0; y < DEP_H; y++)
+        for (int x = 0; x < DEP_W; x++)
+            g_depth[y * DEP_W + x] = y < DEP_H / 2 ? 65535 : 0;
+    char err[128] = "";
+    assert_true(xrd_renderer_set_depth(g_r, g_depth, DEP_W, DEP_H, err, sizeof err));
+    assert_true(xrd_renderer_has_depth(g_r));
+    xrd_view_geom g;
+    draw_depth(tex, XRD_LAYOUT_MONO, false, true, 0.05f, 0.f, &g);
+    /* the picture's rows on screen: find its top and bottom in the left eye */
+    int top = -1, bottom = -1, x = W / 8; /* u = 0.2526 */
+    for (int y = 0; y < H; y++) {
+        const uint8_t *p = px_at(x, y);
+        if (p[0] > 0 || p[2] > 0) { /* not black: on the picture */
+            if (bottom < 0)
+                bottom = y; /* GL rows: y = 0 is the bottom */
+            top = y;
+        }
+    }
+    assert_true(top > bottom + 4);
+    float u = ((float)x + 0.5f) / (W / 2);
+    int want = (int)lroundf((u - 0.025f) * DEP_W - 0.5f);
+    assert_true(abs(px_at(x, top - 1)[0] - want) <= 2);    /* top: moved */
+    int same = (int)lroundf(u * DEP_W - 0.5f);
+    assert_true(abs(px_at(x, bottom + 1)[0] - same) <= 2); /* bottom: not */
+    glDeleteTextures(1, &tex);
+    xrd_renderer_set_depth(g_r, NULL, 0, 0, NULL, 0);
+}
+
+static void depth_upload_limits(void **state)
+{
+    (void)state;
+    char err[128] = "";
+    uint16_t one = 0;
+    assert_false(xrd_renderer_set_depth(g_r, &one, 0, 1, err, sizeof err));
+    assert_non_null(strstr(err, "texture size"));
+    assert_false(xrd_renderer_has_depth(g_r));
+    assert_true(xrd_renderer_set_depth(g_r, &one, 1, 1, err, sizeof err));
+    assert_true(xrd_renderer_has_depth(g_r));
+    assert_true(xrd_renderer_set_depth(g_r, NULL, 0, 0, err, sizeof err));
+    assert_false(xrd_renderer_has_depth(g_r));
+    assert_int_equal(glGetError(), GL_NO_ERROR);
+}
+
 int main(void)
 {
     const char *ext = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
@@ -2441,6 +2661,11 @@ int main(void)
         cmocka_unit_test_teardown(sharpen_keeps_eyes_apart, reset_view),
         cmocka_unit_test_teardown(sharpen_steepens_a_step, reset_view),
         cmocka_unit_test_teardown(sharpen_ignores_caller_state, reset_view),
+        cmocka_unit_test_teardown(depth_matches_mirror, reset_view),
+        cmocka_unit_test_teardown(depth_near_half_moves, reset_view),
+        cmocka_unit_test_teardown(depth_off_is_exact_2d, reset_view),
+        cmocka_unit_test_teardown(depth_rows_top_down, reset_view),
+        cmocka_unit_test(depth_upload_limits),
         cmocka_unit_test(no_gl_error),
     };
     return cmocka_run_group_tests(tests, setup, teardown);

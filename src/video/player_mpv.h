@@ -139,6 +139,7 @@ bool        xrd_player_set_deband(xrd_player *p, bool on);
 bool        xrd_player_deband(xrd_player *p);
 const char *xrd_player_hwdec(xrd_player *p);             /* mpv "hwdec-current", "" if unknown */
 const char *xrd_player_scale(xrd_player *p);             /* mpv "scale", "" if unknown */
+const char *xrd_player_mpv_version(xrd_player *p);       /* mpv "mpv-version", "" if unknown */
 /* mpv's gpu-dumb-mode is "yes" (software GL): mpv then ignores scale and
  * enlarges bilinearly. */
 bool        xrd_player_dumb_mode(xrd_player *p);

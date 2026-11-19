@@ -1155,6 +1155,109 @@ static void minify_curved_magnify_centre_is_the_plane(void **state)
     }
 }
 
+/* ---- depth 3D: the disparity mirror (xrd_depth_source_u) ------------------ */
+
+static float depth_clamp(float u)
+{
+    return u < 0.f ? 0.f : (u > 1.f ? 1.f : u);
+}
+
+static float depth_const(const void *ctx, float u)
+{
+    (void)u;
+    return *(const float *)ctx;
+}
+
+/* Far (0.2) left of the middle, near (0.8) from it on. */
+static float depth_step(const void *ctx, float u)
+{
+    (void)ctx;
+    return depth_clamp(u) < 0.5f ? 0.2f : 0.8f;
+}
+
+static float depth_ramp(const void *ctx, float u)
+{
+    (void)ctx;
+    return depth_clamp(u);
+}
+
+static void depth_shift_signs(void **state)
+{
+    (void)state;
+    assert_float_equal(xrd_depth_shift(0, false, 0.02f), 0.01f, 1e-7);
+    assert_float_equal(xrd_depth_shift(1, false, 0.02f), -0.01f, 1e-7);
+    assert_float_equal(xrd_depth_shift(0, true, 0.02f), -0.01f, 1e-7); /* S inverts */
+    assert_float_equal(xrd_depth_shift(1, true, 0.02f), 0.01f, 1e-7);
+}
+
+static void depth_strength_zero_is_2d(void **state)
+{
+    (void)state;
+    for (float u = 0.f; u <= 1.f; u += 0.0625f) {
+        assert_true(xrd_depth_source_u(u, 0.f, 0.5f, XRD_DEPTH_SEARCH_N, depth_step, NULL) == u);
+        assert_true(xrd_depth_source_u(u, -0.f, 0.3f, XRD_DEPTH_SEARCH_N, depth_ramp, NULL) == u);
+    }
+}
+
+/* A flat depth: the whole picture moves by k (z - plane); on the plane, not at all. */
+static void depth_constant_shifts(void **state)
+{
+    (void)state;
+    const float zs[] = {0.f, 0.2f, 0.5f, 0.77f, 1.f};
+    for (size_t i = 0; i < sizeof zs / sizeof zs[0]; i++) {
+        for (float u = 0.1f; u < 0.9f; u += 0.1f) {
+            float k = 0.01f, plane = 0.5f;
+            float x = xrd_depth_source_u(u, k, plane, XRD_DEPTH_SEARCH_N, depth_const, &zs[i]);
+            assert_float_equal(x, u - k * (zs[i] - plane), 1e-6);
+            x = xrd_depth_source_u(u, -k, plane, XRD_DEPTH_SEARCH_N, depth_const, &zs[i]);
+            assert_float_equal(x, u + k * (zs[i] - plane), 1e-6);
+        }
+    }
+}
+
+/* z = u: the answer solves x + k (x - plane) = u exactly (linear refinement). */
+static void depth_ramp_solves(void **state)
+{
+    (void)state;
+    for (float u = 0.05f; u < 0.95f; u += 0.05f) {
+        for (int n = 2; n <= 32; n *= 2) {
+            float k = 0.025f, plane = 0.4f;
+            float x = xrd_depth_source_u(u, k, plane, n, depth_ramp, NULL);
+            assert_float_equal(x, (u + k * plane) / (1.f + k), 1e-6);
+            x = xrd_depth_source_u(u, -k, plane, n, depth_ramp, NULL);
+            assert_float_equal(x, (u - k * plane) / (1.f - k), 1e-6);
+        }
+    }
+}
+
+/* A near half beside a far half, strength 2%, plane 0.5: each half moves by
+ * 0.3 * k. The left eye (k > 0) moves the near half right, uncovering a gap
+ * of 2 * 0.003 at its edge that shows the far side beside it; the right eye
+ * moves it left, over the far half: the near half wins. */
+static void depth_step_occlusion_and_gap(void **state)
+{
+    (void)state;
+    const float k = 0.01f, plane = 0.5f, step = k / (XRD_DEPTH_SEARCH_N - 1);
+    for (int i = 0; i <= 1000; i++) {
+        float u = (float)i / 1000.f;
+        float x = xrd_depth_source_u(u, k, plane, XRD_DEPTH_SEARCH_N, depth_step, NULL);
+        if (u < 0.497f - 1e-4f) {
+            assert_float_equal(x, u + 0.003f, 1e-6); /* far half */
+        } else if (u >= 0.503f + 1e-4f) {
+            assert_float_equal(x, u - 0.003f, 1e-6); /* near half */
+        } else if (u > 0.497f + 1e-4f && u < 0.503f - 1e-4f) {
+            /* the gap: the far side, within one step of the edge */
+            assert_true(x < 0.5f);
+            assert_true(x >= 0.5f - step - 1e-6f);
+        }
+        x = xrd_depth_source_u(u, -k, plane, XRD_DEPTH_SEARCH_N, depth_step, NULL);
+        if (u < 0.497f - 1e-4f)
+            assert_float_equal(x, u - 0.003f, 1e-6);
+        else if (u > 0.497f + 1e-4f)
+            assert_float_equal(x, u + 0.003f, 1e-6); /* the near half covers the far one */
+    }
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -1212,6 +1315,11 @@ int main(void)
         cmocka_unit_test(minify_junk_is_zero),
         cmocka_unit_test(minify_curved_centre_is_the_plane),
         cmocka_unit_test(minify_curved_magnify_centre_is_the_plane),
+        cmocka_unit_test(depth_shift_signs),
+        cmocka_unit_test(depth_strength_zero_is_2d),
+        cmocka_unit_test(depth_constant_shifts),
+        cmocka_unit_test(depth_ramp_solves),
+        cmocka_unit_test(depth_step_occlusion_and_gap),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

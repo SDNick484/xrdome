@@ -254,3 +254,38 @@ float xrd_minify_ratio(xrd_proj proj, const xrd_view_geom *g, int eye_src_w, int
     double r = rh > rv ? rh : rv;
     return pos_finite(r) ? (float)r : 0.f;
 }
+
+float xrd_depth_shift(int eye, bool swap, float strength)
+{
+    bool left = (eye == 0) != swap;
+    return left ? strength / 2.f : -strength / 2.f;
+}
+
+/* Mirrors depth_u() in vr180.frag: keep in step. */
+float xrd_depth_source_u(float u, float k, float plane, int n, xrd_depth_sample_fn depth,
+                         const void *ctx)
+{
+    if (k == 0.f || n < 2)
+        return u;
+    float dz = 1.f / (float)(n - 1);
+    float zp = 1.f;
+    float xp = u - k * (1.f - plane);
+    float dp = depth(ctx, xp);
+    if (dp >= zp)
+        return xp;
+    for (int i = 1; i < n; i++) {
+        float z = 1.f - (float)i * dz;
+        float x = u - k * (z - plane);
+        float d = depth(ctx, x);
+        if (d >= z) {
+            if (d - z > 2.f * dz)
+                return xp;
+            float a = zp - dp, b = d - z;
+            return xp + (x - xp) * (a / (a + b));
+        }
+        zp = z;
+        xp = x;
+        dp = d;
+    }
+    return xp;
+}

@@ -28,6 +28,9 @@ typedef struct {
     float screen_curve;         /* the curved screen's radius, XRD_SCREEN_CURVE_MIN..MAX */
     float sharpen;              /* sharpening strength, 0 (off) to XRD_SHARPEN_MAX */
     bool layout_chosen;         /* M or S was pressed in this run */
+    bool depth_on;              /* D: depth 3D for a photo with depth (on at start) */
+    float depth_strength;       /* 0 .. XRD_DEPTH_STRENGTH_MAX, picture widths per unit of depth */
+    float depth_plane;          /* 0 .. 1: the depth that sits on the screen */
 } xrd_controls;
 
 #define XRD_ZOOM_STEP 1.1f
@@ -75,6 +78,20 @@ void xrd_controls_init_sharpen(xrd_controls *c, float strength);
 /* Shift+F: the next multiple of XRD_SHARPEN_STEP above the strength (0.25,
  * 0.5, 0.75, 1; from 0.3, 0.5), and from XRD_SHARPEN_MAX back to 0 (off). */
 void xrd_controls_step_sharpen(xrd_controls *c);
+/* Depth 3D: on, with this strength and plane, clamped into their ranges.
+ * xrd_controls_init sets XRD_DEPTH_STRENGTH_DEFAULT and XRD_DEPTH_PLANE_DEFAULT. */
+void xrd_controls_init_depth(xrd_controls *c, float strength, float plane);
+void xrd_controls_toggle_depth(xrd_controls *c);  /* D */
+/* - / =: the strength one XRD_DEPTH_STRENGTH_STEP down / up, onto a multiple
+ * of the step, within 0 .. XRD_DEPTH_STRENGTH_MAX. */
+void xrd_controls_depth_weaker(xrd_controls *c);
+void xrd_controls_depth_stronger(xrd_controls *c);
+/* , / .: the screen plane one XRD_DEPTH_PLANE_STEP further (the plane's depth
+ * down, so the picture comes forward) / nearer, onto a multiple of the step,
+ * within 0 .. 1. */
+void xrd_controls_plane_further(xrd_controls *c);
+void xrd_controls_plane_nearer(xrd_controls *c);
+
 /* Left-button drag by (dx, dy) window pixels, SDL axes (+y down): dragging
  * right looks right, dragging up looks up, 0.1 degrees per pixel. */
 void xrd_controls_mouse_drag(xrd_controls *c, int dx, int dy);
@@ -95,7 +112,8 @@ typedef struct {
 extern const xrd_key_help xrd_key_list[];
 extern const size_t xrd_key_list_len;
 
-/* True for the keys that act on key repeat (an SDL keycode): zoom and seek.
+/* True for the keys that act on key repeat (an SDL keycode): zoom, seek, and
+ * the depth strength and plane.
  * Every other key acts once per press (README, Keys). */
 bool xrd_key_repeats(int32_t sdl_keycode);
 

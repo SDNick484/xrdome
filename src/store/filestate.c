@@ -90,7 +90,8 @@ int xrd_filestate_dir(char *buf, size_t len)
 /* ---- record parse and format ------------------------------------------ */
 
 typedef enum { KEY_ZOOM, KEY_LAYOUT, KEY_SWAP, KEY_CONTENT_FOV, KEY_CONVERGENCE,
-               KEY_PROJ, KEY_FLAT_ZOOM, KEY_PACKING, KEY_ZOOM_MODE, KEY_POSITION } setting_key;
+               KEY_PROJ, KEY_FLAT_ZOOM, KEY_PACKING, KEY_ZOOM_MODE, KEY_DEPTH_STRENGTH,
+               KEY_DEPTH_PLANE, KEY_POSITION } setting_key;
 
 /* One table of key names, shared by parse and format. */
 static const struct { const char *name; unsigned bit; } k_settings[] = {
@@ -103,6 +104,8 @@ static const struct { const char *name; unsigned bit; } k_settings[] = {
     [KEY_FLAT_ZOOM] = { "flat_zoom", XRD_SET_FLAT_ZOOM },
     [KEY_PACKING] = { "packing", XRD_SET_PACKING },
     [KEY_ZOOM_MODE] = { "zoom_mode", XRD_SET_ZOOM_MODE },
+    [KEY_DEPTH_STRENGTH] = { "depth_strength", XRD_SET_DEPTH_STRENGTH },
+    [KEY_DEPTH_PLANE] = { "depth_plane", XRD_SET_DEPTH_PLANE },
     [KEY_POSITION] = { "position", XRD_SET_POSITION },
 };
 /* Parse and format walk the whole table. apply, collect and equal walk the view
@@ -162,6 +165,15 @@ static bool apply_setting(setting_key k, const char *val, xrd_filestate *st)
         break;
     case KEY_ZOOM_MODE:
         if (!xrd_value_zoom_mode(val, &st->v.zoom_mode))
+            return false;
+        break;
+    case KEY_DEPTH_STRENGTH:
+        if (xrd_value_ranged(val, 0.0f, XRD_DEPTH_STRENGTH_MAX, &st->v.depth_strength) !=
+            XRD_VALUE_OK)
+            return false;
+        break;
+    case KEY_DEPTH_PLANE:
+        if (xrd_value_ranged(val, 0.0f, 1.0f, &st->v.depth_plane) != XRD_VALUE_OK)
             return false;
         break;
     case KEY_POSITION: {
@@ -337,6 +349,10 @@ int xrd_filestate_format(const xrd_filestate *st, const char *path_label, const 
     if ((st->set & k_settings[KEY_ZOOM_MODE].bit) && xrd_value_zoom_mode_name(st->v.zoom_mode))
         put(&s, "%s = %s\n", k_settings[KEY_ZOOM_MODE].name,
             xrd_value_zoom_mode_name(st->v.zoom_mode));
+    if (st->set & k_settings[KEY_DEPTH_STRENGTH].bit)
+        put(&s, "%s = %.4f\n", k_settings[KEY_DEPTH_STRENGTH].name, (double)st->v.depth_strength);
+    if (st->set & k_settings[KEY_DEPTH_PLANE].bit)
+        put(&s, "%s = %.4f\n", k_settings[KEY_DEPTH_PLANE].name, (double)st->v.depth_plane);
     if ((st->set & XRD_SET_POSITION) && isfinite(st->v.position) && st->v.position >= 0.0 &&
         st->v.position <= XRD_POSITION_MAX)
         put(&s, "%s = %.3f\n", k_settings[KEY_POSITION].name, st->v.position);
@@ -540,6 +556,8 @@ static void copy_field(unsigned bit, const xrd_file_settings *from, xrd_file_set
     case XRD_SET_FLAT_ZOOM: to->flat_zoom = from->flat_zoom; break;
     case XRD_SET_PACKING: to->packing = from->packing; break;
     case XRD_SET_ZOOM_MODE: to->zoom_mode = from->zoom_mode; break;
+    case XRD_SET_DEPTH_STRENGTH: to->depth_strength = from->depth_strength; break;
+    case XRD_SET_DEPTH_PLANE: to->depth_plane = from->depth_plane; break;
     }
 }
 
@@ -559,6 +577,9 @@ static bool field_differs(unsigned bit, const xrd_file_settings *a, const xrd_fi
     case XRD_SET_FLAT_ZOOM: return fabsf(a->flat_zoom - b->flat_zoom) > XRD_FS_TOL_ZOOM;
     case XRD_SET_PACKING: return a->packing != b->packing;
     case XRD_SET_ZOOM_MODE: return a->zoom_mode != b->zoom_mode;
+    case XRD_SET_DEPTH_STRENGTH:
+        return fabsf(a->depth_strength - b->depth_strength) > XRD_FS_TOL_DEPTH;
+    case XRD_SET_DEPTH_PLANE: return fabsf(a->depth_plane - b->depth_plane) > XRD_FS_TOL_DEPTH;
     }
     return false;
 }
@@ -653,6 +674,14 @@ int xrd_filestate_describe(const xrd_filestate *st, unsigned mask, char *buf, si
     if (want & XRD_SET_ZOOM_MODE) {
         const char *name = xrd_value_zoom_mode_name(st->v.zoom_mode);
         put(&s, "%szoom-mode=%s", sep, name ? name : "?");
+        sep = " ";
+    }
+    if (want & XRD_SET_DEPTH_STRENGTH) {
+        put(&s, "%sdepth-strength=%.1f%%", sep, (double)st->v.depth_strength * 100.0);
+        sep = " ";
+    }
+    if (want & XRD_SET_DEPTH_PLANE) {
+        put(&s, "%sdepth-plane=%.2f", sep, (double)st->v.depth_plane);
         sep = " ";
     }
     if (want & XRD_SET_POSITION) {

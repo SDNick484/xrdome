@@ -651,7 +651,8 @@ static void load_directory_is_bad(void **state)
 static xrd_file_settings defaults(void)
 {
     xrd_file_settings s = { 1.0f, XRD_LAYOUT_SBS_LR, false, 180.0f, 180.0f, 0.0f,
-                           XRD_PROJ_HEQUIRECT, 1.5f, XRD_PACKING_AUTO, XRD_ZOOM_SCREEN, 0.0 };
+                           XRD_PROJ_HEQUIRECT, 1.5f, XRD_PACKING_AUTO, XRD_ZOOM_SCREEN, 0.02f, 0.5f,
+                           0.0 };
     return s;
 }
 
@@ -998,6 +999,55 @@ static void position_is_not_a_view_setting(void **state)
     assert_int_equal((int)(out.set & XRD_SET_POSITION), 0);
 }
 
+/* Depth 3D (photos): strength and plane round-trip, are checked against
+ * their ranges, collected when changed, compared and described. */
+static void depth_keys(void **state)
+{
+    (void)state;
+    xrd_filestate out, again;
+    char err[128], buf[512];
+    const char *text = "version = 1\nproj = flat\ndepth_strength = 0.025\ndepth_plane = 0.45\n";
+    assert_int_equal(xrd_filestate_parse(text, &out, err, sizeof err), XRD_FS_OK);
+    assert_int_equal((int)out.set, XRD_SET_PROJ | XRD_SET_DEPTH_STRENGTH | XRD_SET_DEPTH_PLANE);
+    assert_float_equal(out.v.depth_strength, 0.025f, 1e-6);
+    assert_float_equal(out.v.depth_plane, 0.45f, 1e-6);
+    assert_true(xrd_filestate_format(&out, "/p/a.jpg", "2026-11-19", buf, sizeof buf) > 0);
+    assert_non_null(strstr(buf, "depth_strength = 0.0250\n"));
+    assert_non_null(strstr(buf, "depth_plane = 0.4500\n"));
+    assert_int_equal(xrd_filestate_parse(buf, &again, err, sizeof err), XRD_FS_OK);
+    assert_true(xrd_filestate_equal(&out, &again));
+    assert_true(xrd_filestate_describe(&out, ~0u, buf, sizeof buf) > 0);
+    assert_string_equal(buf, "proj=flat depth-strength=2.5% depth-plane=0.45");
+
+    assert_int_equal(xrd_filestate_parse("version = 1\ndepth_strength = 0.06\n", &out, err,
+                                         sizeof err), XRD_FS_BAD);
+    assert_non_null(strstr(err, "line 2"));
+    assert_int_equal(xrd_filestate_parse("version = 1\ndepth_plane = -0.1\n", &out, err,
+                                         sizeof err), XRD_FS_BAD);
+    assert_int_equal(xrd_filestate_parse("version = 1\ndepth_plane = 1.5\n", &out, err,
+                                         sizeof err), XRD_FS_BAD);
+
+    /* collected only when changed from the start; applied from a record */
+    xrd_file_settings start = defaults(), end = defaults();
+    xrd_filestate c;
+    xrd_filestate_collect(NULL, 0, &start, &end, &c);
+    assert_int_equal((int)c.set, 0);
+    end.depth_strength = 0.03f;
+    end.depth_plane = 0.4f;
+    xrd_filestate_collect(NULL, 0, &start, &end, &c);
+    assert_int_equal((int)c.set, XRD_SET_DEPTH_STRENGTH | XRD_SET_DEPTH_PLANE);
+    xrd_file_settings s = defaults();
+    assert_int_equal((int)xrd_filestate_apply(&c, 0, &s),
+                     XRD_SET_DEPTH_STRENGTH | XRD_SET_DEPTH_PLANE);
+    assert_float_equal(s.depth_strength, 0.03f, 1e-6);
+    assert_float_equal(s.depth_plane, 0.4f, 1e-6);
+    xrd_filestate d = c;
+    d.v.depth_plane = 0.40005f;
+    assert_true(xrd_filestate_equal(&c, &d));
+    d.v.depth_plane = 0.401f;
+    assert_false(xrd_filestate_equal(&c, &d));
+}
+
 static void position_equal_and_describe(void **state)
 {
     (void)state;
@@ -1130,6 +1180,7 @@ int main(void)
         cmocka_unit_test(position_parse_bad),
         cmocka_unit_test(position_is_not_a_view_setting),
         cmocka_unit_test(position_equal_and_describe),
+        cmocka_unit_test(depth_keys),
         cmocka_unit_test(format_position_text),
         cmocka_unit_test(resume_near_start_rule),
         cmocka_unit_test(resume_near_end_rule),

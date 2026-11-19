@@ -14,6 +14,7 @@ void xrd_controls_init(xrd_controls *c, float zoom, xrd_layout layout)
     xrd_controls_init_format(c, XRD_PROJ_HEQUIRECT, XRD_PACKING_AUTO, 1.0f, XRD_ZOOM_SCREEN, false);
     xrd_controls_init_curve(c, 0.0f);
     xrd_controls_init_sharpen(c, 0.0f);
+    xrd_controls_init_depth(c, XRD_DEPTH_STRENGTH_DEFAULT, XRD_DEPTH_PLANE_DEFAULT);
     c->layout_chosen = false;
 }
 
@@ -165,6 +166,56 @@ void xrd_controls_step_sharpen(xrd_controls *c)
     c->sharpen = next > XRD_SHARPEN_MAX + 1e-3f ? 0.0f : fminf(next, XRD_SHARPEN_MAX);
 }
 
+void xrd_controls_init_depth(xrd_controls *c, float strength, float plane)
+{
+    c->depth_on = true;
+    c->depth_strength = strength > 0.0f ? fminf(strength, XRD_DEPTH_STRENGTH_MAX) : 0.0f;
+    c->depth_plane = plane > 0.0f ? fminf(plane, 1.0f) : 0.0f;
+}
+
+void xrd_controls_toggle_depth(xrd_controls *c)
+{
+    c->depth_on = !c->depth_on;
+}
+
+/* v moved by dir steps of step, onto a multiple of step, within lo .. hi. A
+ * value between multiples goes to the next one in that direction. */
+static float step_onto(float v, float step, int dir, float lo, float hi)
+{
+    float q = v / step;
+    float n = dir > 0 ? floorf(q + 1e-3f) + 1.0f : ceilf(q - 1e-3f) - 1.0f;
+    float out = n * step;
+    /* n * step is not always the float the limit is: at or past a limit
+     * within rounding, the limit itself, so a press there changes nothing. */
+    if (out <= lo + step * 1e-3f)
+        return lo;
+    if (out >= hi - step * 1e-3f)
+        return hi;
+    return out;
+}
+
+void xrd_controls_depth_weaker(xrd_controls *c)
+{
+    c->depth_strength = step_onto(c->depth_strength, XRD_DEPTH_STRENGTH_STEP, -1, 0.0f,
+                                  XRD_DEPTH_STRENGTH_MAX);
+}
+
+void xrd_controls_depth_stronger(xrd_controls *c)
+{
+    c->depth_strength = step_onto(c->depth_strength, XRD_DEPTH_STRENGTH_STEP, 1, 0.0f,
+                                  XRD_DEPTH_STRENGTH_MAX);
+}
+
+void xrd_controls_plane_further(xrd_controls *c)
+{
+    c->depth_plane = step_onto(c->depth_plane, XRD_DEPTH_PLANE_STEP, -1, 0.0f, 1.0f);
+}
+
+void xrd_controls_plane_nearer(xrd_controls *c)
+{
+    c->depth_plane = step_onto(c->depth_plane, XRD_DEPTH_PLANE_STEP, 1, 0.0f, 1.0f);
+}
+
 void xrd_controls_mouse_drag(xrd_controls *c, int dx, int dy)
 {
     /* Positive yaw turns left, so dragging right (dx > 0) lowers it; SDL's
@@ -205,6 +256,9 @@ const xrd_key_help xrd_key_list[] = {
     {"L", "screen: fixed / head-locked (flat)"},
     {"B", "debanding on / off"},
     {"C", "screen: flat / curved (flat)"},
+    {"D", "depth 3D on / off (a photo with depth)"},
+    {"- / =", "depth strength down / up"},
+    {", / .", "screen plane further / nearer (depth 3D)"},
     {"?", "this list"},
     {"I", "playback information"},
     {"Q", "quit"},
@@ -220,6 +274,10 @@ bool xrd_key_repeats(int32_t sdl_keycode)
     case SDLK_DOWN:
     case SDLK_LEFTBRACKET:
     case SDLK_RIGHTBRACKET:
+    case SDLK_MINUS:
+    case SDLK_EQUALS:
+    case SDLK_COMMA:
+    case SDLK_PERIOD:
         return true;
     default:
         return false;
