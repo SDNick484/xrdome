@@ -828,6 +828,11 @@ unsigned xrd_player_texture(const xrd_player *p)
     return p->have_frame ? p->tex : 0;
 }
 
+unsigned long xrd_player_frame_serial(const xrd_player *p)
+{
+    return p->frame_serial;
+}
+
 int xrd_player_texture_bits(const xrd_player *p)
 {
     return p->fbo_depth;

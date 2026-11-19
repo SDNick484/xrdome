@@ -22,6 +22,7 @@ struct xrd_timing {
     uint64_t prev_swap_ns;
     unsigned missed;
     uint64_t max_pose_to_swap_ns;
+    uint64_t frames_out_ns; /* xrd_timing_frames_out, for the next row */
     uint64_t ring[XRD_TIMING_MEDIAN_SAMPLES]; /* recent pose_to_swap_ns, circular */
 };
 
@@ -45,7 +46,7 @@ xrd_timing *xrd_timing_open(const char *csv_path)
         /* Line buffered so the log can be followed live (tail -f, the
          * tracking smoke test); one short write per frame. */
         setvbuf(t->csv, NULL, _IOLBF, 0);
-        fputs("frame,interval_us,pose_to_swap_us,pose_age_us,swap_us\n", t->csv);
+        fputs("frame,interval_us,pose_to_swap_us,pose_age_us,swap_us,frames_out_us\n", t->csv);
     }
     return t;
 }
@@ -63,11 +64,18 @@ void xrd_timing_frame(xrd_timing *t, uint64_t pose_sample_ns, uint64_t pre_swap_
         t->max_pose_to_swap_ns = pose_to_swap;
     t->ring[t->frames % XRD_TIMING_MEDIAN_SAMPLES] = pose_to_swap;
     if (t->csv)
-        fprintf(t->csv, "%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
+        fprintf(t->csv,
+                "%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
                 t->frames, interval / 1000, pose_to_swap / 1000, pose_age / 1000,
-                swap_ns / 1000);
+                swap_ns / 1000, t->frames_out_ns / 1000);
+    t->frames_out_ns = 0;
     t->prev_swap_ns = pre_swap_ns;
     t->frames++;
+}
+
+void xrd_timing_frames_out(xrd_timing *t, uint64_t ns)
+{
+    t->frames_out_ns = ns;
 }
 
 unsigned xrd_timing_missed_vsyncs(const xrd_timing *t)

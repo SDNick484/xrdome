@@ -12,6 +12,12 @@ it on) at the photo's size into $XDG_CACHE_HOME/xrdome-tools/depth/ (spec 5 name
   FAKE_DEPTH_EXIT   exit with this status at once, saying so on stderr (a helper that cannot run)
 
 A photo whose name starts with "bad" fails with an error reply.
+
+Video (spec 8, tests/smoke_depth_video.sh): the real ring code (tools/xrdome_depth/video.py) with a fake
+depth maker: it logs "video <shm>" per request and, for the first frame, "frame top=R,G,B bottom=R,G,B"
+(the pixels at the middle of the top and bottom rows), and writes a flat depth (32768) for every frame.
+
+  FAKE_DEPTH_NO_VIDEO  refuse video requests with this error
 """
 
 import os
@@ -23,7 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-from xrdome_depth import cache, serve  # noqa: E402
+from xrdome_depth import cache, serve, video  # noqa: E402
 
 
 def log(line: str) -> None:
@@ -67,16 +73,39 @@ def main() -> int:
         dest = cache.cache_path(cache_dir, cache.cache_key(p))
         return dest if dest.is_file() else None
 
+    flat = (32768).to_bytes(2, sys.byteorder) * (video.WIDTH * video.HEIGHT)
+    frames = []
+
+    def depth_fn(rgba: bytes, w: int, h: int) -> bytes:
+        if not frames:
+            def px(y):
+                off = (y * w + w // 2) * 4
+                return ",".join(str(v) for v in rgba[off:off + 3])
+            log(f"frame top={px(0)} bottom={px(h - 1)}")
+        frames.append(1)
+        return flat
+
+    def open_video(shm: str):
+        no = os.environ.get("FAKE_DEPTH_NO_VIDEO")
+        if no:
+            raise RuntimeError(no)
+        ring, mm = video.open_shm(shm)
+        return video.VideoSession(ring, depth_fn, mm=mm)
+
     class Logged(serve.Server):
         def handle(self, c, line):
             try:
                 req = serve.parse_request(line)
-                log(f"{req.path} prefetch={int(req.prefetch)}")
+                if isinstance(req, serve.VideoRequest):
+                    log(f"video {req.shm}")
+                else:
+                    log(f"{req.path} prefetch={int(req.prefetch)}")
             except serve.ProtocolError:
                 log(f"bad request {line!r}")
             super().handle(c, line)
 
-    server = Logged(sock, process, cached, idle_exit=float(os.environ.get("FAKE_DEPTH_IDLE", "5")))
+    server = Logged(sock, process, cached, idle_exit=float(os.environ.get("FAKE_DEPTH_IDLE", "5")),
+                    open_video=open_video)
     if not server.bind():
         return 0
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # as serve.main: the socket is removed

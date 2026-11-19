@@ -81,6 +81,7 @@ static void csv_has_header_and_one_line_per_frame(void **state)
     assert_non_null(t);
     xrd_timing_frame(t, MS(1000), MS(1001), 0, 0);           /* no pose yet */
     xrd_timing_frame(t, MS(1015.7), MS(1017.7), MS(1012), 0); /* 16.7 ms later */
+    xrd_timing_frames_out(t, MS(0.5)); /* the frame sink's time, for this row only */
     xrd_timing_frame(t, MS(1032), MS(1034.4), MS(1030), MS(8.25));
     xrd_timing_close(t);
 
@@ -88,8 +89,8 @@ static void csv_has_header_and_one_line_per_frame(void **state)
     int n = count_lines(path, first, sizeof first, last, sizeof last);
     unlink(path);
     assert_int_equal(n, 4);
-    assert_string_equal(first, "frame,interval_us,pose_to_swap_us,pose_age_us,swap_us\n");
-    assert_string_equal(last, "2,16700,2400,4400,8250\n");
+    assert_string_equal(first, "frame,interval_us,pose_to_swap_us,pose_age_us,swap_us,frames_out_us\n");
+    assert_string_equal(last, "2,16700,2400,4400,8250,500\n");
 }
 
 static void csv_first_frame_and_missing_pose_are_zero(void **state)
@@ -109,7 +110,35 @@ static void csv_first_frame_and_missing_pose_are_zero(void **state)
     int n = count_lines(path, first, sizeof first, last, sizeof last);
     unlink(path);
     assert_int_equal(n, 2);
-    assert_string_equal(last, "0,0,1500,0,0\n");
+    assert_string_equal(last, "0,0,1500,0,0,0\n");
+}
+
+static void frames_out_is_for_one_row(void **state)
+{
+    (void)state;
+    char path[] = "/tmp/xrd_timing_XXXXXX";
+    int fd = mkstemp(path);
+    assert_true(fd >= 0);
+    close(fd);
+
+    xrd_timing *t = xrd_timing_open(path);
+    assert_non_null(t);
+    xrd_timing_frames_out(t, MS(1.25));
+    xrd_timing_frame(t, MS(1000), MS(1001), 0, 0);
+    xrd_timing_frame(t, MS(1016), MS(1017), 0, 0); /* not set again: 0 */
+    xrd_timing_close(t);
+
+    char first[256], last[256];
+    FILE *f = fopen(path, "r");
+    assert_non_null(f);
+    char row1[256];
+    assert_non_null(fgets(first, sizeof first, f));
+    assert_non_null(fgets(row1, sizeof row1, f));
+    assert_non_null(fgets(last, sizeof last, f));
+    fclose(f);
+    unlink(path);
+    assert_string_equal(row1, "0,0,1000,0,0,1250\n");
+    assert_string_equal(last, "1,16000,1000,0,0,0\n");
 }
 
 static void median_pose_to_swap(void **state)
@@ -222,6 +251,7 @@ int main(void)
         cmocka_unit_test(max_pose_to_swap),
         cmocka_unit_test(csv_has_header_and_one_line_per_frame),
         cmocka_unit_test(csv_first_frame_and_missing_pose_are_zero),
+        cmocka_unit_test(frames_out_is_for_one_row),
         cmocka_unit_test(median_pose_to_swap),
         cmocka_unit_test(median_is_bounded_to_recent_samples),
         cmocka_unit_test(open_unwritable_path_fails),

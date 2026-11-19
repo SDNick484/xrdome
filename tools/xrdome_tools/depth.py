@@ -2,8 +2,9 @@
 
 `depth photo FILE|DIR` writes the depth cache of spec 5 (`<sha256 of the file>-dav2s-v1.pgm` in the cache
 folder) with ncnn on Vulkan. `depth serve` is the helper service of spec 7 that xrdome starts and asks for
-the depth of each photo it opens. This module is a standard-library launcher: the work is done by
-tools/xrdome_depth/photo.py and serve.py, run with the depth venv's interpreter that `setup depth` built.
+the depth of each photo it opens, and that maps a film's frames for live depth (spec 8).
+`depth bench-video` runs that video loop on synthetic frames and reports the Hz it achieves. This module is a standard-library launcher: the work is done by
+tools/xrdome_depth/photo.py, serve.py and video.py, run with the depth venv's interpreter that `setup depth` built.
 """
 
 import argparse
@@ -17,6 +18,7 @@ from .run import Runner, safe_arg
 
 PHOTO_SCRIPT = Path(__file__).resolve().parents[1] / "xrdome_depth" / "photo.py"
 SERVE_SCRIPT = Path(__file__).resolve().parents[1] / "xrdome_depth" / "serve.py"
+VIDEO_SCRIPT = Path(__file__).resolve().parents[1] / "xrdome_depth" / "video.py"
 SOCKET_NAME = "xrdome-depth.sock"
 IDLE_EXIT_S = 600
 CPU_WARNING = ("warning: depth in this environment runs on the CPU (setup depth --cpu); that is slow and "
@@ -47,6 +49,12 @@ def serve_argv(p: config.Paths, sock: Path, idle_exit: float) -> list[str]:
             "--idle-exit", f"{idle_exit:g}"]
 
 
+def bench_video_argv(p: config.Paths, seconds: float, rate: float, *, cpu: bool) -> list[str]:
+    argv = [str(depthenv.python(p)), "-u", str(VIDEO_SCRIPT), "--bench", "--models-dir", str(depthenv.ncnn_dir(p)),
+            "--seconds", f"{seconds:g}", "--rate", f"{rate:g}"]
+    return argv + (["--cpu"] if cpu else [])
+
+
 def photo_argv(p: config.Paths, target: Path, *, cpu: bool, force: bool) -> list[str]:
     argv = [str(depthenv.python(p)), "-u", str(PHOTO_SCRIPT),
             "--cache-dir", str(cache_dir(p)), "--models-dir", str(depthenv.ncnn_dir(p))]
@@ -58,7 +66,7 @@ def photo_argv(p: config.Paths, target: Path, *, cpu: bool, force: bool) -> list
 
 
 def add_parser(sub: argparse._SubParsersAction) -> None:
-    ap = sub.add_parser("depth", help="depth maps for photos (3D in the player); needs setup depth")
+    ap = sub.add_parser("depth", help="depth maps for photos and films (3D in the player); needs setup depth")
     what = ap.add_subparsers(dest="what", metavar="WHAT", required=True)
     photo = what.add_parser("photo", help="write the depth cache file of a photo, or of every image in a folder")
     photo.add_argument("input", type=Path, metavar="FILE|DIR")
@@ -68,12 +76,19 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
                        help="the Unix socket to listen on (default $XDG_RUNTIME_DIR/xrdome-depth.sock)")
     serve.add_argument("--idle-exit", type=float, default=IDLE_EXIT_S, metavar="SECONDS",
                        help=f"exit after this long with no client and nothing to do (default {IDLE_EXIT_S})")
+    bench = what.add_parser("bench-video", help="the helper's video loop on synthetic 322x182 frames: the Hz it "
+                                                "achieves (run it beside xrdome to see the cost of both)")
+    bench.add_argument("--seconds", type=float, default=30.0, help="how long to run (default 30)")
+    bench.add_argument("--rate", type=float, default=30.0, metavar="HZ",
+                       help="frames fed per second (default 30; the helper takes at most 30)")
 
 
 def run(args: argparse.Namespace) -> int:
     p = config.paths()
     if getattr(args, "what", "photo") == "serve":
         return run_serve(args, p)
+    if getattr(args, "what", "photo") == "bench-video":
+        return run_bench_video(args, p)
     if not args.input.exists():
         raise ToolError(f"{args.input}: no such file or folder", EXIT_SETUP)
     why = depthenv.installed(p)
@@ -97,4 +112,17 @@ def run_serve(args: argparse.Namespace, p: config.Paths) -> int:
         raise ToolError("--idle-exit must be more than 0 seconds", EXIT_SETUP)
     sock = args.socket if args.socket is not None else socket_path()
     Runner().run(serve_argv(p, sock, args.idle_exit))
+    return 0
+
+
+def run_bench_video(args: argparse.Namespace, p: config.Paths) -> int:
+    why = depthenv.installed(p)
+    if why:
+        raise ToolError(f"{why}; run `xrdome-tools setup depth` first", EXIT_SETUP)
+    if args.seconds <= 0 or args.rate <= 0:
+        raise ToolError("--seconds and --rate must be more than 0", EXIT_SETUP)
+    cpu = depthenv.variant(p) == "cpu"
+    if cpu:
+        print(CPU_WARNING)
+    Runner().run(bench_video_argv(p, args.seconds, args.rate, cpu=cpu))
     return 0

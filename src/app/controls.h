@@ -28,7 +28,7 @@ typedef struct {
     float screen_curve;         /* the curved screen's radius, XRD_SCREEN_CURVE_MIN..MAX */
     float sharpen;              /* sharpening strength, 0 (off) to XRD_SHARPEN_MAX */
     bool layout_chosen;         /* M or S was pressed in this run */
-    bool depth_on;              /* D: depth 3D for a photo with depth (on at start) */
+    bool depth_on;              /* D: depth 3D (on at start for photos, off for films) */
     float depth_strength;       /* 0 .. XRD_DEPTH_STRENGTH_MAX, picture widths per unit of depth */
     float depth_plane;          /* 0 .. 1: the depth that sits on the screen */
 } xrd_controls;

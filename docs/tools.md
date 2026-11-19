@@ -319,6 +319,7 @@ programs' output against these command lines (the tests use stand-ins).
 
     xrdome-tools depth photo FILE|DIR [--force]
     xrdome-tools depth serve [--socket PATH] [--idle-exit SECONDS]
+    xrdome-tools depth bench-video [--seconds S] [--rate HZ]
 
 Writes the depth cache the player reads for 3D photos (depth-based 3D, spec section 5 of
 `docs/superpowers/specs/2026-11-19-depth-3d-design.md`). Needs `setup depth`; without it the
@@ -382,9 +383,37 @@ with `depth photo`'s code, writing the same cache files.
 - `--idle-exit SECONDS` (default 600): it exits, removing its socket, after this long with no client
   connected and nothing queued. SIGTERM also exits cleanly.
 - Output: `depth serve: listening on ...`, then one line per photo as `depth photo` prints it.
+- Video (spec section 8, first half): request `{"op": "video", "shm": "/xrdome-<pid>-<n>"}`, the
+  POSIX shared-memory ring xrdome copies a flat film's frames into while 3D is on (`D`). The helper
+  maps it, removes its name (nothing is left in `/dev/shm` when either side exits) and replies
+  `{"ok": true, "op": "video", "shm": "..."}`, or `{"ok": false, "op": "video", "shm": "...",
+  "error": "..."}`. The first film loads and warms the 322x182 model (a second or so). From then on
+  it makes depth for the ring's newest frame, before any photo, at most 30 times a second (a 60 fps
+  film gets every second frame), and writes it back into the ring with the number of the frame it
+  was made from. It stops when xrdome marks the ring closed (3D off), sends another ring, or
+  disconnects. Every 10 s it logs `video: 30.0 Hz (worst 1 s window 29.8 Hz), 300 depth maps,
+  inference median 18.0 ms, p95 24.0 ms, newest frame 612`: the helper's rate with xrdome running.
+  The depth is normalised per frame as photos are; smoothing over time is not done yet.
+- The ring (`src/video/framesink.h` documents it; `tools/xrdome_depth/video.py` mirrors it): a 4096
+  byte header, then 4 frame slots of 322x182 RGBA8 and 3 depth slots of 322x182 16-bit samples
+  (native byte order, 65535 nearest), rows top first. Each side writes a slot's number as 0, the
+  data, then the number, and the reader checks the number before and after its copy, so neither
+  side ever waits for the other.
 
 Not verified on hardware: the serve loop with the real model (the tests use a fake depth maker), its
-times, and xrdome with it on the glasses (`--timing-log` while browsing 20 photos).
+times, and xrdome with it on the glasses (`--timing-log` while browsing 20 photos); the video loop with
+the real model, its Hz beside xrdome, and the ring on macOS (it builds and its tests pass there; the
+Python side's word stores rely on x86-64's store order).
+
+### depth bench-video
+
+Runs the helper's video loop (the same code `depth serve` runs for a film) on synthetic 322x182 frames
+fed at `--rate` (default 30) for `--seconds` (default 30), in a ring of its own, and reports what the
+spike measured: `bench-video: 30.0 Hz (worst 1 s window 29.8 Hz), 900 depth maps, inference median
+18.1 ms, p95 24.0 ms, 900 frames fed`. Run it alone for the model's own rate, or beside xrdome playing
+a film to see what both cost together (xrdome's `--timing-log`, and `depth serve`'s own `video:`
+lines with 3D on). Needs `setup depth`; on a `--cpu` setup it warns and runs on the CPU. A missing
+model or no Vulkan GPU exits 2.
 
 ## Output names and tags
 

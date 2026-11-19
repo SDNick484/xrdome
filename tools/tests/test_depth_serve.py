@@ -30,7 +30,11 @@ def test_parse_request():
 @pytest.mark.parametrize("line, msg, path", [
     (b"nope", "not JSON", None),
     (b"[1]", "not a JSON object", None),
-    (b'{"op": "video", "path": "/a"}', "unknown op", "/a"),
+    (b'{"op": "film", "path": "/a"}', "unknown op", "/a"),
+    (b'{"op": "video", "path": "/a"}', "needs a \"shm\"", None),
+    (b'{"op": "video", "shm": "xrdome-1-1"}', "needs a \"shm\"", None),
+    (b'{"op": "video", "shm": "/../etc/passwd"}', "needs a \"shm\"", None),
+    (b'{"op": "video", "shm": "/' + b"x" * 31 + b'"}', "needs a \"shm\"", None),
     (b'{"op": "photo"}', "needs a \"path\"", None),
     (b'{"op": "photo", "path": 3}', "needs a \"path\"", None),
     (b'{"op": "photo", "path": "a.jpg"}', "absolute", "a.jpg"),
