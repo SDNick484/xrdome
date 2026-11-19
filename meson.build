@@ -10,6 +10,7 @@ is_macos = host_machine.system() == 'darwin'
 if is_macos
   add_project_arguments('-D_DARWIN_C_SOURCE', language : 'c')
 endif
+add_project_arguments('-DXRD_VERSION="' + meson.project_version() + '"', language : 'c')
 m_dep = cc.find_library('m', required : true)
 cmocka_dep = dependency('cmocka')
 threads_dep = dependency('threads')
@@ -62,6 +63,7 @@ core_sources = files(
   'src/app/session.c',
   'src/app/imagedir.c',
   'src/platform/platform.c',
+  'src/platform/exepath.c',
   'src/render/depthmap.c',
   'src/app/depthclient.c',
   'src/video/framesink.c',
@@ -90,6 +92,7 @@ test_names = [
   'sbs',
   'mpv_scale',
   'platform',
+  'exepath',
   'imagedir',
   'depthmap',
   'depthclient',
@@ -141,6 +144,9 @@ xrdome_exe = executable('xrdome', 'src/main.c',
   link_with : xrdcore,
   dependencies : [m_dep, threads_dep, epoxy_dep, sdl2_dep, mpv_dep, rt_dep],
   install : true)
+
+# `xrdome --version` needs no display; the macOS bundle's smoke check runs it.
+test('version', xrdome_exe, args : ['--version'])
 
 # Desktop smoke test under Xvfb; skipped (77) without xvfb-run or ffmpeg.
 test('smoke', find_program('tests/smoke_player.sh'),

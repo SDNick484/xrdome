@@ -134,9 +134,9 @@ jobs:
           name: testlog-arch
           path: build/meson-logs/testlog.txt
 
-  # macOS (Apple Silicon via macos-latest, experimental): build and unit tests only. The smoke
-  # tests need xvfb-run and skip (77) here; nothing on this runner drives a
-  # display, so playback on macOS is checked by hand (docs/STATUS.md).
+  # macOS (Apple Silicon via macos-latest, experimental): build, unit tests and the
+  # test bundle. The smoke tests need xvfb-run and skip (77) here; nothing on this
+  # runner drives a display, so playback on macOS is checked by hand (docs/STATUS.md).
   macos-build-test:
     runs-on: macos-latest
     timeout-minutes: 30
@@ -147,7 +147,7 @@ jobs:
       # is not on pkg-config's default path and mpv's cflags cannot resolve.
       - name: Install dependencies
         run: |
-          brew install meson ninja pkgconf mpv sdl2 libepoxy cmocka
+          brew install meson ninja pkgconf mpv ffmpeg sdl2 libepoxy cmocka
           echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
 
       - name: Versions
@@ -164,6 +164,84 @@ jobs:
 
       - name: Test
         run: meson test -C build --print-errorlogs
+
+      # The test bundle for the hardware check (#65): xrdome, ffprobe and their
+      # Homebrew libraries, ad-hoc signed, zipped (packaging/macos/bundle.sh).
+      - name: Bundle
+        run: packaging/macos/bundle.sh
+
+      # The bundle must need nothing from Homebrew: no load path or rpath into it
+      # (bundle.py verify, and otool by hand), then run with /opt/homebrew moved
+      # away and an empty environment. The sample is made first, with Homebrew's ffmpeg.
+      - name: Smoke-test the bundle without Homebrew
+        timeout-minutes: 5
+        run: |
+          set -euxo pipefail
+          # Every command gets a time limit and no stdin, so a hang names itself.
+          # macOS has no timeout(1), and coreutils lives under the hidden prefix.
+          lim() { /usr/bin/perl -e 'alarm shift; exec @ARGV' 60 "$@" </dev/null; }
+          lim ffmpeg -nostdin -v error -f lavfi -i testsrc2=size=64x64:rate=5 -t 1 -pix_fmt yuv420p "$RUNNER_TEMP/sample.mp4"
+          lim python3 packaging/macos/bundle.py verify dist/xrdome
+          for f in dist/xrdome/xrdome dist/xrdome/ffprobe dist/xrdome/lib/*.dylib; do
+            if lim otool -L "$f" | grep -E '/opt/homebrew|/usr/local/'; then
+              echo "::error::$f loads a Homebrew library"
+              exit 1
+            fi
+          done
+          trap 'sudo -n mv /opt/homebrew.hidden /opt/homebrew || true' EXIT
+          lim sudo -n mv /opt/homebrew /opt/homebrew.hidden
+          # ffprobe first, alone: it shares most libraries with xrdome.
+          lim env -i PATH=/usr/bin:/bin ./dist/xrdome/ffprobe -version
+          # xrdome in the background with dyld's library trace; --version is the
+          # first thing main() does, so a hang here is in loading, not in xrdome.
+          # Alive after 10 s: sample its stack (what it is stuck in), then kill it.
+          env -i PATH=/usr/bin:/bin DYLD_PRINT_LIBRARIES=1 ./dist/xrdome/xrdome --version \
+              >"$RUNNER_TEMP/xrdome.out" 2>&1 </dev/null &
+          pid=$!
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 1
+          done
+          set +x
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "::error::xrdome --version still running after 10 s"
+            /usr/bin/sample "$pid" 2 -file "$RUNNER_TEMP/sample.txt" || true
+            cat "$RUNNER_TEMP/sample.txt" || true
+            kill -9 "$pid" || true
+            echo "--- dyld library trace so far:"; cat "$RUNNER_TEMP/xrdome.out"
+            exit 1
+          fi
+          rc=0; wait "$pid" || rc=$?
+          echo "--- xrdome --version exited $rc; dyld library trace:"; cat "$RUNNER_TEMP/xrdome.out"
+          if grep -E '/opt/homebrew|/usr/local/' "$RUNNER_TEMP/xrdome.out"; then
+            echo "::error::xrdome loaded a library from Homebrew at run time"
+            exit 1
+          fi
+          # sdl2-compat dlopen()s SDL3 at load time, which no tool lists: it must
+          # have come from the bundle's lib/ (bundle.py adds it), nowhere else.
+          if ! grep -q 'libSDL3' "$RUNNER_TEMP/xrdome.out" ||
+             grep 'libSDL3' "$RUNNER_TEMP/xrdome.out" | grep -vq "/dist/xrdome/lib/libSDL3"; then
+            echo "::error::libSDL3 was not loaded, or not from dist/xrdome/lib"
+            exit 1
+          fi
+          if [ "$rc" -ne 0 ] || ! grep -q '^xrdome ' "$RUNNER_TEMP/xrdome.out"; then
+            echo "::error::xrdome --version exited $rc without printing its version"
+            exit 1
+          fi
+          set -x
+          streams=$(lim env -i PATH=/usr/bin:/bin ./dist/xrdome/ffprobe -v error -show_streams "$RUNNER_TEMP/sample.mp4")
+          grep -q '^codec_type=video' <<<"$streams"
+          ls -l dist/*.zip
+          du -sh dist/xrdome
+
+      # upload-artifact zips what it uploads and drops file modes, so it gets the
+      # finished zip (the modes live inside it): the download is a zip holding the zip.
+      - name: Upload the test bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: xrdome-macos-arm64
+          path: dist/xrdome-*-macos-arm64.zip
+          if-no-files-found: error
 
       - name: Upload test log
         if: failure()

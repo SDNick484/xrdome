@@ -982,6 +982,16 @@ meson setup build && meson compile -C build && meson test -C build
 ./build/xrdome --pose null --require-hwdec --timing-log mac.csv --frames 3600 video.mp4
 ```
 
+To skip building, download the CI artifact: on the repository's Actions page open a recent run of the
+`ci` workflow and take `xrdome-macos-arm64` from its Artifacts. GitHub wraps it, so unzip once to get
+`xrdome-<version>-macos-arm64.zip`, then unzip that. It is built on GitHub's Apple Silicon runner, needs
+no Homebrew (the libraries, and an `ffprobe` that xrdome finds next to itself, are inside), and is not
+notarised: run `xattr -dr com.apple.quarantine xrdome` in the unzipped folder once, then
+`./xrdome --version`. Its `README-macos.txt` has the commands for the hardware check (issue #65),
+`COPYING`, `LICENSES/` and `SOURCES.md` list the licences and where each library's source is (FFmpeg
+and mpv are Homebrew's GPL builds, without non-free parts; the script refuses a non-free `ffprobe`).
+`ffprobe` is looked up next to the program, then on `PATH`, only when `[general] ffprobe` is not set.
+
 Unknown until tried on hardware: whether macOS offers the glasses an unscaled 3840x1080 mode
 (a scaled one shows xrdome a smaller size and output detection fails; `--windowed` still plays),
 frame timing through the compositor, and VideoToolbox limits (no AV1 hardware decode before M3).

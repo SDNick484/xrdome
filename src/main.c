@@ -1105,6 +1105,10 @@ static int switch_photo(xrd_app *a, xrd_config *cfg, xrd_session *ss, bool *rend
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--version")) { /* before the config asks for a file */
+        printf("xrdome %s\n", XRD_VERSION);
+        return 0;
+    }
     char err[512] = "";
     char ini[4096];
     xrd_config cfg;
