@@ -8,21 +8,28 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
 #include <time.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/wait.h>
 #include <unistd.h>
+#endif
 #include <cmocka.h>
+
+#include "test_compat.h"
 
 #include "detect/probe.h"
 
 #ifndef XRD_FIXTURE_DIR
 #error "XRD_FIXTURE_DIR must be defined by the build"
 #endif
-#ifndef XRD_TESTS_DIR
-#error "XRD_TESTS_DIR must be defined by the build"
+#ifndef XRD_FAKE_FFPROBE
+#error "XRD_FAKE_FFPROBE must be defined by the build"
 #endif
 
-#define FAKE XRD_TESTS_DIR "/fake_ffprobe.sh"
+/* tests/fake_ffprobe.c, built by meson */
+#define FAKE XRD_FAKE_FFPROBE
 
 static char tmpdir[256];
 
@@ -36,9 +43,7 @@ static int group_setup(void **s)
 static int group_teardown(void **s)
 {
     (void)s;
-    char cmd[300];
-    snprintf(cmd, sizeof cmd, "rm -rf '%s'", tmpdir);
-    return system(cmd) == 0 ? 0 : -1;
+    return xrd_test_rmtree(tmpdir);
 }
 
 static void make_file(const char *path)
@@ -51,9 +56,13 @@ static void make_file(const char *path)
 
 static double now_s(void)
 {
+#ifdef _WIN32
+    return (double)GetTickCount64() / 1e3;
+#else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec + ts.tv_nsec / 1e9;
+#endif
 }
 
 static void use_fake(const char *mode)
@@ -62,11 +71,15 @@ static void use_fake(const char *mode)
     setenv("FAKE_FFPROBE_FILE", XRD_FIXTURE_DIR "/sbs_mkv.txt", 1);
 }
 
+/* Every child was reaped. Windows has no zombies: xrd_probe_run waits for
+ * the process and closes its handle, which nothing outside can check. */
 static void assert_no_children(void)
 {
+#ifndef _WIN32
     errno = 0;
     assert_int_equal(waitpid(-1, NULL, WNOHANG), -1);
     assert_int_equal(errno, ECHILD);
+#endif
 }
 
 static char *video(const char *name)
@@ -96,7 +109,13 @@ static void run_argv(void **s)
     char out[512];
     snprintf(out, sizeof out, "%s/argv.txt", tmpdir);
     setenv("FAKE_FFPROBE_OUT", out, 1);
+#ifdef _WIN32
+    /* '"' cannot be in a Windows file name (xrd_win_quote_arg's own test
+     * covers it); spaces and cmd.exe's metacharacters can. */
+    const char *path = video("-weird name & ^x %y%.mp4");
+#else
     const char *path = video("-weird \"name\".mp4");
+#endif
     xrd_probe p; char err[200];
     assert_int_equal(xrd_probe_run(FAKE, path, 5000, &p, err, sizeof err), XRD_PROBE_OK);
     FILE *f = fopen(out, "r");

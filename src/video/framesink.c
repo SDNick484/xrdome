@@ -4,14 +4,19 @@
 
 #include <epoxy/gl.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Windows: no POSIX shared memory and no depth helper to read it
+ * (app/depthclient.h), so a ring cannot be created and films stay 2D. */
+#ifndef _WIN32
+#include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 
 #include "framesink_gen.h"
 
@@ -233,6 +238,23 @@ int xrd_vring_shm_name(char *buf, size_t len, long pid, unsigned n)
     return k < 0 || (size_t)k >= len || k > 31 ? -1 : 0;
 }
 
+#ifdef _WIN32
+
+void *xrd_vring_shm_create(const char *name, char *err, size_t errlen)
+{
+    (void)name;
+    snprintf(err, errlen, "shared memory for the depth helper is not available on Windows");
+    return NULL;
+}
+
+void xrd_vring_shm_destroy(void *mem, const char *name)
+{
+    (void)mem;
+    (void)name;
+}
+
+#else
+
 void *xrd_vring_shm_create(const char *name, char *err, size_t errlen)
 {
     int fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
@@ -268,6 +290,8 @@ void xrd_vring_shm_destroy(void *mem, const char *name)
     munmap(mem, xrd_vring_size());
     shm_unlink(name); /* ENOENT once the helper has taken the name away */
 }
+
+#endif /* !_WIN32 */
 
 bool xrd_framesink_wanted(bool image, xrd_proj proj, xrd_layout layout, bool depth_on,
                           bool have_helper)

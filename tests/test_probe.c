@@ -217,6 +217,179 @@ static void image_format_names(void **s)
     assert_false(xrd_probe_format_is_image(NULL));
 }
 
+/* ---- Windows command-line quoting ---------------------------------------- */
+
+static const char *quote1(const char *arg)
+{
+    static char buf[512];
+    size_t n = 0;
+    buf[0] = '\0';
+    assert_true(xrd_win_quote_arg(arg, buf, sizeof buf, &n));
+    assert_int_equal(n, strlen(buf));
+    return buf;
+}
+
+static void win_quote_arg_cases(void **state)
+{
+    (void)state;
+    assert_string_equal(quote1("abc"), "abc");
+    assert_string_equal(quote1("-show_streams"), "-show_streams");
+    assert_string_equal(quote1(""), "\"\"");
+    assert_string_equal(quote1("a b"), "\"a b\"");
+    assert_string_equal(quote1("a\tb"), "\"a\tb\"");
+    assert_string_equal(quote1("a\nb"), "\"a\nb\"");
+    assert_string_equal(quote1("a\vb"), "\"a\vb\"");
+    /* backslashes are literal unless a quote follows */
+    assert_string_equal(quote1("C:\\dir\\f.mp4"), "C:\\dir\\f.mp4");
+    assert_string_equal(quote1("\\\\server\\share"), "\\\\server\\share");
+    assert_string_equal(quote1("C:\\my dir\\f.mp4"), "\"C:\\my dir\\f.mp4\"");
+    /* a quote: escaped, the backslashes before it doubled */
+    assert_string_equal(quote1("a\"b"), "\"a\\\"b\"");
+    assert_string_equal(quote1("a\\\"b"), "\"a\\\\\\\"b\"");
+    assert_string_equal(quote1("\""), "\"\\\"\"");
+    /* trailing backslashes before the closing quote: doubled */
+    assert_string_equal(quote1("C:\\my dir\\"), "\"C:\\my dir\\\\\"");
+    assert_string_equal(quote1("a b\\\\"), "\"a b\\\\\\\\\"");
+    /* UTF-8 bytes pass through */
+    assert_string_equal(quote1("caf\xc3\xa9.mp4"), "caf\xc3\xa9.mp4");
+    assert_string_equal(quote1("caf\xc3\xa9 2.mp4"), "\"caf\xc3\xa9 2.mp4\"");
+}
+
+static void win_quote_arg_fits(void **state)
+{
+    (void)state;
+    char buf[8];
+    size_t n = 0;
+    assert_true(xrd_win_quote_arg("abcdefg", buf, sizeof buf, &n)); /* 7 + NUL */
+    n = 0;
+    assert_false(xrd_win_quote_arg("abcdefgh", buf, sizeof buf, &n));
+    n = 0;
+    assert_true(xrd_win_quote_arg("a b c", buf, sizeof buf, &n)); /* "a b c" + NUL */
+    assert_string_equal(buf, "\"a b c\"");
+    n = 0;
+    assert_false(xrd_win_quote_arg("a b cd", buf, sizeof buf, &n));
+    n = 0;
+    assert_false(xrd_win_quote_arg(NULL, buf, sizeof buf, &n));
+}
+
+/* The C runtime's split of a command line (the UCRT's parse_command_line,
+ * as documented for main's arguments; CommandLineToArgvW agrees for these):
+ * argv[0] up to whitespace, quotes only grouping; then 2n backslashes and a
+ * quote give n backslashes and toggle quoting, 2n+1 give n and a literal
+ * quote, backslashes elsewhere are literal, and in quotes "" is a quote. */
+static int split_command_line(const char *s, char out[][256], int max)
+{
+    int argc = 0;
+    /* argv[0] */
+    {
+        char *o = out[argc];
+        bool q = false;
+        while (*s && (q || (*s != ' ' && *s != '\t'))) {
+            if (*s == '"')
+                q = !q;
+            else
+                *o++ = *s;
+            s++;
+        }
+        *o = '\0';
+        argc++;
+    }
+    for (;;) {
+        while (*s == ' ' || *s == '\t')
+            s++;
+        if (!*s || argc == max)
+            break;
+        char *o = out[argc];
+        bool q = false;
+        while (*s && (q || (*s != ' ' && *s != '\t'))) {
+            size_t bs = 0;
+            while (*s == '\\') {
+                bs++;
+                s++;
+            }
+            if (*s == '"') {
+                for (size_t i = 0; i < bs / 2; i++)
+                    *o++ = '\\';
+                if (bs % 2) {
+                    *o++ = '"';
+                    s++;
+                } else if (q && s[1] == '"') {
+                    *o++ = '"';
+                    s += 2;
+                } else {
+                    q = !q;
+                    s++;
+                }
+            } else {
+                for (size_t i = 0; i < bs; i++)
+                    *o++ = '\\';
+                if (*s && (q || (*s != ' ' && *s != '\t')))
+                    *o++ = *s++;
+            }
+        }
+        *o = '\0';
+        argc++;
+    }
+    return argc;
+}
+
+static void win_command_line_round_trip(void **state)
+{
+    (void)state;
+    const char *argv[] = { "C:\\Program Files\\ffmpeg\\ffprobe.exe", "-v", "error", "-i",
+                           "D:\\films\\-weird \"name\" \\\\ & %x% ^.mp4", "", "\\\"",
+                           "a\\\\", "tab\there\\", NULL };
+    char line[1024], got[16][256];
+    assert_int_equal(xrd_win_command_line(argv, line, sizeof line), 0);
+    assert_string_equal(line, "\"C:\\Program Files\\ffmpeg\\ffprobe.exe\" -v error -i "
+                              "\"D:\\films\\-weird \\\"name\\\" \\\\ & %x% ^.mp4\" \"\" "
+                              "\"\\\\\\\"\" a\\\\ \"tab\there\\\\\"");
+    int argc = split_command_line(line, got, 16);
+    assert_int_equal(argc, 9);
+    for (int i = 0; i < argc; i++)
+        assert_string_equal(got[i], argv[i]);
+
+    /* Every short string over the characters that matter comes back. */
+    static const char alphabet[] = { 'a', ' ', '\t', '"', '\\', '\xc3' };
+    unsigned seed = 12345;
+    for (int round = 0; round < 3000; round++) {
+        char args[3][16];
+        const char *av[] = { "prog", args[0], args[1], args[2], NULL };
+        for (int a = 0; a < 3; a++) {
+            seed = seed * 1103515245u + 12345u;
+            int len = (int)((seed >> 16) % 12);
+            for (int i = 0; i < len; i++) {
+                seed = seed * 1103515245u + 12345u;
+                args[a][i] = alphabet[(seed >> 16) % sizeof alphabet];
+            }
+            args[a][len] = '\0';
+        }
+        assert_int_equal(xrd_win_command_line(av, line, sizeof line), 0);
+        assert_int_equal(split_command_line(line, got, 16), 4);
+        for (int i = 0; i < 4; i++)
+            assert_string_equal(got[i], av[i]);
+    }
+}
+
+static void win_command_line_refuses(void **state)
+{
+    (void)state;
+    char line[64];
+    const char *quote0[] = { "pro\"g", "x", NULL };
+    assert_int_equal(xrd_win_command_line(quote0, line, sizeof line), -1);
+    const char *empty0[] = { "", "x", NULL };
+    assert_int_equal(xrd_win_command_line(empty0, line, sizeof line), -1);
+    assert_int_equal(xrd_win_command_line(NULL, line, sizeof line), -1);
+    const char *ok[] = { "a b", "c", NULL };
+    char exact[8]; /* "a b" c + NUL */
+    assert_int_equal(xrd_win_command_line(ok, exact, sizeof exact), 0);
+    assert_string_equal(exact, "\"a b\" c");
+    char short1[7];
+    assert_int_equal(xrd_win_command_line(ok, short1, sizeof short1), -1);
+    char short0[5]; /* not even argv[0] */
+    assert_int_equal(xrd_win_command_line(ok, short0, sizeof short0), -1);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -233,6 +406,10 @@ int main(void)
         cmocka_unit_test(first_video_stream_wins),
         cmocka_unit_test(image_formats),
         cmocka_unit_test(image_format_names),
+        cmocka_unit_test(win_quote_arg_cases),
+        cmocka_unit_test(win_quote_arg_fits),
+        cmocka_unit_test(win_command_line_round_trip),
+        cmocka_unit_test(win_command_line_refuses),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

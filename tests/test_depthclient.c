@@ -8,15 +8,22 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/un.h>
 #include <time.h>
+#ifndef _WIN32
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
+#endif
 #include <cmocka.h>
+
+#include "test_compat.h"
 
 #include "app/depthclient.h"
 
+/* Windows has no client (app/depthclient.h): the paths and the protocol are
+ * tested there, and that every client has failed; the rest is POSIX. */
+#ifndef _WIN32
 static char g_dir[64];
 static char g_sock[128];
 
@@ -32,9 +39,7 @@ static int setup(void **state)
 static int teardown(void **state)
 {
     (void)state;
-    char cmd[128];
-    snprintf(cmd, sizeof cmd, "rm -rf '%s'", g_dir);
-    return system(cmd) == 0 ? 0 : -1;
+    return xrd_test_rmtree(g_dir);
 }
 
 static uint64_t now_ns(void)
@@ -88,6 +93,35 @@ static void socket_path_follows_the_python_rule(void **state)
     unsetenv("XDG_RUNTIME_DIR");
     unsetenv("TMPDIR");
 }
+
+#else /* _WIN32 */
+
+static void socket_path_in_temp(void **state)
+{
+    (void)state;
+    char buf[256];
+    assert_int_equal(xrd_depth_socket_path(buf, sizeof buf), 0);
+    size_t n = strlen(buf), k = strlen("xrdome-depth.sock");
+    assert_true(n > k && strcmp(buf + n - k, "xrdome-depth.sock") == 0);
+}
+
+static void no_client_on_windows(void **state)
+{
+    (void)state;
+    xrd_depthclient *dc = xrd_depthclient_new("x.sock", "xrdome-tools");
+    assert_non_null(dc);
+    assert_true(xrd_depthclient_failed(dc));
+    assert_non_null(strstr(xrd_depthclient_error(dc), "not available on Windows"));
+    assert_false(xrd_depthclient_request(dc, "C:/p/a.jpg", false));
+    assert_false(xrd_depthclient_video(dc, "/xrdome-1-1"));
+    xrd_depth_reply r;
+    assert_int_equal(xrd_depthclient_poll(dc, 0, &r), XRD_DC_FAILED); /* once */
+    assert_int_equal(xrd_depthclient_poll(dc, 0, &r), XRD_DC_NONE);
+    assert_false(xrd_depthclient_started(dc));
+    xrd_depthclient_free(dc);
+}
+
+#endif /* _WIN32 */
 
 static void log_path(void **state)
 {
@@ -194,6 +228,8 @@ static void replies(void **state)
 
 /* ---- the client against a fake server ---------------------------------------------- */
 
+#ifndef _WIN32
+
 static int listen_on(const char *path)
 {
     int s = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -277,6 +313,8 @@ static void talks_to_a_running_helper(void **state)
     close(ls);
 }
 
+#endif /* !_WIN32 */
+
 static void video_lines_and_replies(void **state)
 {
     (void)state;
@@ -301,6 +339,7 @@ static void video_lines_and_replies(void **state)
     assert_false(r.video);
 }
 
+#ifndef _WIN32
 static void sends_a_video_request(void **state)
 {
     (void)state;
@@ -462,15 +501,23 @@ static void a_helper_that_never_answers_times_out(void **state)
     xrd_depthclient_free(dc);
 }
 
+#endif /* !_WIN32 */
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
+#ifdef _WIN32
+        cmocka_unit_test(socket_path_in_temp),
+        cmocka_unit_test(no_client_on_windows),
+#else
         cmocka_unit_test(socket_path_follows_the_python_rule),
+#endif
         cmocka_unit_test(log_path),
         cmocka_unit_test(request_lines),
         cmocka_unit_test(video_lines_and_replies),
-        cmocka_unit_test_setup_teardown(sends_a_video_request, setup, teardown),
         cmocka_unit_test(replies),
+#ifndef _WIN32
+        cmocka_unit_test_setup_teardown(sends_a_video_request, setup, teardown),
         cmocka_unit_test_setup_teardown(talks_to_a_running_helper, setup, teardown),
         cmocka_unit_test_setup_teardown(writing_to_a_closed_helper_does_not_kill, setup, teardown),
         cmocka_unit_test_setup_teardown(no_helper_and_no_socket, setup, teardown),
@@ -478,6 +525,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(a_helper_that_exits, setup, teardown),
         cmocka_unit_test_setup_teardown(a_started_helper_is_waited_for, setup, teardown),
         cmocka_unit_test_setup_teardown(a_helper_that_never_answers_times_out, setup, teardown),
+#endif
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

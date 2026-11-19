@@ -5,22 +5,38 @@ project('xrdome', 'c',
 
 cc = meson.get_compiler('c')
 is_macos = host_machine.system() == 'darwin'
+# Windows 11, MSYS2 UCRT64 (MinGW-w64 gcc). Linux is the reference platform.
+is_windows = host_machine.system() == 'windows'
 # macOS: _POSIX_C_SOURCE (set by several sources) hides BSD extensions such as
 # O_NOFOLLOW; _DARWIN_C_SOURCE brings them back alongside it.
 if is_macos
   add_project_arguments('-D_DARWIN_C_SOURCE', language : 'c')
 endif
 add_project_arguments('-DXRD_VERSION="' + meson.project_version() + '"', language : 'c')
-m_dep = cc.find_library('m', required : true)
+# Windows: the maths functions are in the C runtime, no libm.
+m_dep = cc.find_library('m', required : not is_windows)
 cmocka_dep = dependency('cmocka')
 threads_dep = dependency('threads')
 epoxy_dep = dependency('epoxy')
-# EGL: Linux only (the render test's surfaceless context); macOS uses CGL through SDL.
-egl_dep = dependency('egl', required : not is_macos)
+# EGL: Linux only (the render test's surfaceless context); macOS uses CGL and
+# Windows WGL through SDL.
+if is_windows
+  egl_dep = dependency('', required : false)
+else
+  egl_dep = dependency('egl', required : not is_macos)
+endif
 sdl2_dep = dependency('sdl2')
 mpv_dep = dependency('mpv')
 # shm_open: in libc on glibc 2.34+ and macOS, in librt before.
 rt_dep = cc.find_library('rt', required : false)
+# Windows: Winsock (the UDP pose), the known folders (SHGetKnownFolderPath in
+# shell32, CoTaskMemFree in ole32).
+win_deps = []
+if is_windows
+  foreach l : ['ws2_32', 'shell32', 'ole32']
+    win_deps += cc.find_library(l)
+  endforeach
+endif
 py = find_program('python3')
 
 shaders_gen = custom_target('shaders_gen',
@@ -59,6 +75,7 @@ core_sources = files(
   'src/app/controls.c',
   'src/store/filestate.c',
   'src/detect/probe.c',
+  'src/detect/probe_win.c',
   'src/detect/detect.c',
   'src/app/session.c',
   'src/app/imagedir.c',
@@ -114,15 +131,20 @@ inc = include_directories('src')
 
 xrdcore = static_library('xrdcore', core_sources, shaders_gen, framesink_gen,
   include_directories : inc,
-  dependencies : [m_dep, threads_dep, epoxy_dep, sdl2_dep, mpv_dep, rt_dep])
+  dependencies : [m_dep, threads_dep, epoxy_dep, sdl2_dep, mpv_dep, rt_dep, win_deps])
 
-# Paths the probe tests read fixtures and the fake ffprobe from.
+# test_probe_run's stand-in for ffprobe: a program, so it runs on Windows too.
+fake_ffprobe = executable('fake_ffprobe', 'tests/fake_ffprobe.c')
+
+# Paths the probe tests read fixtures and the fake ffprobe from: C string
+# literals, so forward slashes (in a Windows "D:\a" the "\a" is an escape).
 fixture_args = [
-  '-DXRD_FIXTURE_DIR="' + (meson.current_source_dir() / 'tests/fixtures/ffprobe') + '"',
-  '-DXRD_TESTS_DIR="' + (meson.current_source_dir() / 'tests') + '"',
+  '-DXRD_FIXTURE_DIR="' + (meson.current_source_dir() / 'tests/fixtures/ffprobe').replace('\\', '/') + '"',
+  '-DXRD_TESTS_DIR="' + (meson.current_source_dir() / 'tests').replace('\\', '/') + '"',
   # test_depthmap: the helper's cache writer, run to cross-check the C reader.
-  '-DXRD_TOOLS_DIR="' + (meson.current_source_dir() / 'tools') + '"',
-  '-DXRD_PYTHON="' + py.full_path() + '"',
+  '-DXRD_TOOLS_DIR="' + (meson.current_source_dir() / 'tools').replace('\\', '/') + '"',
+  '-DXRD_PYTHON="' + py.full_path().replace('\\', '/') + '"',
+  '-DXRD_FAKE_FFPROBE="' + fake_ffprobe.full_path().replace('\\', '/') + '"',
 ]
 
 # cmocka 2.0's assert macros use the GNU ", ##__VA_ARGS__" extension, which
@@ -134,15 +156,26 @@ foreach t : test_names
     include_directories : inc,
     c_args : test_c_args,
     link_with : xrdcore,
-    dependencies : [cmocka_dep, m_dep, threads_dep, epoxy_dep, egl_dep, sdl2_dep, mpv_dep, rt_dep])
-  test(t, exe, env : ['LIBGL_ALWAYS_SOFTWARE=1', 'EGL_PLATFORM=surfaceless',
+    dependencies : [cmocka_dep, m_dep, threads_dep, epoxy_dep, egl_dep, sdl2_dep, mpv_dep, rt_dep,
+                    win_deps],
+    win_subsystem : 'console')
+  test(t, exe, depends : fake_ffprobe, env : ['LIBGL_ALWAYS_SOFTWARE=1', 'EGL_PLATFORM=surfaceless',
                       'XRD_TEST_DATA=' + (meson.current_source_dir() / 'tests/data')])
 endforeach
 
-xrdome_exe = executable('xrdome', 'src/main.c',
+# Windows: the manifest sets the process code page to UTF-8 (argv, fopen and
+# opendir take UTF-8 file names, as on Linux) and makes it long-path aware.
+xrdome_sources = ['src/main.c']
+if is_windows
+  xrdome_sources += import('windows').compile_resources('packaging/windows/xrdome.rc',
+    depend_files : files('packaging/windows/xrdome.manifest'))
+endif
+
+xrdome_exe = executable('xrdome', xrdome_sources,
   include_directories : inc,
   link_with : xrdcore,
-  dependencies : [m_dep, threads_dep, epoxy_dep, sdl2_dep, mpv_dep, rt_dep],
+  dependencies : [m_dep, threads_dep, epoxy_dep, sdl2_dep, mpv_dep, rt_dep, win_deps],
+  win_subsystem : 'console',
   install : true)
 
 # `xrdome --version` needs no display; the macOS bundle's smoke check runs it.

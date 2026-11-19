@@ -11,6 +11,8 @@
 #include <unistd.h>
 #include <cmocka.h>
 
+#include "test_compat.h"
+
 #include "app/imagedir.h"
 
 static char g_dir[64];
@@ -36,9 +38,7 @@ static int setup(void **state)
 static int teardown(void **state)
 {
     (void)state;
-    char cmd[128];
-    snprintf(cmd, sizeof cmd, "rm -rf '%s'", g_dir);
-    if (system(cmd) != 0) { /* best effort */ }
+    if (xrd_test_rmtree(g_dir) != 0) { /* best effort */ }
     return 0;
 }
 
@@ -81,6 +81,9 @@ static void trailing_slash_and_symlink(void **state)
 {
     (void)state;
     char link[256], target[256], dirs[256], err[200] = "";
+#ifdef _WIN32
+    skip(); /* symlinks need a privilege on Windows */
+#endif
     snprintf(target, sizeof target, "%s/real.png", g_dir);
     snprintf(link, sizeof link, "%s/link.jpg", g_dir);
     assert_int_equal(symlink(target, link), 0);

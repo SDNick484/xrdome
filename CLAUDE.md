@@ -10,6 +10,9 @@ Run both before every commit:
     meson setup build -Dwerror=true && meson compile -C build && meson test -C build --print-errorlogs
     python3 -m pytest tools/tests -q
 
+Linux is the reference platform; macOS and Windows (MSYS2 UCRT64) must build and pass the unit tests
+(their CI jobs, `macos-build-test` and `windows-build-test`).
+
 ## xrdome-tools rules
 
 - Python >= 3.11, standard library only under `tools/xrdome_tools/`; pytest is the only test dependency.

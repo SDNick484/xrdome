@@ -2,21 +2,24 @@
 
 #include "detect/probe.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifndef _WIN32
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
 #include <signal.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#endif
 
-static void probe_zero(xrd_probe *p)
+void xrd_probe_zero(xrd_probe *p)
 {
     memset(p, 0, sizeof *p);
     p->sar_num = 1;
@@ -63,7 +66,7 @@ typedef enum { SIDE_OTHER, SIDE_STEREO, SIDE_SPHERICAL } side_kind;
 
 bool xrd_probe_parse(const char *text, xrd_probe *out)
 {
-    probe_zero(out);
+    xrd_probe_zero(out);
     if (!text)
         return false;
 
@@ -73,7 +76,7 @@ bool xrd_probe_parse(const char *text, xrd_probe *out)
     bool is_video = false, attached = false;
     bool found = false;        /* *out holds the first usable stream */
     char fmt[32] = "";
-    probe_zero(&cur);
+    xrd_probe_zero(&cur);
 
     const char *p = text;
     while (*p) {
@@ -85,7 +88,7 @@ bool xrd_probe_parse(const char *text, xrd_probe *out)
 
         if (len == 8 && !memcmp(p, "[STREAM]", 8)) {
             sec = SEC_STREAM;
-            probe_zero(&cur);
+            xrd_probe_zero(&cur);
             is_video = attached = false;
         } else if (len == 9 && !memcmp(p, "[/STREAM]", 9)) {
             if (sec != SEC_NONE && is_video && !attached && !found) {
@@ -177,6 +180,9 @@ bool xrd_probe_parse(const char *text, xrd_probe *out)
 
 /* ---- running ffprobe ---------------------------------------------------- */
 
+/* POSIX: fork and execvp. Windows: probe_win.c. */
+#ifndef _WIN32
+
 /* pipe() with both ends close-on-exec (pipe2 needs _GNU_SOURCE). */
 static int cloexec_pipe(int fds[2])
 {
@@ -232,7 +238,7 @@ static int reap(pid_t pid, long long deadline, bool *killed)
 xrd_probe_status xrd_probe_run(const char *ffprobe, const char *file, int timeout_ms,
                                xrd_probe *out, char *err, size_t errlen)
 {
-    probe_zero(out);
+    xrd_probe_zero(out);
     if (err && errlen)
         err[0] = '\0';
 
@@ -357,7 +363,9 @@ xrd_probe_status xrd_probe_run(const char *ffprobe, const char *file, int timeou
         result = XRD_PROBE_OK;
     }
     if (result != XRD_PROBE_OK)
-        probe_zero(out);
+        xrd_probe_zero(out);
     free(buf);
     return result;
 }
+
+#endif /* !_WIN32 */

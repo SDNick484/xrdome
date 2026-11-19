@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "render/depthmap.h"
+#include "util/printf_attr.h"
 
 #include <errno.h>
 #include <math.h>
@@ -10,7 +11,7 @@
 #include <string.h>
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...)
-    __attribute__((format(printf, 3, 4)));
+    XRD_PRINTF(3, 4);
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...)
 {

@@ -9,19 +9,38 @@
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
+#ifdef _WIN32
+#include <malloc.h>
+#else
 #include <sys/mman.h>
 #include <unistd.h>
+#endif
 #include <cmocka.h>
 
 #include "video/framesink.h"
 
-/* The ring in ordinary memory, 8-byte aligned as a mapping is. */
+/* The ring in ordinary memory, 8-byte aligned as a mapping is; freed by
+ * free_ring. */
 static void *new_ring(void)
 {
     void *mem = NULL;
+#ifdef _WIN32
+    mem = _aligned_malloc(xrd_vring_size(), 4096);
+    assert_non_null(mem);
+#else
     assert_int_equal(posix_memalign(&mem, 4096, xrd_vring_size()), 0);
+#endif
     xrd_vring_init(mem);
     return mem;
+}
+
+static void free_ring(void *mem)
+{
+#ifdef _WIN32
+    _aligned_free(mem);
+#else
+    free(mem);
+#endif
 }
 
 static uint32_t u32(const void *mem, size_t off)
@@ -72,7 +91,7 @@ static void layout_is_the_documented_one(void **state)
     assert_false(xrd_vring_closed(mem));
     ((uint8_t *)mem)[16] = 0x40; /* another width */
     assert_false(xrd_vring_valid(mem, xrd_vring_size()));
-    free(mem);
+    free_ring(mem);
 }
 
 static void fill(uint8_t *px, uint8_t v)
@@ -101,7 +120,7 @@ static void frames_newest_only_once(void **state)
     assert_true(xrd_vring_frame_read(mem, &seen, got, &t));
     assert_int_equal(seen, 6);
     assert_int_equal(got[XRD_VRING_FRAME_BYTES - 1], 6);
-    free(mem);
+    free_ring(mem);
 }
 
 static void a_slot_being_written_or_lapped_is_not_read(void **state)
@@ -122,7 +141,7 @@ static void a_slot_being_written_or_lapped_is_not_read(void **state)
     uint64_t nine = 9;
     memcpy((uint8_t *)mem + XRD_VRING_OFF_FRAME_HEAD, &nine, 8);
     assert_false(xrd_vring_frame_read(mem, &seen, got, NULL));
-    free(mem);
+    free_ring(mem);
 }
 
 static void depth_back_with_its_frame(void **state)
@@ -145,7 +164,7 @@ static void depth_back_with_its_frame(void **state)
     assert_true(xrd_vring_depth_read(mem, &seen, NULL, &frame)); /* NULL: only check */
     assert_int_equal(seen, 2);
     assert_int_equal(frame, 19);
-    free(mem);
+    free_ring(mem);
 }
 
 static void close_flag(void **state)
@@ -155,7 +174,7 @@ static void close_flag(void **state)
     xrd_vring_close(mem);
     assert_true(xrd_vring_closed(mem));
     assert_int_equal(u32(mem, XRD_VRING_OFF_CLOSED), 1);
-    free(mem);
+    free_ring(mem);
 }
 
 static void shm_names_fit_macos(void **state)
@@ -181,6 +200,20 @@ static void frames_go_out_only_for_flat_mono_films_with_3d(void **state)
     assert_false(xrd_framesink_wanted(false, XRD_PROJ_FLAT, XRD_LAYOUT_TB_LR, true, true));
     assert_false(xrd_framesink_wanted(false, XRD_PROJ_FLAT, XRD_LAYOUT_MONO, true, false));
 }
+
+#ifdef _WIN32
+
+/* No POSIX shared memory on Windows: no ring, a reason, nothing to undo. */
+static void no_shm_on_windows(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    assert_null(xrd_vring_shm_create("/xrdome-1-1", err, sizeof err));
+    assert_non_null(strstr(err, "not available on Windows"));
+    xrd_vring_shm_destroy(NULL, "/xrdome-1-1");
+}
+
+#else
 
 static void shm_ring_with_the_python_helper(void **state)
 {
@@ -233,6 +266,8 @@ static void shm_destroy_removes_the_name(void **state)
     xrd_vring_shm_destroy(NULL, name);
 }
 
+#endif /* !_WIN32 */
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -243,8 +278,12 @@ int main(void)
         cmocka_unit_test(close_flag),
         cmocka_unit_test(shm_names_fit_macos),
         cmocka_unit_test(frames_go_out_only_for_flat_mono_films_with_3d),
+#ifdef _WIN32
+        cmocka_unit_test(no_shm_on_windows),
+#else
         cmocka_unit_test(shm_ring_with_the_python_helper),
         cmocka_unit_test(shm_destroy_removes_the_name),
+#endif
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

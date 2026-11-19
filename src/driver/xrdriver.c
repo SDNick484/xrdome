@@ -1,6 +1,7 @@
-#define _POSIX_C_SOURCE 200809L /* nanosleep, O_CLOEXEC, O_NOFOLLOW */
+#define _POSIX_C_SOURCE 200809L /* O_CLOEXEC, O_NOFOLLOW */
 
 #include "driver/xrdriver.h"
+#include "util/timing.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -9,6 +10,15 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+#ifdef _WIN32
+/* Compiled but inert on Windows: there is no XRLinuxDriver
+ * (xrd_platform_has_xrdriver), so these files are only ever the tests'. */
+#define O_NOFOLLOW 0
+#define O_CLOEXEC 0
+#else
+#define O_BINARY 0
+#endif
 
 const char *xrd_xrdriver_dir(void)
 {
@@ -78,10 +88,8 @@ int xrd_xrdriver_read_state(const char *path, xrd_xrdriver_state *st)
     char buf[8192];
     size_t got = 0;
     for (int attempt = 0; attempt < 4; attempt++) {
-        if (attempt > 0) {
-            struct timespec ts = {0, 20 * 1000 * 1000};
-            nanosleep(&ts, NULL);
-        }
+        if (attempt > 0)
+            xrd_sleep_ns(20 * 1000 * 1000);
         FILE *f = fopen(path, "r");
         if (!f)
             return -1;
@@ -116,7 +124,8 @@ const char *xrd_xrdriver_sbs_request(bool enable)
 
 int xrd_xrdriver_request(const char *path, const char *text)
 {
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC | O_BINARY,
+                  0644);
     if (fd < 0)
         return -1;
     size_t len = strlen(text);

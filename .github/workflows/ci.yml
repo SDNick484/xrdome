@@ -264,3 +264,59 @@ jobs:
 
       - name: Test
         run: python3 -m pytest tools/tests -q
+
+  # Windows 11 (experimental): MSYS2 UCRT64 (MinGW-w64 gcc), build and unit
+  # tests only. The smoke tests need xvfb-run and skip (77) here; playback on
+  # Windows is checked by hand (docs/STATUS.md). MSYS2's SDL2 is sdl2-compat
+  # (SDL2's API on SDL3): ffmpeg, which mpv pulls in, depends on it, and it
+  # conflicts with the older standalone SDL2 package.
+  windows-build-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      # LF endings as on Linux: the fixtures, shaders and shell scripts are
+      # read byte for byte.
+      - name: Keep line endings
+        shell: pwsh
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-meson
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-sdl2-compat
+            mingw-w64-ucrt-x86_64-libepoxy
+            mingw-w64-ucrt-x86_64-mpv
+            mingw-w64-ucrt-x86_64-cmocka
+            mingw-w64-ucrt-x86_64-ffmpeg
+
+      - name: Versions
+        run: |
+          gcc --version | head -n 1
+          pkg-config --modversion mpv sdl2 epoxy cmocka
+
+      - name: Configure
+        run: meson setup build -Dwerror=true
+
+      - name: Build
+        run: meson compile -C build
+
+      - name: Test
+        run: meson test -C build --print-errorlogs
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testlog-windows
+          path: build/meson-logs/testlog.txt

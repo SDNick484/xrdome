@@ -3,16 +3,26 @@
 #endif
 
 #include "app/depthclient.h"
+#include "util/printf_attr.h"
 
 #include <errno.h>
-#include <fcntl.h>
-#include <poll.h>
-#include <signal.h>
-#include <spawn.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <sys/stat.h>
+/* No helper client on Windows (a Unix socket and posix_spawn): every
+ * client is failed from the start, so photos without cached depth stay 2D
+ * and films get no 3D, as the depth spec sets for platforms without the
+ * helper. The protocol functions are built and tested as everywhere. */
+#define SUN_PATH_LEN 108 /* afunix.h's UNIX_PATH_MAX */
+#else
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
+#include <spawn.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/un.h>
@@ -22,6 +32,7 @@
 extern char **environ;
 
 #define SUN_PATH_LEN sizeof(((struct sockaddr_un *)0)->sun_path)
+#endif
 #define LINE_MAX_BYTES (1u << 20) /* a reply longer than this is a broken helper */
 
 /* No SIGPIPE when the helper goes away mid-write: MSG_NOSIGNAL on Linux,
@@ -48,6 +59,12 @@ int xrd_depth_socket_path(char *buf, size_t len)
 {
     const char *run = getenv("XDG_RUNTIME_DIR");
     int n;
+#ifdef _WIN32
+    /* Never connected to (see above); named for messages only. */
+    const char *tmp = getenv("TEMP");
+    (void)run;
+    n = join(buf, len, tmp && tmp[0] ? tmp : ".", "xrdome-depth.sock");
+#else
     if (run && run[0] == '/') {
         n = join(buf, len, run, "xrdome-depth.sock");
     } else {
@@ -56,6 +73,7 @@ int xrd_depth_socket_path(char *buf, size_t len)
         snprintf(name, sizeof name, "xrdome-depth-%lu.sock", (unsigned long)getuid());
         n = join(buf, len, tmp && tmp[0] == '/' ? tmp : "/tmp", name);
     }
+#endif
     if (n < 0 || (size_t)n >= SUN_PATH_LEN)
         return -1;
     return 0;
@@ -72,7 +90,12 @@ int xrd_depth_log_path(const char *socket_path, char *buf, size_t len)
 
 int xrd_depth_abs_path(const char *path, char *buf, size_t len)
 {
+#ifdef _WIN32
+    struct stat st;
+    char *r = stat(path, &st) == 0 ? _fullpath(NULL, path, 0) : NULL;
+#else
     char *r = realpath(path, NULL);
+#endif
     if (!r)
         return -1;
     int n = snprintf(buf, len, "%s", r);
@@ -385,6 +408,71 @@ bool xrd_depth_reply_parse(const char *line, size_t len, xrd_depth_reply *out)
 
 /* ---- the client --------------------------------------------------------------- */
 
+#ifdef _WIN32
+
+struct xrd_depthclient {
+    bool reported; /* XRD_DC_FAILED was returned */
+    char err[96];
+};
+
+xrd_depthclient *xrd_depthclient_new(const char *socket_path, const char *helper)
+{
+    (void)socket_path;
+    (void)helper;
+    xrd_depthclient *dc = calloc(1, sizeof *dc);
+    if (dc)
+        snprintf(dc->err, sizeof dc->err, "the depth helper is not available on Windows");
+    return dc;
+}
+
+void xrd_depthclient_free(xrd_depthclient *dc)
+{
+    free(dc);
+}
+
+bool xrd_depthclient_request(xrd_depthclient *dc, const char *path, bool prefetch)
+{
+    (void)dc;
+    (void)path;
+    (void)prefetch;
+    return false;
+}
+
+bool xrd_depthclient_video(xrd_depthclient *dc, const char *shm)
+{
+    (void)dc;
+    (void)shm;
+    return false;
+}
+
+xrd_dc_event xrd_depthclient_poll(xrd_depthclient *dc, uint64_t now_ns, xrd_depth_reply *out)
+{
+    (void)now_ns;
+    (void)out;
+    if (!dc || dc->reported)
+        return XRD_DC_NONE;
+    dc->reported = true;
+    return XRD_DC_FAILED;
+}
+
+bool xrd_depthclient_failed(const xrd_depthclient *dc)
+{
+    return dc != NULL;
+}
+
+const char *xrd_depthclient_error(const xrd_depthclient *dc)
+{
+    return dc ? dc->err : "";
+}
+
+bool xrd_depthclient_started(const xrd_depthclient *dc)
+{
+    (void)dc;
+    return false;
+}
+
+#else /* POSIX */
+
 typedef enum { ST_IDLE, ST_CONNECTING, ST_CONNECTED, ST_FAILED } dc_state;
 
 struct xrd_depthclient {
@@ -443,7 +531,7 @@ void xrd_depthclient_free(xrd_depthclient *dc)
     free(dc);
 }
 
-static void fail(xrd_depthclient *dc, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+static void fail(xrd_depthclient *dc, const char *fmt, ...) XRD_PRINTF(2, 3);
 
 static void fail(xrd_depthclient *dc, const char *fmt, ...)
 {
@@ -806,3 +894,5 @@ bool xrd_depthclient_started(const xrd_depthclient *dc)
 {
     return dc && dc->started;
 }
+
+#endif /* POSIX */

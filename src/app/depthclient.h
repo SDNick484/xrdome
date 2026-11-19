@@ -23,7 +23,11 @@
  * is started, the first time a request needs it and its socket does not
  * answer, as "<helper> depth serve --socket <path>" with its output in the
  * log file beside the socket; it outlives xrdome and exits by itself when
- * idle. No SDL, GL or mpv. */
+ * idle. No SDL, GL or mpv.
+ *
+ * Windows has no client: xrd_depthclient_new returns one that has failed
+ * ("not available on Windows"), so photos without cached depth stay 2D and
+ * films get no 3D. */
 
 #include <stdbool.h>
 #include <stddef.h>

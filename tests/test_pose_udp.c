@@ -1,7 +1,14 @@
 #define _POSIX_C_SOURCE 200809L /* sockets, clock_gettime */
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -10,9 +17,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <time.h>
-#include <unistd.h>
 #include <cmocka.h>
 
 #include "pose/opentrack_packet.h"
@@ -22,9 +27,16 @@
 #define TOL 1e-4
 #define DEADLINE_NS 200000000ull /* 200 ms */
 
+/* Winsock: a SOCKET (it fits an int) closed by closesocket. */
+#ifdef _WIN32
+#define sock_close(fd) closesocket((SOCKET)(fd))
+#else
+#define sock_close(fd) close(fd)
+#endif
+
 static int bind_loopback(int port, int *bound_port)
 {
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    int fd = (int)socket(AF_INET, SOCK_DGRAM, 0);
     assert_true(fd >= 0);
     struct sockaddr_in a;
     memset(&a, 0, sizeof a);
@@ -32,7 +44,7 @@ static int bind_loopback(int port, int *bound_port)
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     a.sin_port = htons((uint16_t)port);
     if (bind(fd, (struct sockaddr *)&a, sizeof a) != 0) {
-        close(fd);
+        sock_close(fd);
         return -1;
     }
     socklen_t l = sizeof a;
@@ -47,21 +59,23 @@ static int free_port(void)
     int port;
     int fd = bind_loopback(0, &port);
     assert_true(fd >= 0);
-    close(fd);
+    sock_close(fd);
     return port;
 }
 
 static void send_bytes(int port, const void *buf, size_t len)
 {
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    int fd = (int)socket(AF_INET, SOCK_DGRAM, 0);
     assert_true(fd >= 0);
     struct sockaddr_in a;
     memset(&a, 0, sizeof a);
     a.sin_family = AF_INET;
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     a.sin_port = htons((uint16_t)port);
-    assert_int_equal((int)sendto(fd, buf, len, 0, (struct sockaddr *)&a, sizeof a), (int)len);
-    close(fd);
+    assert_int_equal((int)sendto(fd, (const char *)buf, (int)len, 0, (struct sockaddr *)&a,
+                                 sizeof a),
+                     (int)len);
+    sock_close(fd);
 }
 
 static void send_ypr(int port, double yaw, double pitch, double roll, uint32_t frame)
@@ -81,8 +95,7 @@ static bool wait_pose(xrd_pose_source *s, uint32_t min_seq, xrd_pose *out)
     do {
         if (s->latest(s, out) == 0 && out->seq >= min_seq)
             return true;
-        struct timespec ts = {0, 500000}; /* 0.5 ms */
-        nanosleep(&ts, NULL);
+        xrd_sleep_ns(500000); /* 0.5 ms */
     } while (xrd_now_ns() < end);
     return false;
 }
@@ -194,8 +207,7 @@ static void bad_size_counted(void **state)
     send_bytes(port, junk, sizeof junk);
     uint64_t end = xrd_now_ns() + DEADLINE_NS;
     while (xrd_pose_udp_dropped(s) != 1 && xrd_now_ns() < end) {
-        struct timespec ts = {0, 500000};
-        nanosleep(&ts, NULL);
+        xrd_sleep_ns(500000);
     }
     assert_int_equal(xrd_pose_udp_dropped(s), 1);
     xrd_pose p;
@@ -230,7 +242,7 @@ static void port_in_use_fails(void **state)
     snprintf(want, sizeof want, "%d", port);
     assert_null(xrd_pose_source_create(spec, err, sizeof err));
     assert_non_null(strstr(err, want));
-    close(holder);
+    sock_close(holder);
 }
 
 static void seq_increments(void **state)
@@ -325,5 +337,10 @@ int main(void)
         cmocka_unit_test(destroy_accepts_null),
         cmocka_unit_test(port_reusable_after_destroy),
     };
+#ifdef _WIN32
+    WSADATA wsa; /* the test's own sockets, before the backend's WSAStartup */
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+        return 1;
+#endif
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

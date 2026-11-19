@@ -1468,11 +1468,20 @@ int main(int argc, char **argv)
                 /* "not vaapi" on Linux by default: the smoke tests match it. */
                 snprintf(err, sizeof err, "hardware decoding is '%s', not %s",
                          hw[0] ? hw : "unknown", hwdec);
+                const char *note = xrd_platform_hwdec_note(plat);
                 if (cfg.require_hwdec) {
-                    fail("%s (--require-hwdec)", err);
+                    char why[sizeof err + 160];
+                    snprintf(why, sizeof why, "%s (--require-hwdec)%s%s", err,
+                             note[0] ? "; " : "", note);
+                    fail("%s", why);
                     goto out;
                 }
-                fprintf(stderr, "xrdome: warning: %s; decoding in software\n", err);
+                /* not zero-copy, yet a decoder: a "-copy" variant */
+                bool copy = hw[0] && strcmp(hw, "no") != 0;
+                fprintf(stderr, "xrdome: warning: %s; decoding %s\n", err,
+                        copy ? "in hardware through a copy" : "in software");
+                if (note[0])
+                    fprintf(stderr, "xrdome: note: %s\n", note);
             }
         } else if (tex && cfg.mpv_scale[0]) {
             int tw, th;

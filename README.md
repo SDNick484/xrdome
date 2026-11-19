@@ -185,7 +185,8 @@ start gives a tilted picture, and `R` does not correct that. Hold your head leve
 `--layout auto|sbs-lr|sbs-rl|tb-lr|tb-rl|mono`, `--packing auto|half|full`,
 `--zoom-mode screen|magnify`, `--screen fixed|locked`, `--screen-curve off|R`, `--mipmap on|off`,
 `--windowed`, `--sbs-switch auto|off`,
-`--hwdec NAME` (mpv's hwdec; default `vaapi` on Linux, `videotoolbox` on macOS; for example
+`--hwdec NAME` (mpv's hwdec; default `vaapi` on Linux, `videotoolbox` on macOS, `d3d11va-copy`
+on Windows; for example
 `nvdec` or `auto-safe` on an NVIDIA machine), `--require-hwdec` (exit 1 unless mpv decodes
 zero-copy: any decoder but `no` and the `-copy` ones), `--timing-log PATH`,
 `--content-fov HxV`, `--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)),
@@ -312,7 +313,8 @@ never asks and fails as before. `--windowed` never looks for the glasses' output
 ### Config file
 
 xrdome reads `$XDG_CONFIG_HOME/xrdome/config.ini`, or `~/.config/xrdome/config.ini` when
-`XDG_CONFIG_HOME` is unset, empty or not an absolute path. A missing file is fine. Precedence, lowest
+`XDG_CONFIG_HOME` is unset, empty or not an absolute path (Windows: `%APPDATA%\xrdome\config.ini`,
+unless `XDG_CONFIG_HOME` is set and absolute). A missing file is fine. Precedence, lowest
 to highest: built-in defaults, built-in device values, the ini file, the command line.
 
 `[general]` keys: `pose` (same spec as `--pose`, default `udp-opentrack:port=4242`), `output`
@@ -663,7 +665,8 @@ given. There is no flag for swap-eyes, so a recorded swap is always restored.
 
 Records are one small file per video, in
 `$XDG_STATE_HOME/xrdome/files/`, or `~/.local/state/xrdome/files/` when `XDG_STATE_HOME` is unset,
-empty or not an absolute path. The directories are created on first save with mode 0700. The file
+empty or not an absolute path (Windows: `%LOCALAPPDATA%\xrdome\files\`, unless `XDG_STATE_HOME` is
+set and absolute). The directories are created on first save with mode 0700. The file
 name is the video's key, `<size>-<hash>.ini`: the size in bytes, then a 64-bit FNV-1a hash (16
 lowercase hex digits) over the first 64 KiB and the last 64 KiB of the file, for example
 `8123456789-9f3c0a1b22d4e6f7.ini`. The key comes from the file's content, not its name, so
@@ -998,6 +1001,33 @@ frame timing through the compositor, and VideoToolbox limits (no AV1 hardware de
 For glasses not built in, add a `[device.NAME]` section, for example `fov_diag = 57` for an XREAL
 One Pro (XREAL's figure, not measured), and keep their own screen stabilisation off (head-locked),
 or head turns are corrected twice.
+
+### Windows 11 (experimental)
+
+xrdome builds on Windows 11 x64 with MSYS2's UCRT64 toolchain (CI builds it and runs the unit
+tests on `windows-latest`), but it has not been run on glasses there. On Windows: SDL uses its
+windows driver with a WGL GL 3.3 core context, mpv gets no X11 display and decodes with
+`d3d11va-copy` (libmpv's GL render API maps D3D11 frames into GL without a copy only through
+ANGLE, so with WGL the decoded frame is copied; `--require-hwdec` refuses a `-copy` decoder, so do
+not pass it there), the glasses' window is desktop fullscreen on their display, and the automatic
+SBS switch is off (XRLinuxDriver is Linux only): switch the glasses to SBS with their own button.
+Head tracking comes over the same OpenTrack UDP port (for example from opentrack itself); without
+one use `--pose null`. Config is in `%APPDATA%\xrdome\config.ini` and per-file records in
+`%LOCALAPPDATA%\xrdome\files\`. The executable's manifest sets the UTF-8 code page, so file names
+with any characters work as on Linux. The depth helper is not available: photos without cached
+depth show in 2D and films get no 3D.
+
+In the "MSYS2 UCRT64" shell:
+
+```sh
+pacman -S --needed mingw-w64-ucrt-x86_64-{gcc,meson,ninja,pkgconf,sdl2-compat,libepoxy,mpv,cmocka,ffmpeg}
+meson setup build && meson compile -C build && meson test -C build
+./build/xrdome.exe --pose null --timing-log win.csv --frames 3600 video.mp4
+```
+
+Run it from that shell, or copy the DLLs it needs (`ldd build/xrdome.exe`) next to it. Unknown until
+tried on hardware: window placement on the glasses, the WGL context, whether `d3d11va-copy` holds
+60 fps at 3840x1080, and frame timing.
 
 ## Diagnostics
 

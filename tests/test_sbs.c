@@ -10,6 +10,8 @@
 #include <unistd.h>
 #include <cmocka.h>
 
+#include "test_compat.h"
+
 #include "display/output.h"
 #include "display/sbs.h"
 #include "driver/xrdriver.h"

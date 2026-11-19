@@ -106,7 +106,8 @@ void xrd_vring_depth_write(void *mem, uint64_t m, uint64_t frame, const uint16_t
 int xrd_vring_shm_name(char *buf, size_t len, long pid, unsigned n);
 /* Creates the named shared-memory object (mode 0600; a stale one of the same
  * name is replaced), sizes it, maps it and initialises the ring. NULL with
- * err set on failure (nothing is left behind). */
+ * err set on failure (nothing is left behind). Windows: always NULL
+ * (no POSIX shared memory; films stay 2D). */
 void *xrd_vring_shm_create(const char *name, char *err, size_t errlen);
 /* Marks the ring closed, unmaps it and removes the name (the helper may
  * already have removed it; its mapping lives on until it unmaps). NULL is
