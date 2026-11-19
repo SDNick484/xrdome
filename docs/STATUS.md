@@ -11,8 +11,9 @@ Plan: `docs/superpowers/plans/2026-11-11-xrdome.md` (Tasks 0-10 done; Task 10's 
 - Head tracking from XRLinuxDriver over OpenTrack UDP (port 4242); recenter keys; seek; audio.
 - Frame timing: 0.6% late frames with defaults (mpv profile `fast`, bicubic, 10-bit FBO + dither).
 - Options and keys: see README.
-- CI (GitHub Actions) builds with `-Dwerror=true` and runs the whole suite, failing if any of the five
-  Xvfb smoke tests (`smoke`, `smoke_tracking`, `smoke_sbs`, `smoke_photos`, `smoke_depth`) skips, in two jobs: Ubuntu 24.04 (mpv 0.37)
+- CI (GitHub Actions) builds with `-Dwerror=true` and runs the whole suite, failing if any of the six
+  Xvfb smoke tests (`smoke`, `smoke_tracking`, `smoke_sbs`, `smoke_photos`, `smoke_depth`,
+  `smoke_depth_serve`) skips, in two jobs: Ubuntu 24.04 (mpv 0.37)
   and an `archlinux:latest` container (gcc 16.2.1, mpv 0.41 / libmpv 2.5.0, `sdl2-compat` 2.32.74 on
   SDL3, Mesa 26.2 on 2026-11-14). Arch's SDL adds `-D_GNU_SOURCE=1` to the cflags, and its
   `xvfb-run` (T2 SDE's copy of an old Debian script) sleeps 3 s per start, so `smoke` takes about 315 s there; that job
@@ -938,6 +939,42 @@ N=16 2.65 / 3.66, N=32 3.39 / 4.52, N=64 4.20 / 5.54 ms. N = 16 leaves wide head
 mesh fallback needed.
 
 Not seen by eye on the glasses: default strength and plane, doubled edges (owner).
+
+## Depth helper service (issue #70, Task 5 of the depth 3D plan, 2026-11-19)
+
+Spec `docs/superpowers/specs/2026-11-19-depth-3d-design.md` section 7. A photo without cached depth
+opens in 2D and turns 3D when `xrdome-tools depth serve` has made its depth. README, Depth 3D for
+photos; docs/tools.md, depth serve.
+- Helper (`tools/xrdome_depth/serve.py`, launcher `depth serve`): one thread, `selectors` loop,
+  Unix socket mode 0600, JSON lines. Cached photos are answered at once; the queue gives the newest
+  non-prefetch photo first, then the newest prefetch; input is drained before each photo, so the
+  newest request is known when the next one is chosen. The 518x392 model is loaded and run once
+  before the socket opens; the 392x518 one on the first portrait photo. Refuses `setup depth --cpu`.
+  Exits after 10 minutes idle (no client, nothing queued).
+- Replies carry `path` (an addition to the spec's example), since they come back out of order.
+- Player (`src/app/depthclient.c`): non-blocking `AF_UNIX` socket (`fcntl`, no `SOCK_NONBLOCK`;
+  `MSG_NOSIGNAL` on Linux, `SO_NOSIGPIPE` on macOS), polled once per frame. The helper is started
+  with `posix_spawnp` (own process group, stdin `/dev/null`, stdout and stderr to
+  `xrdome-depth.log` beside the socket, other descriptors closed on glibc 2.34+ and macOS) only
+  when a request needs it and the socket does not answer: a single cached photo starts nothing; a
+  directory starts it for the prefetches. It is waited for up to 30 s (it loads and warms the
+  model first); its exit, a failed start, a timeout or a lost connection is one note for the run.
+  xrdome does not stop the helper at exit.
+- Socket path: `$XDG_RUNTIME_DIR/xrdome-depth.sock`, else `xrdome-depth-<uid>.sock` in `$TMPDIR`
+  or `/tmp` (macOS has no `XDG_RUNTIME_DIR`); C and Python compute it the same way.
+- `--depth-helper PROGRAM|off`, ini `depth_helper`. `smoke_photos` and `smoke_depth` run with
+  `depth_helper = off` and their own `XDG_RUNTIME_DIR`, so their output is as before.
+- Tests: `test_depthclient` (paths, request escaping, reply parsing, against an in-test server, a
+  helper that is missing, exits, starts late or never answers, writes to a closed peer),
+  `tools/tests/test_depth_serve.py` (protocol, queue order, the socket loop with a fake depth maker,
+  the launcher), `smoke_depth_serve` under Xvfb with `tests/fake_depth_helper.py` (serve.py's loop
+  and a fake step depth): 2D then 3D, a cached photo starting nothing, a running helper reused,
+  directory prefetch and PageDown, a missing, exiting and failing helper, `off`.
+
+Not run: the real model behind the socket (no depth venv on the development machine) and the
+owner's check: browse 20 photos on the glasses, each 3D within about 1 s, `--timing-log` < 1%
+missed. Reading the depth file (up to 2048x1536, 6 MB) and the texture upload happen in the frame
+the reply lands, as with a cached depth at PageDown; their cost on the glasses is unmeasured.
 
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.

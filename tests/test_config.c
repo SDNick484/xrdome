@@ -585,6 +585,33 @@ static void sharpen_flag_and_ini(void **state)
     }
 }
 
+/* --depth-helper and [general] depth_helper: a program, or off (""); the flag
+ * wins over the ini. */
+static void depth_helper_flag_and_ini(void **state)
+{
+    (void)state;
+    xrd_config c;
+    char err[256] = "";
+    xrd_config_defaults(&c);
+    assert_string_equal(c.depth_helper, "xrdome-tools");
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--depth-helper", "/opt/x/xrdome-tools"), 0);
+    assert_string_equal(c.depth_helper, "/opt/x/xrdome-tools");
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--depth-helper", "off"), 0);
+    assert_string_equal(c.depth_helper, "");
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--depth-helper", ""), -1);
+    assert_string_equal(err, "--depth-helper: expected off or a program");
+
+    char path[64];
+    write_tmp(path, "[general]\ndepth_helper = off\n");
+    char *none[] = {"xrdome", "photo.jpg", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 2, none, err, sizeof err), 0);
+    assert_string_equal(c.depth_helper, "");
+    char *flag[] = {"xrdome", "--depth-helper", "helper", "photo.jpg", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 4, flag, err, sizeof err), 0);
+    assert_string_equal(c.depth_helper, "helper");
+    unlink(path);
+}
+
 static void ini_screen_curve(void **state)
 {
     (void)state;
@@ -1594,6 +1621,7 @@ int main(void)
         cmocka_unit_test(flag_screen_curve),
         cmocka_unit_test(ini_screen_curve),
         cmocka_unit_test(sharpen_flag_and_ini),
+        cmocka_unit_test(depth_helper_flag_and_ini),
         cmocka_unit_test(flat_ini_keys),
         cmocka_unit_test(flat_zoom_default_survives_zoom_flag),
         cmocka_unit_test(flat_ini_bad_values_name_file_and_line),

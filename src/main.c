@@ -12,6 +12,7 @@
 #include <time.h>
 
 #include "app/controls.h"
+#include "app/depthclient.h"
 #include "app/imagedir.h"
 #include "app/session.h"
 #include "config.h"
@@ -122,6 +123,9 @@ typedef struct {
     int depth_w, depth_h;    /* the open photo's depth in the renderer; 0 x 0 for none */
     bool depth_checked;      /* its aspect was checked against the picture shown */
     const char *depth_why;   /* why the open file has no depth (D and I), NULL when it has */
+    xrd_depthclient *dc;     /* the depth helper (depth serve); NULL when off or not photos */
+    char depth_asked[XRD_DEPTH_PATH_MAX]; /* the open photo's absolute path while the helper
+                                             makes its depth; "" otherwise */
 } xrd_app;
 
 /* F of spec 5.3 for the frame now playing: the video texture's (coded) size
@@ -383,45 +387,25 @@ static void report_display_changes(const xrd_controls *before, const xrd_control
         print_depth(after, "");
 }
 
-/* Depth 3D (spec 6 and 7 of the depth 3D design): the cached depth of the
- * photo now open, read into the renderer, or why there is none. At start and
- * for each photo; one depth: line, warning or note per photo. The depth's
- * aspect is checked against the picture once it is shown (depth_fits). */
-static void depth_load(xrd_app *a)
+/* A depth file for the photo now open, read into the renderer: false when it
+ * does not exist (nothing printed), true otherwise, with the depth: line or a
+ * warning or note saying why the photo stays 2D. from: where the file came
+ * from, for the depth: line. */
+static bool depth_take(xrd_app *a, const char *path, const char *from)
 {
-    xrd_renderer_set_depth(a->r, NULL, 0, 0, NULL, 0);
-    a->depth_w = a->depth_h = 0;
-    a->depth_checked = false;
-    a->depth_why = "not a photo";
-    if (!a->det.image)
-        return;
-    const char *file = a->cfg->file;
-    char key[XRD_DEPTH_KEY_LEN + 1], dir[4096], path[4200], err[256] = "";
-    if (xrd_depth_key(file, key) != 0) {
-        a->depth_why = "the photo cannot be read";
-        fprintf(stderr, "xrdome: warning: cannot read %s for its depth key: %s\n", file,
-                strerror(errno));
-        return;
-    }
-    if (xrd_depth_cache_dir(dir, sizeof dir) != 0 ||
-        xrd_depth_cache_path(dir, key, path, sizeof path) != 0) {
-        a->depth_why = "no cache directory (XDG_CACHE_HOME and HOME unset)";
-        fprintf(stderr, "depth: none: %s\n", a->depth_why);
-        return;
-    }
+    char err[256] = "";
     xrd_depthmap m;
     switch (xrd_depthmap_read(path, &m, err, sizeof err)) {
     case XRD_DEPTH_NONE:
-        a->depth_why = "none cached (xrdome-tools depth photo makes it)";
-        fprintf(stderr, "depth: none cached; 2D (xrdome-tools depth photo makes it)\n");
-        return;
+        return false;
     case XRD_DEPTH_BAD:
         a->depth_why = "its cache file is unreadable";
         fprintf(stderr, "xrdome: warning: depth %s: %s; showing the photo in 2D\n", path, err);
-        return;
+        return true;
     case XRD_DEPTH_OK:
         break;
     }
+    const char *file = a->cfg->file;
     int orient = xrd_exif_orientation(file);
     if (!xrd_depth_orientation_ok(orient, a->mpv_major, a->mpv_minor)) {
         a->depth_why = "mirrored by EXIF, and this mpv does not mirror it";
@@ -434,10 +418,116 @@ static void depth_load(xrd_app *a)
     } else {
         a->depth_w = m.w;
         a->depth_h = m.h;
+        a->depth_checked = false;
         a->depth_why = NULL;
-        fprintf(stderr, "depth: %dx%d from the cache\n", m.w, m.h);
+        fprintf(stderr, "depth: %dx%d from %s\n", m.w, m.h, from);
     }
     xrd_depthmap_free(&m);
+    return true;
+}
+
+/* Asks the depth helper (spec 7) for path; false when there is none to ask.
+ * prefetch: for a photo that is not open (the next and previous). */
+static bool depth_ask(xrd_app *a, const char *path, bool prefetch, char *abs, size_t abslen)
+{
+    if (!a->dc || xrd_depthclient_failed(a->dc) || xrd_depth_abs_path(path, abs, abslen) != 0)
+        return false;
+    return xrd_depthclient_request(a->dc, abs, prefetch);
+}
+
+/* The photos either side of the open one, so that their depth is ready when
+ * PageDown or PageUp gets there; the next one is asked last, so it is the
+ * helper's newest prefetch. */
+static void depth_prefetch(xrd_app *a)
+{
+    if (a->photos.count < 2)
+        return;
+    for (int d = -1; d <= 1; d += 2) {
+        long i = xrd_imagedir_step(&a->photos, a->photo_index, d);
+        char abs[XRD_DEPTH_PATH_MAX];
+        if (i >= 0)
+            depth_ask(a, a->photos.path[i], true, abs, sizeof abs);
+    }
+}
+
+/* Depth 3D (spec 6 and 7 of the depth 3D design): the depth of the photo now
+ * open, from the cache, else asked of the depth helper (the reply arrives in
+ * depth_poll), or why there is none. At start and for each photo; one depth:
+ * line, warning or note per photo. The depth's aspect is checked against the
+ * picture once it is shown (depth_fits). */
+static void depth_load(xrd_app *a)
+{
+    xrd_renderer_set_depth(a->r, NULL, 0, 0, NULL, 0);
+    a->depth_w = a->depth_h = 0;
+    a->depth_checked = false;
+    a->depth_why = "not a photo";
+    a->depth_asked[0] = '\0';
+    if (!a->det.image)
+        return;
+    const char *file = a->cfg->file;
+    char key[XRD_DEPTH_KEY_LEN + 1], dir[4096], path[4200];
+    if (xrd_depth_key(file, key) != 0) {
+        a->depth_why = "the photo cannot be read";
+        fprintf(stderr, "xrdome: warning: cannot read %s for its depth key: %s\n", file,
+                strerror(errno));
+        return;
+    }
+    if (xrd_depth_cache_dir(dir, sizeof dir) != 0 ||
+        xrd_depth_cache_path(dir, key, path, sizeof path) != 0) {
+        a->depth_why = "no cache directory (XDG_CACHE_HOME and HOME unset)";
+        fprintf(stderr, "depth: none: %s\n", a->depth_why);
+        return;
+    }
+    if (depth_take(a, path, "the cache"))
+        return;
+    if (depth_ask(a, file, false, a->depth_asked, sizeof a->depth_asked)) {
+        a->depth_why = "the depth helper is making it";
+        fprintf(stderr, "depth: none cached; asking the depth helper\n");
+        return;
+    }
+    a->depth_asked[0] = '\0';
+    if (a->dc) {
+        a->depth_why = "none cached, and the depth helper is not running";
+        fprintf(stderr, "depth: none cached; 2D (the depth helper is not running)\n");
+    } else {
+        a->depth_why = "none cached (xrdome-tools depth photo makes it)";
+        fprintf(stderr, "depth: none cached; 2D (xrdome-tools depth photo makes it)\n");
+    }
+}
+
+/* Once per frame, without waiting: the depth helper's replies. The one for
+ * the open photo switches it to 3D; the others (prefetches, photos left
+ * behind) only warmed the cache. A helper that cannot be started or goes away
+ * gives one note for the run. */
+static void depth_poll(xrd_app *a)
+{
+    if (!a->dc)
+        return;
+    xrd_depth_reply rep;
+    xrd_dc_event ev;
+    while ((ev = xrd_depthclient_poll(a->dc, xrd_now_ns(), &rep)) != XRD_DC_NONE) {
+        if (ev == XRD_DC_FAILED) {
+            fprintf(stderr, "xrdome: note: depth helper: %s; photos without cached depth stay "
+                            "2D\n", xrd_depthclient_error(a->dc));
+            if (a->depth_asked[0]) {
+                a->depth_asked[0] = '\0';
+                a->depth_why = "none cached, and the depth helper failed";
+            }
+            continue;
+        }
+        if (!a->depth_asked[0] || strcmp(rep.path, a->depth_asked) != 0)
+            continue;
+        a->depth_asked[0] = '\0';
+        if (!rep.ok) {
+            a->depth_why = "the depth helper could not make it";
+            fprintf(stderr, "xrdome: note: depth helper: %s; showing the photo in 2D\n",
+                    rep.error);
+        } else if (!depth_take(a, rep.depth, "the depth helper")) {
+            a->depth_why = "the depth helper's file is missing";
+            fprintf(stderr, "xrdome: warning: depth %s: the depth helper made it, but it is "
+                            "not there; showing the photo in 2D\n", rep.depth);
+        }
+    }
 }
 
 /* Once the open photo is shown: its depth must have the picture's aspect, or
@@ -833,6 +923,7 @@ static int switch_photo(xrd_app *a, xrd_config *cfg, xrd_session *ss, bool *rend
     a->proj_keyed = a->layout_keyed = a->packing_keyed = false;
     xrd_renderer_set_content_fov(a->r, ss->s.content_hfov, ss->s.content_vfov);
     depth_load(a);
+    depth_prefetch(a);
     apply_format(a);
     *rendered = false;
     return xrd_player_load(a->p, cfg->file, err, errlen);
@@ -1077,7 +1168,18 @@ int main(int argc, char **argv)
     app.timing = timing;
     app.r = r;
     xrd_mpv_version_parse(xrd_player_mpv_version(p), &app.mpv_major, &app.mpv_minor);
+    /* Photos: the depth helper, started on the first request it is needed for. */
+    if (app.det.image && cfg.depth_helper[0]) {
+        char sock[256];
+        if (xrd_depth_socket_path(sock, sizeof sock) != 0)
+            fprintf(stderr, "xrdome: note: depth helper: no socket path (XDG_RUNTIME_DIR or "
+                            "TMPDIR is too long); photos without cached depth stay 2D\n");
+        else if (!(app.dc = xrd_depthclient_new(sock, cfg.depth_helper)))
+            fprintf(stderr, "xrdome: note: depth helper: out of memory; photos without cached "
+                            "depth stay 2D\n");
+    }
     depth_load(&app);
+    depth_prefetch(&app);
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &app.max_tex);
     apply_format(&app); /* before the first xrd_player_update */
     xrd_renderer_set_content_fov(r, ss.s.content_hfov, ss.s.content_vfov);
@@ -1139,6 +1241,7 @@ int main(int argc, char **argv)
             fail("%s", err);
             goto out;
         }
+        depth_poll(&app); /* never waits for the helper */
 
         if (xrd_player_update(p) < 0) {
             fail("%s", xrd_player_error(p));
@@ -1322,6 +1425,7 @@ out:
     xrd_timing_close(timing); /* prints the missed-vsync summary */
     xrd_player_free(p);       /* needs the GL context current */
     xrd_imagedir_free(&app.photos);
+    xrd_depthclient_free(app.dc); /* a helper it started keeps running, warm, until idle */
     xrd_renderer_free(r);
     if (gl)
         SDL_GL_DeleteContext(gl);

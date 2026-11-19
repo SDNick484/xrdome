@@ -74,6 +74,18 @@ static int set_string(const char *what, char *dst, size_t dstlen, const char *sr
     return 0;
 }
 
+/* --depth-helper and depth_helper: off, or the program to start (a name looked
+ * up in PATH, or a path). */
+static int parse_depth_helper(const char *what, const char *s, char *dst, size_t dstlen,
+                              char *err, size_t errlen)
+{
+    if (s[0] == '\0') {
+        set_err(err, errlen, "%s: expected off or a program", what);
+        return -1;
+    }
+    return set_string(what, dst, dstlen, strcmp(s, "off") == 0 ? "" : s, err, errlen);
+}
+
 /* --mpv-scale and mpv_scale: off, or an mpv scaler name (mpv checks the name
  * when it starts). */
 static int parse_mpv_scale(const char *what, const char *s, char *dst, size_t dstlen,
@@ -227,6 +239,7 @@ void xrd_config_defaults(xrd_config *c)
     c->mipmap = true;
     c->sbs_switch = true;
     copy_str(c->ffprobe, sizeof c->ffprobe, "ffprobe");
+    copy_str(c->depth_helper, sizeof c->depth_helper, "xrdome-tools");
 }
 
 int xrd_config_default_path(char *buf, size_t len)
@@ -348,6 +361,9 @@ static int ini_read(xrd_config *c, const char *path, bool *device_found, char *e
             rc = parse_hwdec("hwdec", val, c->hwdec, sizeof c->hwdec, msg, sizeof msg);
         } else if (sec == SEC_GENERAL && !strcmp(key, "ffprobe")) {
             rc = set_string("ffprobe", c->ffprobe, sizeof c->ffprobe, val, msg, sizeof msg);
+        } else if (sec == SEC_GENERAL && !strcmp(key, "depth_helper")) {
+            rc = parse_depth_helper("depth_helper", val, c->depth_helper, sizeof c->depth_helper,
+                                    msg, sizeof msg);
         } else if (sec == SEC_GENERAL && !strcmp(key, "sharpen")) {
             rc = parse_ranged("sharpen", val, 0.f, XRD_SHARPEN_MAX, &c->sharpen, msg, sizeof msg);
         } else if (sec == SEC_GENERAL && !strcmp(key, "mpv_scale")) {
@@ -382,7 +398,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
            OPT_MPV_PROFILE, OPT_MPV_OPT, OPT_MPV_LOG, OPT_CONVERGENCE, OPT_FILTER,
            OPT_FBO_FORMAT, OPT_DITHER, OPT_NO_MEMORY, OPT_FORGET, OPT_RESUME, OPT_NO_RESUME,
            OPT_PACKING, OPT_ZOOM_MODE, OPT_SCREEN, OPT_MIPMAP, OPT_DEBAND, OPT_SCREEN_CURVE,
-           OPT_SBS_SWITCH, OPT_MPV_SCALE, OPT_SHARPEN, OPT_HWDEC_NAME };
+           OPT_SBS_SWITCH, OPT_MPV_SCALE, OPT_SHARPEN, OPT_HWDEC_NAME, OPT_DEPTH_HELPER };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
         {"layout", required_argument, NULL, OPT_LAYOUT},
@@ -421,6 +437,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"mipmap", required_argument, NULL, OPT_MIPMAP},
         {"screen-curve", required_argument, NULL, OPT_SCREEN_CURVE},
         {"sbs-switch", required_argument, NULL, OPT_SBS_SWITCH},
+        {"depth-helper", required_argument, NULL, OPT_DEPTH_HELPER},
         {NULL, 0, NULL, 0},
     };
 
@@ -465,6 +482,10 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
             break;
         case OPT_POSE:
             rc = set_string("--pose", c->pose, sizeof c->pose, optarg, err, errlen);
+            break;
+        case OPT_DEPTH_HELPER:
+            rc = parse_depth_helper("--depth-helper", optarg, c->depth_helper,
+                                    sizeof c->depth_helper, err, errlen);
             break;
         case OPT_OUTPUT:
             rc = set_string("--output", c->output, sizeof c->output, optarg, err, errlen);

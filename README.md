@@ -191,7 +191,8 @@ zero-copy: any decoder but `no` and the `-copy` ones), `--timing-log PATH`,
 `--content-fov HxV`, `--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)),
 `--mpv-profile NAME`, `--mpv-opt KEY=VALUE` (repeatable, up to 16), `--mpv-log LEVEL`,
 `--mpv-scale off|NAME`, `--convergence DEG`, `--filter bilinear|bicubic|bicubic-ar|mitchell`,
-`--sharpen S`, `--fbo-format rgb10|rgba8`, `--dither on|off`, `--deband on|off`, `--no-memory`, `--forget`,
+`--sharpen S`, `--fbo-format rgb10|rgba8`, `--dither on|off`, `--deband on|off`,
+`--depth-helper PROGRAM|off` (see [Depth 3D for photos](#depth-3d-for-photos)), `--no-memory`, `--forget`,
 `--resume`, `--no-resume` (the last four are described under
 [Per-file settings](#per-file-settings)).
 
@@ -321,7 +322,8 @@ to highest: built-in defaults, built-in device values, the ini file, the command
 `auto`), `ffprobe` (the program run for format detection, default `ffprobe` looked up on
 `PATH`), `deband` (`yes` or `no`, also `on` or `off`, as `--deband`, default `no`),
 `mpv_scale` (`off` or an mpv scaler name, as `--mpv-scale`, default `off`), `sharpen` (0 to 1,
-as `--sharpen`, default 0, off) and `hwdec` (as `--hwdec`, default by platform).
+as `--sharpen`, default 0, off), `depth_helper` (as `--depth-helper`, default `xrdome-tools`) and
+`hwdec` (as `--hwdec`, default by platform).
 
 `[device.<name>]` keys, read for the device selected with `--device` (default `viture-pro`):
 `fov_diag` (diagonal FOV in degrees, 10 to 120), `zoom` (the VR180 zoom, 0.25 to 4, default 1)
@@ -342,6 +344,7 @@ ffprobe = /usr/bin/ffprobe
 deband = no
 mpv_scale = off
 sharpen = 0
+depth_helper = xrdome-tools
 
 [device.viture-pro]
 fov_diag = 43
@@ -471,12 +474,34 @@ sideways by their depth, nearer points out of the screen and further ones into i
 with [`xrdome-tools depth photo FILE|DIR`](docs/tools.md#depth) (it needs `xrdome-tools setup
 depth`); xrdome finds it by the sha256 of the photo's bytes, in
 `$XDG_CACHE_HOME/xrdome-tools/depth/` (default `~/.cache/xrdome-tools/depth/`), and prints
-`depth: 1365x2048 from the cache` when it opens the photo, or `depth: none cached; 2D
-(xrdome-tools depth photo makes it)`. Asking the helper for depth on the fly is not there yet.
+`depth: 1365x2048 from the cache` when it opens the photo.
+
+Without a cached depth, xrdome asks the depth helper for it and shows the photo in 2D meanwhile:
+`depth: none cached; asking the depth helper`, then, about a second later (a few seconds for the
+first photo, while the helper starts), `depth: 1365x2048 from the depth helper` and the photo turns
+3D. In a directory the previous and next photos are asked for too, so PageDown usually lands on a
+photo whose depth is ready. The helper is
+[`xrdome-tools depth serve`](docs/tools.md#depth-serve), which needs `xrdome-tools setup depth`
+(and a Vulkan GPU: it refuses to run on the CPU, which would cost xrdome frames). xrdome starts it
+the first time it needs it, unless one is already running; it keeps its model loaded between
+photos and runs, and exits by itself after 10 minutes with no xrdome connected. Its output goes to
+`xrdome-depth.log` beside its socket.
+
+- Socket: `$XDG_RUNTIME_DIR/xrdome-depth.sock`; without `XDG_RUNTIME_DIR` (macOS),
+  `xrdome-depth-<uid>.sock` in `$TMPDIR`, or in `/tmp`.
+- `--depth-helper PROGRAM|off` (ini `depth_helper`, default `xrdome-tools` on `PATH`): the
+  program started as `PROGRAM depth serve --socket SOCKET`. `off` neither starts nor asks a helper:
+  photos without cached depth stay 2D with `depth: none cached; 2D (xrdome-tools depth photo makes
+  it)`.
+- A helper that cannot be started, exits (`setup depth` not done, no GPU) or stops answering gives
+  one `xrdome: note: depth helper: ...; photos without cached depth stay 2D` for the run, naming its
+  log; xrdome goes on in 2D. A photo the helper cannot read gives a note for that photo.
+- The socket is only read and written without waiting, once per frame; reading the finished depth
+  file and uploading it happens in the frame its reply arrives.
 
 ```
-xrdome-tools depth photo ~/Pictures/holiday/
-xrdome ~/Pictures/holiday/
+xrdome ~/Pictures/holiday/                        # depth made on the fly
+xrdome-tools depth photo ~/Pictures/holiday/      # or all of it ahead of time
 ```
 
 - Disparity: a point of depth `z` (0 furthest, 1 nearest in the photo) is shifted by

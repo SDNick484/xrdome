@@ -55,6 +55,9 @@ typedef struct {
                               else the radius, XRD_SCREEN_CURVE_MIN..MAX */
     bool mipmap;           /* --mipmap on|off, default on */
     char ffprobe[256];     /* [general] ffprobe, default "ffprobe" */
+    char depth_helper[256]; /* --depth-helper, [general] depth_helper: the program started as
+                              "<it> depth serve" for photo depth; default "xrdome-tools";
+                              "" = off (neither started nor asked) */
     /* development only (smoke test), not documented: */
     int frames;            /* --frames N: exit 0 after N presented frames
                               once a video frame has been rendered; 0 = off */

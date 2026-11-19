@@ -20,6 +20,12 @@ export LIBGL_ALWAYS_SOFTWARE=1
 export XRDOME_XR_DRIVER_DIR="$work/no-xr-driver"
 export XDG_STATE_HOME="$work/state"
 export XDG_CACHE_HOME="$work/cache"
+# No depth helper here (smoke_depth_serve.sh tests it): neither started nor
+# asked, and a helper the user runs is not reached.
+export XDG_RUNTIME_DIR="$work/run"
+export XDG_CONFIG_HOME="$work/config"
+mkdir -p "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME/xrdome"
+printf '[general]\ndepth_helper = off\n' >"$XDG_CONFIG_HOME/xrdome/config.ini"
 cache="$XDG_CACHE_HOME/xrdome-tools/depth"
 mkdir -p "$cache"
 

@@ -318,6 +318,7 @@ programs' output against these command lines (the tests use stand-ins).
 ## depth
 
     xrdome-tools depth photo FILE|DIR [--force]
+    xrdome-tools depth serve [--socket PATH] [--idle-exit SECONDS]
 
 Writes the depth cache the player reads for 3D photos (depth-based 3D, spec section 5 of
 `docs/superpowers/specs/2026-11-19-depth-3d-design.md`). Needs `setup depth`; without it the
@@ -351,6 +352,39 @@ The cache file, which the player computes the same way:
 Not verified on hardware: the times (the spike measured about 400 ms per photo warm, a few
 seconds cold start for the process and the model load) and a camera-rotated photo on the real
 model.
+
+### depth serve
+
+The helper service xrdome asks for depth when it opens a photo with none cached (spec section 7).
+xrdome starts it by itself (README, Depth 3D for photos); running it by hand is for keeping it warm
+or seeing its output. The work is done by `tools/xrdome_depth/serve.py` in the depth venv: it loads
+the 518x392 model and runs it once before it opens the socket (a few seconds), then serves photos
+with `depth photo`'s code, writing the same cache files.
+
+- Socket: `--socket PATH`, default `$XDG_RUNTIME_DIR/xrdome-depth.sock`; without an absolute
+  `XDG_RUNTIME_DIR` (macOS has none), `xrdome-depth-<uid>.sock` in `$TMPDIR` when it is absolute,
+  else in `/tmp`. The socket is made mode 0600. A stale socket file is replaced; if another helper
+  already answers on it, this one says so and exits 0.
+- Protocol: one JSON object per line each way, UTF-8; a file name that is not UTF-8 travels as its
+  bytes. Request `{"op": "photo", "path": "/abs/photo.jpg", "prefetch": false}`. Reply
+  `{"ok": true, "path": "/abs/photo.jpg", "depth": "<cache file>"}` or
+  `{"ok": false, "path": "/abs/photo.jpg", "error": "..."}`; `path` repeats the request's, since
+  replies come back in the order the photos are done, not asked. A request that cannot be parsed
+  gets an error reply without `path`.
+- Order: a photo already cached is answered at once. The rest are done newest first among the
+  requests that are not prefetches, then the prefetches, newest first too. Asking again for a
+  queued photo makes it the newest (and a non-prefetch request makes it not a prefetch). Requests
+  from a client that disconnects are dropped; past 256 queued photos the oldest prefetch is
+  dropped with an error reply.
+- GPU only: with `setup depth --cpu` it refuses (exit 2), because depth on the CPU takes frames from
+  xrdome while it renders; `depth photo` still works there. A missing model or no Vulkan GPU stops
+  it at start with exit 2 and the reason on stderr (in xrdome's case, the log beside the socket).
+- `--idle-exit SECONDS` (default 600): it exits, removing its socket, after this long with no client
+  connected and nothing queued. SIGTERM also exits cleanly.
+- Output: `depth serve: listening on ...`, then one line per photo as `depth photo` prints it.
+
+Not verified on hardware: the serve loop with the real model (the tests use a fake depth maker), its
+times, and xrdome with it on the glasses (`--timing-log` while browsing 20 photos).
 
 ## Output names and tags
 
