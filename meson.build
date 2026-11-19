@@ -100,10 +100,14 @@ fixture_args = [
   '-DXRD_TESTS_DIR="' + (meson.current_source_dir() / 'tests') + '"',
 ]
 
+# cmocka 2.0's assert macros use the GNU ", ##__VA_ARGS__" extension, which
+# clang reports under -Wpedantic in every test; gcc does not know the flag.
+test_c_args = fixture_args + cc.get_supported_arguments('-Wno-gnu-zero-variadic-macro-arguments')
+
 foreach t : test_names
   exe = executable('test_' + t, 'tests/test_' + t + '.c',
     include_directories : inc,
-    c_args : fixture_args,
+    c_args : test_c_args,
     link_with : xrdcore,
     dependencies : [cmocka_dep, m_dep, threads_dep, epoxy_dep, egl_dep, sdl2_dep, mpv_dep])
   test(t, exe, env : ['LIBGL_ALWAYS_SOFTWARE=1', 'EGL_PLATFORM=surfaceless',
