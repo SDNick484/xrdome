@@ -1025,9 +1025,33 @@ meson setup build && meson compile -C build && meson test -C build
 ./build/xrdome.exe --pose null --timing-log win.csv --frames 3600 video.mp4
 ```
 
-Run it from that shell, or copy the DLLs it needs (`ldd build/xrdome.exe`) next to it. Unknown until
-tried on hardware: window placement on the glasses, the WGL context, whether `d3d11va-copy` holds
-60 fps at 3840x1080, and frame timing.
+Run it from that shell, or use the zip below. Unknown until tried on hardware: window placement on
+the glasses, the WGL context, whether `d3d11va-copy` holds 60 fps at 3840x1080, and frame timing.
+
+**Download the CI artifact.** Open the latest run of the `ci` workflow (any push or pull request, or
+Actions, `ci`, Run workflow) and take `xrdome-win64` from its Artifacts. GitHub wraps it, so unzip
+once to get `xrdome-<version>-win64.zip`, then unzip that anywhere. It needs no MSYS2: `xrdome.exe`,
+`ffprobe.exe` and every DLL they load are in the folder, and `ffprobe.exe` beside `xrdome.exe` is
+used before one on `PATH` (and only when `[general] ffprobe` is not set). Check it with
+`.\xrdome.exe --version`; `README-windows.txt` in the zip has the rest. The glasses must be at 100%
+display scale and in their 3840x1080 SBS mode. The build is not signed, so Windows SmartScreen asks
+once ("More info", "Run anyway").
+
+**Build it yourself.** On a Windows 11 x64 machine without MSYS2, in PowerShell from a checkout:
+`powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1`. It installs MSYS2 with
+`winget install MSYS2.MSYS2` if `C:\msys64` is missing, updates it, then runs
+`packaging/windows/build.sh` in the UCRT64 environment: dependencies with `pacman`, the build and
+the tests, then `dist\xrdome-<version>-win64.zip`. It needs no administrator rights beyond
+whatever winget asks for when it installs MSYS2. In an MSYS2 UCRT64 shell run
+`packaging/windows/build.sh` directly (`--package-only` zips an existing `build/` without
+building again, as CI does).
+
+**Licence.** xrdome is GPL-2.0-or-later. MSYS2's FFmpeg is GPL-3.0-or-later, so the zip as a whole is
+distributed under the GNU GPL version 3 or later, which xrdome's "or later" permits. Nothing in it is
+non-free: `build.sh` stops if `ffprobe -buildconf` shows `--enable-nonfree`, or if a bundled package's
+licence is not open source. `COPYING` is xrdome's licence, `LICENSES/` holds every bundled package's
+licence files, and `SOURCES.md` names each package's exact version and its source archive on
+`mirror.msys2.org` (the offer of corresponding source), with xrdome's own commit.
 
 ## Diagnostics
 

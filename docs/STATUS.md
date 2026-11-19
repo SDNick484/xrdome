@@ -1124,6 +1124,40 @@ flicker` on a near-static shot, `--timing-log` with 3D on against off.
   the smoke tests skip (no xvfb-run). Not run on Windows hardware: window placement on the glasses,
   the WGL context, `d3d11va-copy` at 60 fps, frame timing.
 
+## Windows zip (issue #81, 2026-11-19)
+- CI `windows-build-test` ends with `packaging/windows/build.sh --package-only` (the build above is
+  packaged, not rebuilt), a smoke check from a plain `cmd` shell with only Windows' directories on
+  `PATH` (`xrdome.exe --version`, `ffprobe.exe -version`, `ffprobe.exe` reading a sample), and an
+  upload of `dist/xrdome-<version>-win64.zip` as the artifact `xrdome-win64`. Artifact only: no
+  release, no tag. `ci.yml` also runs on `workflow_dispatch`.
+- `packaging/windows/collect.py` (standard library; tests in `tools/tests/test_windows_collect.py`):
+  `ntldd -R` on `xrdome.exe` and `ffprobe.exe`, keeps the DLLs in `/ucrt64/bin` (never Windows' own),
+  plus `SDL3.dll`, which sdl2-compat's `SDL2.dll` loads at run time and no import table shows. Each
+  file is mapped to its package through pacman's local database (what `pacman -Qo` reads; pacman is
+  an MSYS program and would be given Windows paths). `LICENSES/` gets each package's files from
+  `share/licenses/` (and COPYING-like ones from `share/doc/`); MSYS2's FFmpeg and mpv ship none, so
+  the FSF texts of GPL-3.0, LGPL-2.1 and LGPL-3.0 (`packaging/windows/licenses/`) are added when a
+  bundled package's licence names them. `SOURCES.md`: xrdome's commit, each package's version, source
+  archive (`mirror.msys2.org/mingw/sources/<pkgbase>-<version>.src.tar.zst`) and the ffprobe
+  configure line.
+- Guards: `--enable-nonfree` in `ffprobe -hide_banner -buildconf` stops the build (the configure line
+  is printed); so does a bundled package whose licence is not on the open-source list. A bare
+  `custom` licence passes only for the packages in `REVIEWED_CUSTOM` (someone read their text), so a
+  new one stops the build until it is reviewed.
+- Shared with the macOS bundle (`packaging/bundle_common.py`): the meson version, the non-free check,
+  `ffprobe -buildconf`, COPYING and the sharpen shader's licence, the xrdome and ffprobe sections of
+  SOURCES.md. The dependency walks, package managers and SOURCES.md tables differ and stay apart.
+- `ffprobe` lookup (`src/platform/exepath.c`, the macOS helper extended): on Windows
+  `GetModuleFileNameW` gives the executable's directory, then `<dir>\ffprobe.exe` is used when it
+  exists and the directory is not one of the `;`-separated `PATH` entries (names compared without
+  case, either slash, quotes allowed). The pick takes the platform as an argument, so Windows and
+  POSIX rules are both unit tested on Linux; the Windows branch also ran in a Wine test.
+- Zip size: about 75 MB (140 DLLs, 190 MB unpacked), measured on a local MSYS2 package set; the CI
+  zip's size is in the PR description. Most of it is FFmpeg's own dependencies (ffprobe imports them all).
+- Not run on Windows hardware: the zip on a clean machine with the glasses (window placement, 100%
+  scale, SBS mode, d3d11va-copy, whether mpv needs anything loaded at run time that the DLL walk cannot
+  see), `build.ps1` (winget, the first MSYS2 update) and the CI step's real `ntldd` output.
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship
