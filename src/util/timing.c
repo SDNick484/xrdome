@@ -140,6 +140,13 @@ void xrd_sleep_ns(uint64_t ns)
         return;
     struct timespec ts = {.tv_sec = (time_t)(ns / 1000000000ull),
                           .tv_nsec = (long)(ns % 1000000000ull)};
+#if defined(__APPLE__)
+    /* macOS has no clock_nanosleep; nanosleep is relative and leaves the
+     * remainder in ts when a signal interrupts it. */
+    while (nanosleep(&ts, &ts) == -1 && errno == EINTR)
+        ;
+#else
     while (clock_nanosleep(CLOCK_MONOTONIC, 0, &ts, &ts) == EINTR)
         ;
+#endif
 }
