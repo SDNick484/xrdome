@@ -190,7 +190,38 @@ jobs:
           done
           trap 'sudo -n mv /opt/homebrew.hidden /opt/homebrew || true' EXIT
           lim sudo -n mv /opt/homebrew /opt/homebrew.hidden
-          lim env -i PATH=/usr/bin:/bin ./dist/xrdome/xrdome --version
+          # ffprobe first, alone: it shares most libraries with xrdome.
+          lim env -i PATH=/usr/bin:/bin ./dist/xrdome/ffprobe -version
+          # xrdome in the background with dyld's library trace; --version is the
+          # first thing main() does, so a hang here is in loading, not in xrdome.
+          # Alive after 10 s: sample its stack (what it is stuck in), then kill it.
+          env -i PATH=/usr/bin:/bin DYLD_PRINT_LIBRARIES=1 ./dist/xrdome/xrdome --version \
+              >"$RUNNER_TEMP/xrdome.out" 2>&1 </dev/null &
+          pid=$!
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 1
+          done
+          set +x
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "::error::xrdome --version still running after 10 s"
+            /usr/bin/sample "$pid" 2 -file "$RUNNER_TEMP/sample.txt" || true
+            cat "$RUNNER_TEMP/sample.txt" || true
+            kill -9 "$pid" || true
+            echo "--- dyld library trace so far:"; cat "$RUNNER_TEMP/xrdome.out"
+            exit 1
+          fi
+          rc=0; wait "$pid" || rc=$?
+          echo "--- xrdome --version exited $rc; dyld library trace:"; cat "$RUNNER_TEMP/xrdome.out"
+          if grep -E '/opt/homebrew|/usr/local/' "$RUNNER_TEMP/xrdome.out"; then
+            echo "::error::xrdome loaded a library from Homebrew at run time"
+            exit 1
+          fi
+          if [ "$rc" -ne 0 ] || ! grep -q '^xrdome ' "$RUNNER_TEMP/xrdome.out"; then
+            echo "::error::xrdome --version exited $rc without printing its version"
+            exit 1
+          fi
+          set -x
           streams=$(lim env -i PATH=/usr/bin:/bin ./dist/xrdome/ffprobe -v error -show_streams "$RUNNER_TEMP/sample.mp4")
           grep -q '^codec_type=video' <<<"$streams"
           ls -l dist/*.zip
