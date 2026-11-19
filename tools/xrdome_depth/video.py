@@ -13,9 +13,16 @@ other side and documents the ring; this module mirrors it:
   each on a 4096-byte boundary. Frame n is in slot n % 4; a reader checks the slot's number before and
   after copying (a seqlock), so nobody ever waits for the other side.
 
-The ring, the pacing and the statistics are standard library only (tested without numpy); the depth
-itself needs numpy and the backend, imported where used. `--bench` is `xrdome-tools depth bench-video`:
-it feeds the same loop synthetic frames at --rate and reports the Hz it achieves (the spike's metrics).
+Spec 8 also asks for temporal smoothing: an exponential moving average of the depth (weight 0.5 for the
+newest map) and of the percentile range it is normalised with, reset on a scene cut. The decisions (the
+cut detector, the range average, the weight each map gets) are standard library only, in SceneCut and
+Smoothing; DepthPipeline applies them to the model's output with numpy. tools/xrdome_depth/flicker.py
+measures the result.
+
+The ring, the pacing, the statistics and the smoothing decisions are standard library only (tested
+without numpy); the depth itself needs numpy and the backend, imported where used. `--bench` is
+`xrdome-tools depth bench-video`: it feeds the same loop synthetic frames at --rate and reports the Hz it
+achieves (the spike's metrics).
 """
 
 import argparse
@@ -47,6 +54,9 @@ OFF_FRAME_META = 256
 OFF_DEPTH_META = 512
 
 MAX_HZ = 30.0
+SMOOTH_WEIGHT = 0.5     # weight of the newest depth map (and percentile range) in the moving average
+CUT_THRESHOLD = 0.15    # a scene cut: the mean luma change over the sample grid, of full scale, above this
+CUT_GRID = (32, 18)     # the luma samples compared between two frames (columns, rows)
 POLL_S = 0.004          # how often an idle helper looks at the ring for a new frame
 LOG_EVERY_S = 10.0
 
@@ -300,7 +310,9 @@ class VideoSession:
         self.stats.add(end, end - now)
         self.window.add(end, end - now)
         if end - self.window_start >= self.log_every:
-            self.log(f"video: {self.window.summary()}, newest frame {n}")
+            cuts = getattr(self.depth_fn, "cuts", None)
+            more = "" if cuts is None else f", {cuts} scene cuts so far"
+            self.log(f"video: {self.window.summary()}, newest frame {n}{more}")
             self.window = Stats()
             self.window_start = end
         return True
@@ -312,29 +324,147 @@ class VideoSession:
             self.mm = None
 
 
-def make_depth_fn(backend):
+class SceneCut:
+    """Tells a cut from a frame: the mean luma change, over a coarse grid of sample points, between this
+    frame and the one before, as a fraction of full scale. A cut changes most of the picture (well over
+    CUT_THRESHOLD); motion, a pan and a fade change little between two frames."""
+
+    def __init__(self, threshold: float = CUT_THRESHOLD, grid: tuple[int, int] = CUT_GRID):
+        self.threshold = threshold
+        self.grid = grid
+        self.prev: list[int] | None = None
+        self._offsets: dict[tuple[int, int], list[int]] = {}
+        self.last = 0.0  # the change measured by the latest update
+
+    def reset(self) -> None:
+        self.prev = None
+        self.last = 0.0
+
+    def sample(self, rgba: bytes, width: int, height: int) -> list[int]:
+        """Luma (0 to 255) at the middle of each grid cell."""
+        offs = self._offsets.get((width, height))
+        if offs is None:
+            gx, gy = self.grid
+            offs = [(((2 * j + 1) * height // (2 * gy)) * width + (2 * i + 1) * width // (2 * gx)) * 4
+                    for j in range(gy) for i in range(gx)]
+            self._offsets[(width, height)] = offs
+        return [(rgba[o] * 77 + rgba[o + 1] * 150 + rgba[o + 2] * 29) >> 8 for o in offs]
+
+    def update(self, rgba: bytes, width: int, height: int) -> bool:
+        """Takes the next frame; True when it is a cut from the one before (never for the first)."""
+        cur = self.sample(rgba, width, height)
+        prev, self.prev = self.prev, cur
+        if prev is None:
+            self.last = 0.0
+            return False
+        self.last = sum(abs(a - b) for a, b in zip(cur, prev)) / (255.0 * len(cur))
+        return self.last > self.threshold
+
+
+class Smoothing:
+    """The temporal smoothing's decisions (spec 8): an exponential moving average of the depth, `weight`
+    for the newest map, and the same of the percentile range (lo, hi) the maps are normalised with, both
+    restarted on a scene cut and at the first frame. Numbers only; DepthPipeline applies them."""
+
+    def __init__(self, weight: float = SMOOTH_WEIGHT, cut: SceneCut | None = None):
+        if not 0.0 < weight <= 1.0:
+            raise ValueError(f"the weight of the newest map is more than 0 and at most 1, got {weight}")
+        self.weight = weight
+        self.cut = cut if cut is not None else SceneCut()
+        self.range: tuple[float, float] | None = None
+        self.cuts = 0  # scene cuts seen
+
+    def reset(self) -> None:
+        self.range = None
+        self.cut.reset()
+
+    def step(self, rgba: bytes, width: int, height: int, lo: float, hi: float) -> tuple[float, float, float]:
+        """The next frame, with the percentile range (lo, hi) of its raw depth. Returns the range to
+        normalise it with and alpha, the weight of its normalised depth against the smoothed one before
+        (1.0: take it as it is, after a cut or for the first)."""
+        if self.cut.update(rgba, width, height):
+            self.cuts += 1
+            self.range = None
+        if self.range is None:
+            self.range = (lo, hi)
+            return lo, hi, 1.0
+        a = self.weight
+        plo, phi = self.range
+        self.range = (plo + a * (lo - plo), phi + a * (hi - phi))
+        return self.range[0], self.range[1], a
+
+
+class DepthPipeline:
     """depth_fn for VideoSession: the 322x182 model on an RGBA frame, normalised as photos are (1st and
-    99th percentiles to 0 and 65535). Smoothing over time is not here yet (plan Task 8)."""
-    import numpy as np
+    99th percentiles to 0 and 65535), smoothed over time by `smoothing` (None: not smoothed). One
+    pipeline per film: it holds the previous map; reset() forgets it."""
 
-    from xrdome_depth import photo
+    def __init__(self, backend, smoothing: Smoothing | None = None):
+        import numpy as np
 
-    mean = np.array(photo.MEAN, dtype=np.float32)
-    std = np.array(photo.STD, dtype=np.float32)
+        from xrdome_depth import photo
 
-    def depth_fn(rgba: bytes, width: int, height: int) -> bytes:
+        self.np = np
+        self.photo = photo
+        self.backend = backend
+        self.smoothing = smoothing
+        self.mean = np.array(photo.MEAN, dtype=np.float32)
+        self.std = np.array(photo.STD, dtype=np.float32)
+        self.prev = None  # the previous smoothed map (float32, 0 to 1)
+
+    @property
+    def cuts(self) -> int | None:
+        return None if self.smoothing is None else self.smoothing.cuts
+
+    def reset(self) -> None:
+        self.prev = None
+        if self.smoothing is not None:
+            self.smoothing.reset()
+
+    def infer(self, rgba: bytes, width: int, height: int):
+        """The model's raw inverse depth for the frame (height x width float32, larger = nearer)."""
+        np = self.np
         rgb = np.frombuffer(rgba, dtype=np.uint8).reshape(height, width, 4)[..., :3]
-        x = (rgb.astype(np.float32) / 255.0 - mean) / std  # already the model size: no resize
+        x = (rgb.astype(np.float32) / 255.0 - self.mean) / self.std  # already the model size: no resize
         chw = np.ascontiguousarray(x.transpose(2, 0, 1), dtype=np.float32)
-        unit = photo.normalise(backend.infer(chw, width, height))
-        return np.ascontiguousarray(photo.to_samples(unit), dtype="=u2").tobytes()
+        return self.backend.infer(chw, width, height)
 
-    return depth_fn
+    def unit(self, raw, rgba: bytes, width: int, height: int):
+        """The frame's depth in [0, 1] (float32): the raw depth normalised, then smoothed."""
+        np = self.np
+        if self.smoothing is None:
+            return self.photo.normalise(raw)
+        if not np.isfinite(raw).all():
+            from xrdome_depth.backend import BackendError
+
+            raise BackendError("the model returned a depth with NaN or infinite values")
+        lo, hi = np.percentile(raw, self.photo.PERCENTILES)
+        lo, hi, alpha = self.smoothing.step(rgba, width, height, float(lo), float(hi))
+        if hi > lo:
+            unit = np.clip((raw - lo) / (hi - lo), 0.0, 1.0).astype(np.float32)
+        else:  # a flat depth has no relative information: on the default screen plane, as photos
+            unit = np.full(raw.shape, 0.5, dtype=np.float32)
+        if alpha < 1.0 and self.prev is not None and self.prev.shape == unit.shape:
+            unit = (self.prev + alpha * (unit - self.prev)).astype(np.float32)
+        self.prev = unit
+        return unit
+
+    def __call__(self, rgba: bytes, width: int, height: int) -> bytes:
+        unit = self.unit(self.infer(rgba, width, height), rgba, width, height)
+        return self.np.ascontiguousarray(self.photo.to_samples(unit), dtype="=u2").tobytes()
+
+
+def make_depth_fn(backend, smooth: bool = True) -> DepthPipeline:
+    """A DepthPipeline for one film; smooth=False is the unsmoothed depth of spec 8's first half."""
+    return DepthPipeline(backend, Smoothing() if smooth else None)
 
 
 def warm(depth_fn) -> None:
-    """Loads the model and runs it once, so the first frame is not the slow one."""
+    """Loads the model and runs it once, so the first frame is not the slow one; the pipeline forgets it."""
     depth_fn(bytes(FRAME_BYTES), WIDTH, HEIGHT)
+    reset = getattr(depth_fn, "reset", None)
+    if reset is not None:
+        reset()
 
 
 def synthetic_frames(count: int = 8) -> list[bytes]:

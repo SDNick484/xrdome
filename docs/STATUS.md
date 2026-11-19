@@ -1025,6 +1025,46 @@ Not run: the real 322x182 model behind the ring (no depth venv on the developmen
 helper Hz; the owner's check: `--timing-log` with 3D on against 3D off on the glasses, and the
 helper's `video:` lines (or `depth bench-video` beside xrdome) on the laptop.
 
+## Video depth in the shader, smoothing (issue #73, Task 8 of the depth 3D plan, 2026-11-19)
+
+Spec `docs/superpowers/specs/2026-11-19-depth-3d-design.md` section 8, second half. A flat mono film
+is now drawn in 3D from the helper's depth with section 6's pass unchanged (strength and plane keys
+included). README, Depth for films; docs/tools.md, depth serve and depth flicker.
+- Player (`src/main.c`, `video_depth`): each loop iteration, after the frame sink's step, the newest
+  depth map in the ring that is newer than the last taken (`xrd_vring_depth_read`, the seqlock: a map
+  being overwritten is left for the next frame) goes into the depth texture through
+  `xrd_renderer_set_depth`, which now writes a map of the size the texture has with `glTexSubImage2D`
+  (one 322x182 R16 copy, 116 KB, row flip on the CPU; no GPU wait, no new texture per map). The
+  film is 2D until the first map; 3D off or a failed ring drops the depth with the ring. The depth's
+  aspect check is skipped for films: the frame is scaled over the whole picture, so it lines up in
+  picture coordinates whatever the film's aspect. The CPU time of the upload is in `frames_out_us`
+  with the sending; the `depth: video stopped:` line gains the maps drawn and their age in frames
+  (frame head of the ring at upload minus the frame the map was made from).
+- Helper (`tools/xrdome_depth/video.py`): `SceneCut` (mean luma change over a 32x18 grid of sample
+  points, threshold 0.15 of full scale), `Smoothing` (EMA of the percentile range with weight 0.5 for
+  the newest; alpha for the depth's EMA: 0.5, or 1 at a cut and for the first map), both standard
+  library only; `DepthPipeline` applies them with numpy (percentiles of the raw output, range
+  smoothed, normalise and clip, blend with the previous smoothed map). One pipeline per film
+  (`depth serve` makes a new one for each ring; the model stays loaded and warmed once).
+- `tools/xrdome_depth/flicker.py` (`xrdome-tools depth flicker DIR`): the spike's metric
+  (`scripts/flicker.py` of the depth spike: per-map min-max to [0,1], mean absolute per-pixel change
+  between consecutive maps, 29 deltas over 30 frames, mean and max), over the raw model output, the
+  helper's unsmoothed depth and its smoothed depth; `maps FILE.pgm...` measures finished maps.
+- Tests: `tools/tests/test_depth_smoothing.py` (cut detector, range average, cut restart, the
+  metric, the PGM reader, the `maps` command on a synthetic noisy sequence, the launcher: all
+  standard library; the numpy pipeline tests (EMA weights, restart at a cut, range smoothing, flat
+  depth, NaN, warm-up leaves no state, smoothing lowering flicker on noisy maps, the `frames` path
+  with a fake backend) skip without numpy and OpenCV); `test_render` (`depth_rewrite_and_resize`:
+  same-size uploads and size changes); `smoke_depth_video` cases V7 to V9: the fake helper's step
+  depth draws a flat film's bars shifted by the same amount as a photo's (red -5.00 px, white +6.00
+  px against the expected 5.12 at 2%), 3D off and 3D turned off again are the 2D picture.
+
+Not measured: flicker on the real model (no depth venv on the development machine), so the target of
+0.011 is unverified, as are the cut threshold and the 0.5 weight on real films (a threshold too low
+resets the smoothing on fast action; too high lets a cut blend the old scene's depth for a few
+frames). The owner's check (plan Task 9): a flat film in 3D on the glasses, `xrdome-tools depth
+flicker` on a near-static shot, `--timing-log` with 3D on against off.
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship

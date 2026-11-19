@@ -32,4 +32,4 @@ Run both before every commit:
 - setup: available (`xrdome-tools setup to3d [--cpu] [--yes] [--fetch-models]`, `xrdome-tools setup depth [--cpu] [--yes]`)
 - to3d: available (`xrdome-tools to3d INPUT`)
 - enhance: available (`xrdome-tools enhance INPUT [--fps N] [--upscale 2|3|4]`)
-- depth: available (`xrdome-tools depth photo FILE|DIR [--force]`, `xrdome-tools depth serve [--socket PATH] [--idle-exit S]`, `xrdome-tools depth bench-video [--seconds S] [--rate HZ]`; needs `setup depth`)
+- depth: available (`xrdome-tools depth photo FILE|DIR [--force]`, `xrdome-tools depth serve [--socket PATH] [--idle-exit S]`, `xrdome-tools depth bench-video [--seconds S] [--rate HZ]`, `xrdome-tools depth flicker DIR [--start N] [--count N]`; needs `setup depth`)

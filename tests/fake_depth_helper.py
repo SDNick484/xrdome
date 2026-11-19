@@ -18,6 +18,8 @@ depth maker: it logs "video <shm>" per request and, for the first frame, "frame 
 (the pixels at the middle of the top and bottom rows), and writes a flat depth (32768) for every frame.
 
   FAKE_DEPTH_NO_VIDEO  refuse video requests with this error
+  FAKE_DEPTH_STEP      write the step depth of the photos instead (0 left of the middle, 65535 from it
+                       on) for every frame: a film's bars then move as a photo's do
 """
 
 import os
@@ -74,6 +76,10 @@ def main() -> int:
         return dest if dest.is_file() else None
 
     flat = (32768).to_bytes(2, sys.byteorder) * (video.WIDTH * video.HEIGHT)
+    if os.environ.get("FAKE_DEPTH_STEP"):
+        row = b"".join((0 if x < video.WIDTH // 2 else 65535).to_bytes(2, sys.byteorder)
+                       for x in range(video.WIDTH))
+        flat = row * video.HEIGHT
     frames = []
 
     def depth_fn(rgba: bytes, w: int, h: int) -> bytes:
