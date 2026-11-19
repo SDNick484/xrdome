@@ -1158,12 +1158,71 @@ flicker` on a near-static shot, `--timing-log` with 3D on against off.
   scale, SBS mode, d3d11va-copy, whether mpv needs anything loaded at run time that the DLL walk cannot
   see), `build.ps1` (winget, the first MSYS2 update) and the CI step's real `ntldd` output.
 
+## Pose helper for VITURE's SDK (issue #64, 2026-11-19)
+- `helpers/xrdome-pose-viture/`: a separate C11 program, MIT licensed (its own `LICENSE`), that reads
+  the head pose through VITURE's Glasses SDK (2.4.2 read: `viture_glasses_provider.h`,
+  `viture_device.h`, `viture_protocol_public.h`) and sends it as OpenTrack UDP to 127.0.0.1:4242.
+  xrdome is unchanged and keeps its `udp-opentrack` source on every platform. Built only with
+  `-Dviture_sdk_include=PATH` (new `meson.options`); the SDK library is loaded at run time
+  (`dlopen`, `LoadLibraryW`), never linked, never in the repository, and neither are its headers
+  (they say "all rights reserved" and the package has no redistribution licence): CI configures
+  with `helpers/xrdome-pose-viture/tests/fake_include/`, stand-ins written for the tests, and a fake
+  SDK (`tests/fake_sdk.c`) that exports the same 14 entry points.
+- Calls used: `xr_device_provider_create(pid)`, `_initialize(h, NULL, NULL)`, `_start`,
+  `register_imu_pose_callback`, `open_imu(VITURE_IMU_MODE_POSE, f)`, and on exit `close_imu`,
+  `_stop`, `_shutdown`, `_destroy`; for `--sbs` `get_display_mode` and `set_display_mode`. Each is
+  declared in `viture_loader.h` and checked against the header's prototype at compile time with
+  `_Generic`, so a signature that drifts fails the build. All 14 symbols are in the 2.4.2
+  `libglasses.so` (`nm -D`).
+- Pose: the callback's `data` is `[roll, pitch, yaw, qw, qx, qy, qz]`, North-West-Up (x north, y
+  west, z up). The helper uses only the quaternion and rebuilds yaw, pitch, roll in degrees with
+  `q = Rz(yaw) * Ry(pitch) * Rx(roll)`, the order `pose_udp_opentrack.c` documents for the driver's
+  angles: the header does not say what unit the callback's own angles are in. A change of basis
+  check (NWU to GL) in `test_viture_bridge` reads the packets back through `pose_udp_opentrack`.
+  The packet encoder is the helper's own (the parser in `src/pose/opentrack_packet.c` is GPL, and
+  the helper must stay MIT); `test_viture_packet` round-trips it through that parser. Same for the
+  XRLinuxDriver check (`xrdriver_check.c`, checked against `xrd_xrdriver_fresh` on the same inputs).
+- `--sbs` reads the current display mode, sets `VITURE_DISPLAY_MODE_3840_1080_60HZ` (0x32), and
+  restores the mode it read at exit, on Ctrl+C or SIGTERM too (the signal sets a flag; the session
+  puts the mode back while the provider still runs). A glasses already in 3840x1080 (0x32, 0x35)
+  are left alone. A SIGKILL or crash cannot restore it. Gen 2 glasses in native mode answer
+  `NOT_SUPPORTED`; the helper warns and carries on tracking.
+- Luma Ultra (Carina) is refused: its pose is polled with `get_gl_pose_carina`, not delivered by the
+  IMU callback. The Beast's native mode is not handled either.
+- The glasses are found by vendor 0x35CA on the USB bus (sysfs on Linux, SetupAPI on Windows, IOKit
+  on macOS), filtered by `xr_device_provider_is_product_id_valid`; `--pid` overrides. SetupAPI and
+  IOKit code is written from the platform documentation and built by CI only; the hardware-id parser
+  and the sysfs scan are unit tested on Linux.
+- The IMU frequency is the lowest supported that is at least twice `--rate` (default 250, so 500 Hz);
+  the rate cap is a schedule in the callback, so a 500 Hz stream capped at 250 gives 250.
+- Hardware checklist (owner): (1) Linux, XRLinuxDriver stopped (the helper refuses otherwise):
+  `xrdome-pose-viture --lib .../libglasses.so`, then `xrdome --windowed pattern_sbs.mp4`; look left,
+  up and tilt: the picture must follow with the right sign (else `yaw=-1`, `pitch=-1` or `roll=-1`
+  on the `--pose` spec, and tell the helper's author, because the quaternion's meaning is then
+  different from the one assumed). (2) `tools/ot_dump.py` while it runs: about 250 packets a second,
+  no malformed. (3) Yaw drift over 5 minutes, glasses still, the same way as the Task 10 numbers
+  (0.02 degrees in 5 minutes with XRLinuxDriver, "Tracking, drift and EDID" above). (4) `--sbs`:
+  the glasses switch to 3840x1080 and come back on Ctrl+C; whether they re-enumerate their display
+  and how long that takes. (5) The Windows desktop: the SDK's `libglasses.dll` and helper built from
+  the same sources, head tracking into `xrdome.exe`, `--sbs`. (6) macOS if it is at hand. (7) Whether
+  `xr_device_provider_create` needs the USB permissions XRLinuxDriver's udev rule gives.
+- Not known: the callback's own angle units (unused); whether the quaternion is body-in-world as
+  assumed (checklist 1); whether the SDK's yaw is anchored or free (xrdome's recenter handles an
+  offset either way); the default library name on Windows and macOS (`libglasses.dll`, `.dylib`,
+  from the SDK documentation's text).
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship
-  `libglasses.so` or XRLinuxDriver source. A Viture SDK backend, if added, uses dlopen.
-- No second process opens the glasses while XRLinuxDriver runs (it holds their USB interfaces).
-  Device controls such as dimming and brightness go through the driver (issue #22).
+  `libglasses.so` or XRLinuxDriver source. The Viture SDK is not a backend inside xrdome: it is a
+  separate MIT program, `xrdome-pose-viture`, that sends OpenTrack UDP (issue #64), because loading
+  a proprietary library into the process that holds GPL libmpv and FFmpeg is a licence problem that
+  `dlopen` does not clearly avoid, while separate programs over a socket are separate works.
+- No second process opens the glasses while XRLinuxDriver runs (it holds their USB interfaces). The
+  Viture SDK (`xrdome-pose-viture`) runs only in place of XRLinuxDriver, never beside it: both open
+  the same USB interfaces, so the helper refuses to start on Linux while the driver's heartbeat is
+  fresh. Device controls such as dimming and brightness go through the driver (issue #22), or
+  through the SDK when it is the one running (not built).
 - Platform: one code base; the platform is chosen at build time and Linux behaviour is the
   reference. macOS is experimental (build and unit tests in CI only).
 - mpv default profile is `fast`; the default mpv render path saturated the integrated GPU.
@@ -1238,5 +1297,5 @@ flicker` on a near-static shot, `--timing-log` with 3D on against off.
   brightness and the electrochromic film); the request is drafted in issue #22's PR for the owner
   to file. Keys `D` and `Shift+[` / `Shift+]` are reserved for it.
 - Candidate next features, in suggested order: per-eye HUD (takes over `?` and `I`, which print
-  to the terminal for now), Viture SDK backend (only in place of XRLinuxDriver, not beside it:
-  see the dimming findings), GTK launcher.
+  to the terminal for now), GTK launcher. The Viture SDK pose helper is built (issue #64) and
+  waits for its hardware checklist.

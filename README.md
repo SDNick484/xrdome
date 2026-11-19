@@ -976,7 +976,8 @@ changes. On macOS: SDL uses Cocoa with a CGL GL 3.3 core context (forward-compat
 drawable), mpv gets no X11 display and decodes with `videotoolbox`, the glasses' window is
 fullscreen in its own Space, and the automatic SBS switch is off (it needs XRLinuxDriver, which
 is Linux only): switch the glasses to SBS with their own button. Head tracking comes over the same
-OpenTrack UDP port from any sender; without one use `--pose null` (drag with the mouse). Config
+OpenTrack UDP port from any sender, such as `xrdome-pose-viture` (see "Pose from VITURE's SDK",
+which also has `--sbs` for the switch); without one use `--pose null` (drag with the mouse). Config
 and per-file state keep their XDG paths (`~/.config/xrdome`, `~/.local/state/xrdome`).
 
 ```sh
@@ -1011,8 +1012,8 @@ windows driver with a WGL GL 3.3 core context, mpv gets no X11 display and decod
 ANGLE, so with WGL the decoded frame is copied; `--require-hwdec` refuses a `-copy` decoder, so do
 not pass it there), the glasses' window is desktop fullscreen on their display, and the automatic
 SBS switch is off (XRLinuxDriver is Linux only): switch the glasses to SBS with their own button.
-Head tracking comes over the same OpenTrack UDP port (for example from opentrack itself); without
-one use `--pose null`. Config is in `%APPDATA%\xrdome\config.ini` and per-file records in
+Head tracking comes over the same OpenTrack UDP port (from `xrdome-pose-viture`, see "Pose from
+VITURE's SDK", or from opentrack itself); without one use `--pose null`. Config is in `%APPDATA%\xrdome\config.ini` and per-file records in
 `%LOCALAPPDATA%\xrdome\files\`. The executable's manifest sets the UTF-8 code page, so file names
 with any characters work as on Linux. The depth helper is not available: photos without cached
 depth show in 2D and films get no 3D.
@@ -1142,6 +1143,34 @@ LD_LIBRARY_PATH=/path/to/xr_driver_lib /path/to/xr_driver/bin/xrDriver
 The log is `~/.local/state/xr_driver/driver.log`.
 
 Verify: `tcpdump -n -i lo udp port 4242 -c 20` shows `UDP, length 52`, and `tools/ot_dump.py` prints angles.
+
+### Pose from VITURE's SDK (`xrdome-pose-viture`)
+
+`helpers/xrdome-pose-viture/` is a small separate program that reads the Viture Pro XR's head pose
+through VITURE's own Glasses SDK and sends it as OpenTrack UDP on 127.0.0.1:4242, so xrdome reads it
+with the `udp-opentrack` source it already has. It works on Linux, macOS and Windows, which makes it
+the head tracking on the last two, and an alternative to XRLinuxDriver on Linux. It is a separate
+program, MIT licensed, because the SDK is proprietary and xrdome is GPL: the helper loads VITURE's
+library at run time and the repository holds none of VITURE's files. Download the SDK (C) for your
+platform from VITURE; the helper is built against its headers.
+
+```sh
+meson setup build -Dviture_sdk_include=/path/to/sdk/include     # headers only; builds the helper too
+meson compile -C build
+./build/helpers/xrdome-pose-viture/xrdome-pose-viture --lib /path/to/sdk/x86_64/libglasses.so --sbs
+./build/xrdome video.mp4                                         # another terminal; the default pose
+```
+
+`--sbs` switches the glasses to 3840x1080 side by side through the SDK and back when the helper
+ends (also on Ctrl+C), which is the switch XRLinuxDriver does on Linux and which Windows and macOS
+otherwise leave to the glasses' button. Other options: `--port`, `--host`, `--rate`, `--pid`,
+`--lib`; the helper's own [README](helpers/xrdome-pose-viture/README.md) has them all.
+
+Only one of the SDK and XRLinuxDriver can hold the glasses: they both open their USB interfaces.
+On Linux the helper refuses to start while the driver's heartbeat in `/dev/shm/xr_driver_state` is
+fresh; stop `xrDriver` first, and the udev rule and group from below apply to the SDK as well. If
+a head turn goes the wrong way, `--pose udp-opentrack:yaw=-1` (or `pitch`, `roll`) flips it. Not
+yet run on glasses; the hardware checklist is in `docs/STATUS.md` ("Pose helper for VITURE's SDK").
 
 ### Switching to SBS
 
@@ -1310,4 +1339,6 @@ GPL-2.0-or-later, the same terms as mpv built with its GPL files (see `Copyright
 [mpv repository](https://github.com/mpv-player/mpv)); xrdome links libmpv. The full text is in
 `LICENSE`. The sharpening filter in `src/render/shaders/sharpen.frag` is a port of AMD FidelityFX
 CAS and stays under AMD's MIT licence, whose notice is in that file (and in the shader text
-compiled into the program); MIT is compatible with the GPL.
+compiled into the program); MIT is compatible with the GPL. `helpers/xrdome-pose-viture/` is a separate
+program under the MIT licence (its own `LICENSE`); it shares no source with xrdome and never contains
+VITURE's SDK, which is proprietary and is loaded from the user's own copy.
