@@ -841,12 +841,33 @@ half side-by-side film, and `M` into half SBS on one; top-bottom; the Viture's s
 of `--mpv-scale` at zoom 1.5 and subtitles with it; a timing pair for the curved screen;
 convergence on the XREAL.
 
+## Platform module and macOS build (2026-11-19)
+- `src/platform/`: the platform is fixed at build time (`xrd_platform_current`); the choices that
+  follow from it are pure functions of the platform, so both are unit tested on Linux
+  (`tests/test_platform.c`). On Linux every choice is what xrdome did before: SDL X11 driver with
+  EGL, mpv gets the X11 display, hwdec `vaapi`, borderless window on Xorg, automatic SBS switch.
+- `--hwdec NAME` and `[general] hwdec` (default by platform) replace the hard-coded `vaapi`; for
+  the NVIDIA desktop use `nvdec` or `auto-safe`. `--require-hwdec` now accepts any zero-copy
+  decoder (not `no`, not `-copy`). The warning text keeps its shape, "not <hwdec>", so it is
+  unchanged on Linux defaults.
+- macOS: Cocoa/CGL forward-compatible GL 3.3 core context, high-DPI drawable, no X11 display for
+  mpv, hwdec `videotoolbox`, fullscreen window, no SBS switch; BSD `getopt` reset (`optreset`);
+  `_DARWIN_C_SOURCE`; EGL optional, so `test_render` (surfaceless Mesa EGL) is Linux only.
+- CI `macos-build-test` (`macos-14`, Apple Silicon): build with `-Dwerror=true` and unit tests;
+  the smoke tests skip there (no xvfb-run). Not run on glasses: there is no owner Mac. Unknowns:
+  an unscaled 3840x1080 mode on the glasses, compositor frame timing, VideoToolbox limits.
+- Not done: a Viture SDK pose backend. Viture's C SDK (2026) lists macOS aarch64 and the
+  Viture Pro (PIDs 0x1019, 0x101D), but its signatures are only in the SDK download; the backend
+  waits for the headers (follow-up issue).
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship
   `libglasses.so` or XRLinuxDriver source. A Viture SDK backend, if added, uses dlopen.
 - No second process opens the glasses while XRLinuxDriver runs (it holds their USB interfaces).
   Device controls such as dimming and brightness go through the driver (issue #22).
+- Platform: one code base; the platform is chosen at build time and Linux behaviour is the
+  reference. macOS is experimental (build and unit tests in CI only).
 - mpv default profile is `fast`; the default mpv render path saturated the integrated GPU.
 - Convergence is demoted to the `--convergence` flag (still remembered per file); the `,` `.` and
   `/` keys are removed. Reason: on the Viture Pro XR up to 2 deg made no significant difference

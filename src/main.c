@@ -19,6 +19,7 @@
 #include "display/output.h"
 #include "display/sbs.h"
 #include "math/quat.h"
+#include "platform/platform.h"
 #include "pose/pose.h"
 #include "render/projection.h"
 #include "render/renderer_gl.h"
@@ -696,13 +697,17 @@ int main(int argc, char **argv)
         goto out;
     }
 
-    SDL_SetHint(SDL_HINT_VIDEO_X11_FORCE_EGL, "1");
-    /* xrdome needs SDL's X11 driver (Xorg, or XWayland under a Wayland
-     * compositor). SDL builds with a Wayland backend, such as sdl2-compat on
-     * Arch and SteamOS, prefer it when WAYLAND_DISPLAY is set; an explicit
-     * SDL_VIDEODRIVER still wins. */
-    if (!getenv("SDL_VIDEODRIVER"))
-        SDL_SetHint(SDL_HINT_VIDEODRIVER, "x11");
+    const xrd_platform plat = xrd_platform_current();
+    const bool use_x11 = xrd_platform_uses_x11(plat);
+    if (use_x11) {
+        SDL_SetHint(SDL_HINT_VIDEO_X11_FORCE_EGL, "1");
+        /* xrdome needs SDL's X11 driver (Xorg, or XWayland under a Wayland
+         * compositor). SDL builds with a Wayland backend, such as sdl2-compat on
+         * Arch and SteamOS, prefer it when WAYLAND_DISPLAY is set; an explicit
+         * SDL_VIDEODRIVER still wins. */
+        if (!getenv("SDL_VIDEODRIVER"))
+            SDL_SetHint(SDL_HINT_VIDEODRIVER, "x11");
+    }
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         fail("SDL_Init: %s", SDL_GetError());
         goto out;
@@ -724,7 +729,7 @@ int main(int argc, char **argv)
         int sel = xrd_output_select(outs, n, cfg.output, &idx);
         xrd_sbs_result sbs = {.outcome = XRD_SBS_NOT_ASKED};
         bool sbs_tried = false;
-        if (sel != XRD_OUT_OK && cfg.sbs_switch &&
+        if (sel != XRD_OUT_OK && cfg.sbs_switch && xrd_platform_has_xrdriver(plat) &&
             xrd_output_sbs_candidate(outs, n, cfg.output, sel)) {
             sbs_tried = true;
             sel = xrd_sbs_switch(xrd_sbs_sdl_ops(), NULL, cfg.output, XRD_SBS_WAIT_MS, outs,
@@ -757,7 +762,8 @@ int main(int argc, char **argv)
          * output's position may be ignored or tiled; fullscreen on the
          * display the window is created on is placed and can be scanned out
          * directly. Xorg keeps the borderless window. */
-        if (xrd_output_use_fullscreen(getenv("WAYLAND_DISPLAY"), getenv("XDG_SESSION_TYPE")))
+        if (xrd_platform_force_fullscreen(plat) ||
+            xrd_output_use_fullscreen(getenv("WAYLAND_DISPLAY"), getenv("XDG_SESSION_TYPE")))
             wflags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
     }
 
@@ -765,6 +771,12 @@ int main(int argc, char **argv)
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    if (xrd_platform_gl_forward_compat(plat)) {
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
+        /* Pixels, not points: the drawable is the glasses' full 3840x1080
+         * even if the display is scaled (SDL_GL_GetDrawableSize below). */
+        wflags |= SDL_WINDOW_ALLOW_HIGHDPI;
+    }
 
     win = SDL_CreateWindow("xrdome", x, y, w, h, wflags);
     if (!win) {
@@ -773,18 +785,28 @@ int main(int argc, char **argv)
     }
     gl = SDL_GL_CreateContext(win);
     if (!gl) {
-        fail("cannot create a GL 3.3 core context on EGL: %s", SDL_GetError());
+        fail("cannot create a GL 3.3 core context%s: %s", use_x11 ? " on EGL" : "",
+             SDL_GetError());
         goto out;
     }
     if (SDL_GL_SetSwapInterval(1) != 0)
         fprintf(stderr, "xrdome: warning: cannot enable vsync: %s\n", SDL_GetError());
 
-    SDL_SysWMinfo wm;
-    SDL_VERSION(&wm.version);
-    if (!SDL_GetWindowWMInfo(win, &wm) || wm.subsystem != SDL_SYSWM_X11) {
-        fail("%s", "SDL did not use its X11 driver (Xorg or XWayland); "
-                  "unset SDL_VIDEODRIVER or set it to x11");
+    void *x11_display = NULL; /* for mpv; NULL where there is no X11 (macOS) */
+    if (use_x11) {
+        SDL_SysWMinfo wm;
+        SDL_VERSION(&wm.version);
+        if (!SDL_GetWindowWMInfo(win, &wm) || wm.subsystem != SDL_SYSWM_X11) {
+            fail("%s", "SDL did not use its X11 driver (Xorg or XWayland); "
+                      "unset SDL_VIDEODRIVER or set it to x11");
+            goto out;
+        }
+#if defined(SDL_VIDEO_DRIVER_X11)
+        x11_display = wm.info.x11.display;
+#else
+        fail("%s", "this SDL was built without its X11 driver");
         goto out;
+#endif
     }
 
     /* The refresh rate of the display the window is on (the glasses, or
@@ -816,12 +838,14 @@ int main(int argc, char **argv)
     }
     for (int i = 0; i < cfg.mpv_opt_count; i++)
         mpv_opts[n_opts++] = cfg.mpv_opts[i];
+    const char *hwdec = cfg.hwdec[0] ? cfg.hwdec : xrd_platform_default_hwdec(plat);
     xrd_player_options popt = {.profile = cfg.mpv_profile, .opts = mpv_opts,
                                .opt_count = n_opts, .log_level = cfg.mpv_log,
                                .fbo_format = cfg.fbo_format, .deband = cfg.deband,
                                .resume_at = mem.resume ? mem.resume_at : 0.0,
-                               .scale = cfg.mpv_scale[0] ? cfg.mpv_scale : NULL};
-    p = xrd_player_open_ex(cfg.file, gl_get_proc, wm.info.x11.display, &popt, err, sizeof err);
+                               .scale = cfg.mpv_scale[0] ? cfg.mpv_scale : NULL,
+                               .hwdec = hwdec};
+    p = xrd_player_open_ex(cfg.file, gl_get_proc, x11_display, &popt, err, sizeof err);
     if (!p) {
         fail("%s", err);
         goto out;
@@ -924,9 +948,10 @@ int main(int argc, char **argv)
             fputc('\n', stderr);
             print_texture(&app);
             xrd_player_texture_size(p, &shown_w, &shown_h);
-            if (strcmp(hw, "vaapi") != 0) {
-                snprintf(err, sizeof err, "hardware decoding is '%s', not vaapi",
-                         hw[0] ? hw : "unknown");
+            if (!xrd_hwdec_is_zero_copy(hw)) {
+                /* "not vaapi" on Linux by default: the smoke tests match it. */
+                snprintf(err, sizeof err, "hardware decoding is '%s', not %s",
+                         hw[0] ? hw : "unknown", hwdec);
                 if (cfg.require_hwdec) {
                     fail("%s (--require-hwdec)", err);
                     goto out;

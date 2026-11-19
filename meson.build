@@ -4,11 +4,18 @@ project('xrdome', 'c',
   default_options : ['c_std=c11', 'warning_level=3'])
 
 cc = meson.get_compiler('c')
+is_macos = host_machine.system() == 'darwin'
+# macOS: _POSIX_C_SOURCE (set by several sources) hides BSD extensions such as
+# O_NOFOLLOW; _DARWIN_C_SOURCE brings them back alongside it.
+if is_macos
+  add_project_arguments('-D_DARWIN_C_SOURCE', language : 'c')
+endif
 m_dep = cc.find_library('m', required : true)
 cmocka_dep = dependency('cmocka')
 threads_dep = dependency('threads')
 epoxy_dep = dependency('epoxy')
-egl_dep = dependency('egl')
+# EGL: Linux only (the render test's surfaceless context); macOS uses CGL through SDL.
+egl_dep = dependency('egl', required : not is_macos)
 sdl2_dep = dependency('sdl2')
 mpv_dep = dependency('mpv')
 py = find_program('python3')
@@ -43,6 +50,7 @@ core_sources = files(
   'src/detect/probe.c',
   'src/detect/detect.c',
   'src/app/session.c',
+  'src/platform/platform.c',
 )
 
 # Test names: each entry NAME builds tests/test_NAME.c into test_NAME.
@@ -67,7 +75,18 @@ test_names = [
   'xrdriver',
   'sbs',
   'mpv_scale',
+  'platform',
 ]
+# test_render draws through a surfaceless Mesa EGL context.
+if not egl_dep.found()
+  kept = []
+  foreach n : test_names
+    if n != 'render'
+      kept += n
+    endif
+  endforeach
+  test_names = kept
+endif
 
 inc = include_directories('src')
 
