@@ -143,8 +143,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Homebrew's mpv.pc requires libarchive, which is keg-only, so its .pc
+      # is not on pkg-config's default path and mpv's cflags cannot resolve.
       - name: Install dependencies
-        run: brew install meson ninja pkgconf mpv sdl2 libepoxy cmocka
+        run: |
+          brew install meson ninja pkgconf mpv sdl2 libepoxy cmocka
+          echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
 
       - name: Versions
         run: |
