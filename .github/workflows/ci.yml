@@ -174,20 +174,24 @@ jobs:
       # (bundle.py verify, and otool by hand), then run with /opt/homebrew moved
       # away and an empty environment. The sample is made first, with Homebrew's ffmpeg.
       - name: Smoke-test the bundle without Homebrew
+        timeout-minutes: 5
         run: |
-          set -euo pipefail
-          ffmpeg -v error -f lavfi -i testsrc2=size=64x64:rate=5 -t 1 -pix_fmt yuv420p "$RUNNER_TEMP/sample.mp4"
-          python3 packaging/macos/bundle.py verify dist/xrdome
+          set -euxo pipefail
+          # Every command gets a time limit and no stdin, so a hang names itself.
+          # macOS has no timeout(1), and coreutils lives under the hidden prefix.
+          lim() { /usr/bin/perl -e 'alarm shift; exec @ARGV' 60 "$@" </dev/null; }
+          lim ffmpeg -nostdin -v error -f lavfi -i testsrc2=size=64x64:rate=5 -t 1 -pix_fmt yuv420p "$RUNNER_TEMP/sample.mp4"
+          lim python3 packaging/macos/bundle.py verify dist/xrdome
           for f in dist/xrdome/xrdome dist/xrdome/ffprobe dist/xrdome/lib/*.dylib; do
-            if otool -L "$f" | grep -E '/opt/homebrew|/usr/local/'; then
+            if lim otool -L "$f" | grep -E '/opt/homebrew|/usr/local/'; then
               echo "::error::$f loads a Homebrew library"
               exit 1
             fi
           done
-          sudo mv /opt/homebrew /opt/homebrew.hidden
-          trap 'sudo mv /opt/homebrew.hidden /opt/homebrew' EXIT
-          env -i PATH=/usr/bin:/bin ./dist/xrdome/xrdome --version
-          streams=$(env -i PATH=/usr/bin:/bin ./dist/xrdome/ffprobe -v error -show_streams "$RUNNER_TEMP/sample.mp4")
+          trap 'sudo -n mv /opt/homebrew.hidden /opt/homebrew || true' EXIT
+          lim sudo -n mv /opt/homebrew /opt/homebrew.hidden
+          lim env -i PATH=/usr/bin:/bin ./dist/xrdome/xrdome --version
+          streams=$(lim env -i PATH=/usr/bin:/bin ./dist/xrdome/ffprobe -v error -show_streams "$RUNNER_TEMP/sample.mp4")
           grep -q '^codec_type=video' <<<"$streams"
           ls -l dist/*.zip
           du -sh dist/xrdome
