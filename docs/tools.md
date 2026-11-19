@@ -131,11 +131,16 @@ Paths are relative to the data directory (`~/.local/share/xrdome-tools/`):
 | `rife-v4.6.param` | enhance | MIT | https://github.com/nihui/rife-ncnn-vulkan/releases/tag/20221029 | `flownet.param` | `models/rife-v4.6/` |
 | `realesr-animevideov3-x2` | enhance | BSD-3-Clause | https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.2.5.0 (`realesrgan-ncnn-vulkan-20220424-ubuntu.zip`, `models/`) | `realesr-animevideov3-x2.bin` | `models/realesrgan/` |
 | `realesr-animevideov3-x2.param` | enhance | BSD-3-Clause | as above | `realesr-animevideov3-x2.param` | `models/realesrgan/` |
+| `Any_V2_S_hf` | depth | Apache-2.0 | https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf/tree/5426e4f0f36572d16453bbda7a8389317b1bef99 | `model.safetensors` | `models/dav2s-hf/` |
+| `dav2s-ncnn-518x392`, `dav2s-ncnn-392x518`, `dav2s-ncnn-322x182` | depth | Apache-2.0 | as above | `dav2s_<W>x<H>.ncnn.bin` | `models/dav2s-ncnn/` |
+| `dav2s-ncnn-518x392.param`, `dav2s-ncnn-392x518.param`, `dav2s-ncnn-322x182.param` | depth | Apache-2.0 | as above | `dav2s_<W>x<H>.ncnn.param` | `models/dav2s-ncnn/` |
 
 `iw3_row_flow_v3`, `iw3_depth_aa` and `transnetv2` are downloaded by iw3 itself on first use,
 so `--fetch` refuses them; `models` only checks them. The two `realesr-animevideov3-x2` files
 only ship inside the release archive named on their page, so they have no direct download:
-`--fetch` alone skips them, and naming them is refused with "place it by hand". `xrdome-tools doctor` also lists each model's status.
+`--fetch` alone skips them, and naming them is refused with "place it by hand". The seven
+`depth` entries are made by `xrdome-tools setup depth` (see `## setup`): `--fetch` refuses them
+too. `xrdome-tools doctor` also lists each model's status.
 
 ## setup
 
@@ -169,6 +174,41 @@ has passed; `to3d` refuses to run without it.
 `xrdome-tools models --fetch` does (sha256 checked). Without it, place them by hand as
 `xrdome-tools models` explains. iw3 downloads its three small support models itself on first
 use.
+
+    xrdome-tools setup depth [--cpu] [--yes] [--dry-run]
+
+Builds what `depth` (depth-based 3D for photos and flat video) needs, under
+`~/.local/share/xrdome-tools/depth/` and `models/`. Needs `python3` with `venv` (overridable
+in `[programs]` of `tools.ini`). No model is published as ncnn, so setup generates them. The
+steps, each printed by `--dry-run`:
+
+- A venv in `depth/venv/` with `ncnn==1.0.20261020`, `numpy==2.5.4`,
+  `opencv-python-headless==5.0.0.93` and `pillow==13.0.0`.
+- A check that ncnn in that venv finds a Vulkan GPU (`ncnn.get_gpu_count()`). With none, setup
+  refuses (exit 2) unless `--cpu`; with `--cpu` it goes on, records `cpu` in the ini, and says
+  that depth on the CPU costs xrdome frames while it renders. With a GPU, `--cpu` changes nothing.
+- A temporary export venv in `depth/export-venv/` with `torch==2.11.0+cpu` (from
+  `https://download.pytorch.org/whl/cpu`), `transformers==5.23.0`, `pnnx==20261020`,
+  `safetensors==0.8.0` and `huggingface_hub==2.4.0`.
+- The export (`tools/xrdome_depth/export.py`, run by the export venv): it downloads
+  `depth-anything/Depth-Anything-V2-Small-hf` at revision `5426e4f0f36572d16453bbda7a8389317b1bef99`
+  (Apache-2.0), checks the sha256 of `model.safetensors`
+  (`3152477ce0d8d6978d76b995120de97cb5b928701fd0f817769f59e249a16b70`), traces it with eager
+  attention and converts it with pnnx to fp32 ncnn models `dav2s_<W>x<H>.ncnn.{param,bin}`
+  (input `in0`, output `out0`) at 518x392, 392x518 and 322x182.
+- A sha256 check of the six files against the table in `models.py` (the values of spec section 4
+  of `docs/superpowers/specs/2026-11-19-depth-3d-design.md`). If one differs, setup names every
+  file that does, leaves the export in `depth/export-out/` (the param files are text, so diff
+  them), installs nothing and exits 2. Otherwise the files go to `models/dav2s-ncnn/` and a copy
+  of the source weights to `models/dav2s-hf/`.
+- The export venv and its scratch directory are deleted (about 1 GB), pass or fail.
+
+Setup downloads about 1.3 GB (not measured), says so before starting and asks; without a
+terminal it exits 2 unless `--yes`. Everything is pinned, so running it again is harmless. The
+log goes to `depth/setup.log`. `depth/xrdome-setup.ini` (variant `vulkan` or `cpu`, and the pins)
+is written last, once every step has passed. `--fetch-models` is for `to3d` only. The generated
+models appear in `models` as `dav2s-ncnn-*` (and the source as `Any_V2_S_hf`) with their licence;
+`models --fetch` never downloads them, it tells you to run `setup depth`.
 
 ## to3d
 
