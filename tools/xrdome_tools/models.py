@@ -33,6 +33,7 @@ class Model:
     sha256: str  # full hex digest; a shorter value is a prefix (see _hash_matches)
     dest: str  # relative to Paths.data_dir
     fetched_by: str = ""  # non-empty: another tool downloads it; we only check it
+    generated_by: str = ""  # non-empty: this xrdome-tools command makes it; never downloaded
 
 
 def _hf(repo: str, revision: str, file: str) -> tuple[str, str]:
@@ -45,6 +46,22 @@ _ANY_PAGE, _ANY_URL = _hf("depth-anything/Depth-Anything-V2-Small",
 _VDA_PAGE, _VDA_URL = _hf("depth-anything/Video-Depth-Anything-Small",
                           "256875362cff76724b920335dfb4b29dd611f66e", "video_depth_anything_vits.pth")
 _NUNIF = "https://github.com/nagadomi/nunif"
+
+# Depth Anything V2 Small as the depth 3D feature uses it (spec docs/superpowers/specs/2026-11-19-depth-3d-design.md,
+# section 4): the Hugging Face source, and the ncnn models `setup depth` generates from it. The hashes are the
+# spike's; the export is deterministic with the pins in depthenv.py.
+DAV2S_REVISION = "5426e4f0f36572d16453bbda7a8389317b1bef99"
+_DAV2S_PAGE, _DAV2S_URL = _hf("depth-anything/Depth-Anything-V2-Small-hf", DAV2S_REVISION, "model.safetensors")
+DAV2S_NCNN_DIR = "models/dav2s-ncnn"
+DAV2S_SOURCE_DIR = "models/dav2s-hf"
+_DAV2S_NCNN = (  # (size, param sha256, bin sha256)
+    ("518x392", "d9d9a8eef2f63e8f3268184602dd79765e13b23acc4fb311c528c735fe3fa26c",
+     "f155d78193416c6c0e9f55dd0c36b5bd94d25410c23bbfb51439107d2a6d1846"),
+    ("392x518", "a9e2d29e96ce6b3d067c172665519eb7854e3216fd8348ec603b32008da6d839",
+     "282be6cdd0c2fd01eb11001a600d9945a04edd46f047bd2d83a34cc937bbfdc8"),
+    ("322x182", "b1373247d51fa69b49757559e549cfb2b00e9541c9a7fc90cfe308e4cf936741",
+     "e2d5048f550aadfa3f02ca0e935a9c00d580ad09f6f9d0aaa129a3f6cc68c62b"),
+)
 
 # Append one Model(...) per entry at the end (keep the trailing comma).
 REGISTRY: list[Model] = [
@@ -120,6 +137,24 @@ REGISTRY: list[Model] = [
         sha256="b88ff4f00ebf019a7fdac17fdd45a7fd3665d37509efc5baf2e4da2e24420a04",
         dest="models/realesrgan",
     ),
+    # The Hugging Face weights `setup depth` exports from. huggingface_hub downloads them inside the
+    # export; setup then keeps a verified copy here, so `models --check` can vouch for the source.
+    Model(
+        name="Any_V2_S_hf", used_by="depth", licence="Apache-2.0",
+        page=_DAV2S_PAGE, url=_DAV2S_URL, revision=DAV2S_REVISION, file="model.safetensors",
+        sha256="3152477ce0d8d6978d76b995120de97cb5b928701fd0f817769f59e249a16b70",
+        dest=DAV2S_SOURCE_DIR, fetched_by="setup depth",
+    ),
+    *[
+        Model(
+            name=f"dav2s-ncnn-{size}{suffix}", used_by="depth", licence="Apache-2.0",
+            page=_DAV2S_PAGE, url="", revision=DAV2S_REVISION,
+            file=f"dav2s_{size}.ncnn.{ext}", sha256=digest,
+            dest=DAV2S_NCNN_DIR, generated_by="setup depth",
+        )
+        for size, param, binary in _DAV2S_NCNN
+        for suffix, ext, digest in (("", "bin", binary), (".param", "param", param))
+    ],
 ]
 
 
@@ -127,7 +162,7 @@ def target(m: Model, p: Paths) -> Path:
     return p.data_dir / m.dest / m.file
 
 
-def _sha256(path: Path) -> str:
+def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for block in iter(lambda: f.read(1 << 20), b""):
@@ -144,7 +179,7 @@ def status(m: Model, p: Paths) -> str:
     t = target(m, p)
     if not t.is_file():
         return "missing"
-    return "ok" if _hash_matches(m, _sha256(t)) else "bad hash"
+    return "ok" if _hash_matches(m, sha256_file(t)) else "bad hash"
 
 
 def instructions(m: Model, p: Paths) -> str:
@@ -152,15 +187,19 @@ def instructions(m: Model, p: Paths) -> str:
         f"{m.name} ({m.licence}, used by {m.used_by}) is not installed or does not match.",
         f"  page:   {m.page}",
     ]
-    if m.fetched_by:
+    if m.generated_by:
+        lines += [f"  generated, never downloaded: run `xrdome-tools {m.generated_by}` to make {target(m, p)}",
+                  f"  sha256: {m.sha256}"]
+    elif m.fetched_by:
         lines.append(f"  {m.fetched_by} downloads it on first use, to {target(m, p)}")
     else:
         lines += [f"  file:   {m.file}", f"  sha256: {m.sha256}",
                   f"  put it at: {target(m, p)}"]
-    fetchable = m.url and not m.fetched_by
+    fetchable = m.url and not m.fetched_by and not m.generated_by
     lines.append("  check with: xrdome-tools models --check"
                  + (f"; or download it with: xrdome-tools models --fetch {m.name}" if fetchable
-                    else "" if m.fetched_by else "; no direct download: take it from the archive on the page"))
+                    else "" if m.fetched_by or m.generated_by
+                    else "; no direct download: take it from the archive on the page"))
     return "\n".join(lines)
 
 
@@ -183,6 +222,9 @@ def fetch(runner: Runner, m: Model, p: Paths) -> Path:
     """Download one model, verify its sha256, and move it into place."""
     if m.licence not in ALLOWED_LICENCES:
         raise ToolError(f"{m.name}: not an allowed model")
+    if m.generated_by:
+        raise ToolError(f"{m.name}: generated by `xrdome-tools {m.generated_by}`, never downloaded\n"
+                        + instructions(m, p))
     if m.fetched_by:
         raise ToolError(f"{m.name}: downloaded by {m.fetched_by}, not by xrdome-tools\n" + instructions(m, p))
     if not m.url:
@@ -238,7 +280,7 @@ def run(args: argparse.Namespace) -> int:
     p = paths()
     runner = Runner()
     if args.fetch is not None:
-        names = args.fetch or [m.name for m in REGISTRY if m.url and not m.fetched_by]
+        names = args.fetch or [m.name for m in REGISTRY if m.url and not m.fetched_by and not m.generated_by]
         for n in names:
             m = find(n)
             if m is None:

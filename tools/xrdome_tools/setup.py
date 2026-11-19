@@ -1,10 +1,10 @@
-"""`setup to3d`: build the pinned iw3 environment that `to3d` runs in."""
+"""`setup to3d`: build the pinned iw3 environment that `to3d` runs in. `setup depth`: the depth venv and ncnn models."""
 
 import argparse
 import shutil
 import sys
 
-from . import config, hw, iw3env, models
+from . import config, depthenv, hw, iw3env, models
 from .errors import EXIT_SETUP, ToolError
 from .run import Runner, say_path
 
@@ -13,10 +13,12 @@ MODEL_SIZE = "about 0.2 GB more for the two depth models"
 
 
 def add_parser(sub: argparse._SubParsersAction) -> None:
-    ap = sub.add_parser("setup", help="build the environment a subcommand needs (to3d: iw3 and PyTorch)")
-    ap.add_argument("what", choices=["to3d"], help="what to set up")
+    ap = sub.add_parser("setup", help="build the environment a subcommand needs "
+                         "(to3d: iw3 and PyTorch; depth: ncnn and the generated depth models)")
+    ap.add_argument("what", choices=["to3d", "depth"], help="what to set up")
     ap.add_argument("--cpu", action="store_true",
-                    help="install CPU-only PyTorch when no NVIDIA or AMD GPU is found")
+                    help="to3d: install CPU-only PyTorch when no NVIDIA or AMD GPU is found; "
+                         "depth: go on when ncnn finds no Vulkan GPU")
     ap.add_argument("--yes", action="store_true", help="do not ask before downloading")
     ap.add_argument("--fetch-models", action="store_true",
                     help="also download the Any_V2_S and VDA_S depth models (checked by sha256)")
@@ -41,6 +43,12 @@ def _confirm(message: str, yes: bool) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.what == "depth":
+        return run_depth(args)
+    return run_to3d(args)
+
+
+def run_to3d(args: argparse.Namespace) -> int:
     p = config.paths()
     for prog in ("git", "python3"):
         if shutil.which(config.program(prog, p)) is None:
@@ -94,4 +102,67 @@ def run(args: argparse.Namespace) -> int:
         if log is not None:
             log.close()
     print(f"setup to3d: done ({variant}); log in {p.iw3_dir / 'setup.log'}")
+    return 0
+
+
+def run_depth(args: argparse.Namespace) -> int:
+    if args.fetch_models:
+        raise ToolError("--fetch-models is for setup to3d; setup depth generates its models", EXIT_SETUP)
+    p = config.paths()
+    if shutil.which(config.program("python3", p)) is None:
+        raise ToolError("python3 not found; setup depth needs python3 (with venv)", EXIT_SETUP)
+    dd = depthenv.depth_dir(p)
+    message = f"setup depth downloads {depthenv.DOWNLOAD_SIZE} into {dd}"
+    if not args.dry_run:
+        _confirm(message, args.yes)
+    else:
+        print(message)
+
+    log = None
+    if not args.dry_run:
+        dd.mkdir(parents=True, exist_ok=True)
+        # The marker is written again only when every step has passed.
+        (dd / depthenv.MARKER).unlink(missing_ok=True)
+        log = open(dd / "setup.log", "w", encoding="utf-8")
+    try:
+        runner = Runner(dry_run=args.dry_run, log=log)
+        for step in depthenv.venv_steps(p):
+            runner.run(step)
+        # Before the long export: it needs only ncnn, and a refusal here wastes nothing.
+        gpus = depthenv.gpu_count(runner, p)
+        variant = "vulkan"
+        if not args.dry_run:
+            say_path("compute", f"{gpus} Vulkan GPU(s)", "ncnn.get_gpu_count() in the new environment")
+            if gpus == 0:
+                if not args.cpu:
+                    raise ToolError(depthenv.NO_VULKAN, EXIT_SETUP)
+                variant = "cpu"
+                print("warning: no Vulkan GPU: depth will run on the CPU, which costs xrdome frames while it renders")
+        if not args.dry_run:
+            # Nothing left over from an earlier run may pass for this run's output.
+            shutil.rmtree(depthenv.export_out(p), ignore_errors=True)
+            shutil.rmtree(depthenv.export_work(p), ignore_errors=True)
+        try:
+            for step in depthenv.export_steps(p):
+                runner.run(step)
+            if args.dry_run:
+                print(f"would check the sha256 of the export in {depthenv.export_out(p)} against models.py, "
+                      f"install it to {depthenv.ncnn_dir(p)} and {depthenv.source_dir(p)}")
+            else:
+                depthenv.verify(depthenv.export_out(p))
+                depthenv.install(p, depthenv.export_out(p))
+                shutil.rmtree(depthenv.export_out(p), ignore_errors=True)
+        finally:
+            if args.dry_run:
+                print(f"would delete {dd / 'export-venv'} and {depthenv.export_work(p)}")
+            else:
+                depthenv.remove_export(p)
+        if args.dry_run:
+            print(f"would write {dd / depthenv.MARKER}")
+            return 0
+        depthenv.write_marker(p, variant)
+    finally:
+        if log is not None:
+            log.close()
+    print(f"setup depth: done ({variant}); log in {dd / 'setup.log'}")
     return 0
