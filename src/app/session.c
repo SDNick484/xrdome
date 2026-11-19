@@ -44,6 +44,8 @@ void xrd_session_start(const xrd_config *cfg, const xrd_filestate *rec, const xr
     s->content_vfov = cfg->content_vfov;
     s->convergence = cfg->convergence;
     s->zoom_mode = cfg->zoom_mode;
+    s->depth_strength = XRD_DEPTH_STRENGTH_DEFAULT;
+    s->depth_plane = XRD_DEPTH_PLANE_DEFAULT;
 
     /* --zoom belongs to the projection the file opens in. */
     out->explicit_flags = cfg->explicit_flags;
@@ -83,6 +85,8 @@ void xrd_session_settings(const xrd_controls *c, float content_hfov, float conte
     out->content_hfov = content_hfov;
     out->content_vfov = content_vfov;
     out->convergence = c->convergence_deg;
+    out->depth_strength = c->depth_strength;
+    out->depth_plane = c->depth_plane;
 }
 
 void xrd_session_controls(const xrd_session *ss, const xrd_config *cfg, xrd_controls *c)
@@ -95,6 +99,7 @@ void xrd_session_controls(const xrd_session *ss, const xrd_config *cfg, xrd_cont
                              cfg->screen_locked);
     xrd_controls_init_curve(c, cfg->screen_curve);
     xrd_controls_init_sharpen(c, cfg->sharpen);
+    xrd_controls_init_depth(c, s->depth_strength, s->depth_plane);
     c->swap_eyes = s->swap;
 }
 

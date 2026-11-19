@@ -134,17 +134,22 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 | L | Screen lock, flat only; prints `screen: head-locked` or `screen: fixed` |
 | B | Debanding on / off (mpv `deband`); prints `deband: on` or `deband: off`. Not remembered per file |
 | C | Curved screen on or off, flat only; prints `screen curve: 1.00` or `screen curve: off` |
+| D | Depth 3D on / off, for a photo with depth (see [Depth 3D for photos](#depth-3d-for-photos)); prints `depth: off, strength 2.0%, plane 0.50`. On at start; carries over from one photo to the next |
+| - / = | Depth strength down / up (0.5% of the picture width per step, 0 to 5%); prints the `depth:` line. Remembered per photo |
+| , / . | Screen plane further / nearer (0.05 per step, 0 to 1): further brings the picture forward; prints the `depth:` line. Remembered per photo |
 | ? | Print the key list to stderr (`keys:` lines) |
 | I | Print playback information to stderr (`info:` lines) |
 | Q | Quit |
 
-The `zoom:`, `filter:` and `sharpen:` lines are printed only when the value changes (not for
-a press at a limit). `P` also prints the other projection's zoom, since each projection keeps its
+The `zoom:`, `filter:`, `sharpen:` and `depth:` lines are printed only when the value changes
+(not for a press at a limit). `P` also prints the other projection's zoom, since each projection keeps its
 own. In VR180, `Z` prints `zoom mode: magnify (VR180 has no screen mode)`, `L` prints
 `screen: fixed (VR180 cannot be head-locked)` and `C` prints
 `screen curve: none (VR180 has no flat screen)`, and none of them changes anything. `C` works
 the same in both zoom modes and prints the same lines in both; `Z` leaves the curve as it is.
-`?` is Shift+/ on a US keyboard. Key repeat is ignored except for zoom and seek.
+`?` is Shift+/ on a US keyboard. Key repeat is ignored except for zoom, seek, and the depth
+strength and plane. For a film, `D`, `-`, `=`, `,` and `.` print `depth: photos only` and change
+nothing; for a photo without depth they also print why (`depth: none for this photo: ...`).
 
 `I` prints, one item per line: the file name; codec, coded frame size and frame rate; `hwdec`;
 projection, layout and (flat 3D) packing, each with where it came from (the sources of the
@@ -459,7 +464,36 @@ same file:
 | 0.42.0, 9.0.2 (Gentoo, Arch) | as the transpose | as the transpose |
 | 0.37.0, 6.1.1 (Ubuntu 24.04) | as the transpose | turned, not mirrored: 2, 4, 5, 7 are shown as 3, 1, 6, 8 |
 
-Photos are not yet shown in 3D; the planned depth feature builds on this.
+### Depth 3D for photos
+
+A photo whose depth is in the cache is drawn in 3D: each eye sees the picture's points shifted
+sideways by their depth, nearer points out of the screen and further ones into it. Make the depth
+with [`xrdome-tools depth photo FILE|DIR`](docs/tools.md#depth) (it needs `xrdome-tools setup
+depth`); xrdome finds it by the sha256 of the photo's bytes, in
+`$XDG_CACHE_HOME/xrdome-tools/depth/` (default `~/.cache/xrdome-tools/depth/`), and prints
+`depth: 1365x2048 from the cache` when it opens the photo, or `depth: none cached; 2D
+(xrdome-tools depth photo makes it)`. Asking the helper for depth on the fly is not there yet.
+
+```
+xrdome-tools depth photo ~/Pictures/holiday/
+xrdome ~/Pictures/holiday/
+```
+
+- Disparity: a point of depth `z` (0 furthest, 1 nearest in the photo) is shifted by
+  `strength * (z - plane)` picture widths between the eyes, half each way. The strength (default
+  2% of the width, `-` / `=`, 0 to 5%) sets how deep the photo looks; the plane (default 0.5,
+  `,` / `.`) is the depth that sits on the screen. Both defaults are provisional, to be chosen by
+  eye on the glasses. Strength 0 is exactly the 2D picture. `S` swaps the eyes, which inverts the
+  depth.
+- Only a flat 2D (mono) photo is drawn in 3D; after `M` or `P` it is drawn as before. `I` prints
+  `info: depth: on, strength 2.0%, plane 0.50` or why there is none.
+- Each pixel searches 16 positions along its row for the nearest point that lands on it; the
+  edges of near objects uncover a little of what is behind them, which shows the background beside
+  the gap.
+- A photo mirrored by its EXIF tag (2, 4, 5 or 7; cameras do not write these) is shown in 2D, with a
+  `xrdome: note:` line, when mpv is older than 0.42: older mpv turns it without mirroring it (table
+  above), so the depth would not line up. A depth whose shape does not fit the picture mpv shows
+  (EXIF that mpv does not apply, outside JPEG) is dropped with a warning.
 
 ## Format detection
 
@@ -553,8 +587,8 @@ by `P` is not.
 
 xrdome remembers these settings for each video file and restores them the next time you open the
 same file: the projection, the VR180 zoom and the flat zoom, layout (`sbs-lr`, `sbs-rl`, `tb-lr`,
-`tb-rl`, `mono`), packing, zoom mode, swap-eyes, content FOV and convergence. The screen lock is
-not remembered. The playback position is remembered only when you ask for it with `--resume`
+`tb-rl`, `mono`), packing, zoom mode, swap-eyes, content FOV and convergence, and for a photo
+the depth strength and screen plane (`-` `=` `,` `.`). The screen lock is not remembered. The playback position is remembered only when you ask for it with `--resume`
 (see [Resume](#resume-where-you-left-off)).
 
 Only settings you changed are stored. A setting counts as changed for a file when a key changed it
@@ -597,7 +631,8 @@ content_fov = 120x90
 `path` and `saved` are labels for you (and for `grep`); xrdome never uses them to find or check a
 record. The settings keys are `zoom` (the VR180 zoom, 0.25 to 4), `flat_zoom` (the flat zoom, 0.25
 to 4), `layout`, `packing` (`half` or `full`), `zoom_mode` (`screen` or `magnify`), `swap` (`yes`
-or `no`), `content_fov` (`HxV`, each 10 to 180) and `convergence` (-5 to 5); a missing key means
+or `no`), `content_fov` (`HxV`, each 10 to 180), `convergence` (-5 to 5), `depth_strength` (0
+to 0.05, picture widths) and `depth_plane` (0 to 1); a missing key means
 "follow the defaults" (or, for `layout` and `packing`, detection). `position` (seconds, three
 decimals) is only written with `--resume`.
 

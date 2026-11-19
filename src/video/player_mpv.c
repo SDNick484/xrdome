@@ -39,6 +39,7 @@ struct xrd_player {
     bool aspect_warning; /* xrd_player_set_aspect_warning */
     bool sub_pref;       /* mpv's sub-visibility at open */
     char codec[128];
+    char version[128];
     xrd_layout layout; /* what the aspect warning expects; see xrd_player_set_content */
     float hfov_deg, vfov_deg;
     char hwdec[64];
@@ -864,6 +865,14 @@ const char *xrd_player_hwdec(xrd_player *p)
     snprintf(p->hwdec, sizeof p->hwdec, "%s", s ? s : "");
     mpv_free(s);
     return p->hwdec;
+}
+
+const char *xrd_player_mpv_version(xrd_player *p)
+{
+    char *s = mpv_get_property_string(p->mpv, "mpv-version");
+    snprintf(p->version, sizeof p->version, "%s", s ? s : "");
+    mpv_free(s);
+    return p->version;
 }
 
 const char *xrd_player_scale(xrd_player *p)

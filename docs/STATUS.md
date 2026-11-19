@@ -11,8 +11,8 @@ Plan: `docs/superpowers/plans/2026-11-11-xrdome.md` (Tasks 0-10 done; Task 10's 
 - Head tracking from XRLinuxDriver over OpenTrack UDP (port 4242); recenter keys; seek; audio.
 - Frame timing: 0.6% late frames with defaults (mpv profile `fast`, bicubic, 10-bit FBO + dither).
 - Options and keys: see README.
-- CI (GitHub Actions) builds with `-Dwerror=true` and runs the whole suite, failing if any of the four
-  Xvfb smoke tests (`smoke`, `smoke_tracking`, `smoke_sbs`, `smoke_photos`) skips, in two jobs: Ubuntu 24.04 (mpv 0.37)
+- CI (GitHub Actions) builds with `-Dwerror=true` and runs the whole suite, failing if any of the five
+  Xvfb smoke tests (`smoke`, `smoke_tracking`, `smoke_sbs`, `smoke_photos`, `smoke_depth`) skips, in two jobs: Ubuntu 24.04 (mpv 0.37)
   and an `archlinux:latest` container (gcc 16.2.1, mpv 0.41 / libmpv 2.5.0, `sdl2-compat` 2.32.74 on
   SDL3, Mesa 26.2 on 2026-11-14). Arch's SDL adds `-D_GNU_SOURCE=1` to the cflags, and its
   `xvfb-run` (T2 SDE's copy of an old Debian script) sleeps 3 s per start, so `smoke` takes about 315 s there; that job
@@ -909,6 +909,35 @@ and the ends, a single file, an empty directory, per-photo zoom records.
 Not seen on the glasses: a portrait and a landscape photo upright and the right shape (owner).
 Limits: a photo mpv cannot decode ends the run, as a film does; HEIC is not opened (plan Task 6);
 `ffprobe` runs once per photo on PageDown, blocking the loop for its few tens of ms.
+
+## Depth 3D for photos (issue #69, Task 4 of the depth 3D plan, 2026-11-19)
+
+Spec `docs/superpowers/specs/2026-11-19-depth-3d-design.md` section 6 and the keys of section 7.
+A photo whose depth `xrdome-tools depth photo` has cached is drawn in 3D. README, Depth 3D for photos.
+- Cache (read side, `src/render/depthmap.c`): key = sha256 of the photo's bytes (own FIPS 180-4
+  code), `$XDG_CACHE_HOME/xrdome-tools/depth/<key>-dav2s-v1.pgm`, PGM `P5`/65535/big-endian with an
+  exact body length. `test_depthmap` runs `tools/xrdome_depth/cache.py` to write a file and reads it
+  back by the C key. Hashing blocks the loop at open and on PageDown (tens of ms for a large JPEG).
+- Shader (`depth_u()` in `vr180.frag`, C mirror `xrd_depth_source_u`): parallax search, N = 16
+  depths from near to far, linear refinement, a wall hit (more than two steps in front) takes the
+  previous try, so gaps show the background beside them. Only flat mono with strength > 0; every
+  other draw is byte-identical to before (`test_render`).
+- Keys `D`, `-` `=` (0.5% steps, 0 to 5%), `,` `.` (0.05 steps); strength and plane in filestate
+  (`depth_strength`, `depth_plane`). Defaults 2% and 0.5 are provisional.
+- Orientation: for EXIF tags 2, 4, 5, 7 on mpv older than 0.42 the photo is shown in 2D with a note
+  (mpv reports no flip; 0.38 to 0.41 untested). A depth whose aspect does not fit the shown picture is
+  dropped with a warning.
+
+Timing, measured 2026-11-19 on the Viture Pro XR at 3840x1080@60 (Radeon 860M, Mesa RADV GL), a
+4032x3024 synthetic JPEG at the default flat zoom 1.5 (picture fills both eyes, trilinear), 2048x1536
+depth, `--frames 3600 --timing-log`: 0 swap intervals over 20 ms in each of 3600 frames for no depth,
+a scene-like depth and an all-far depth (the worst case: all 16 tries per pixel); p99 interval
+17.1 to 17.6 ms. GPU time of the eye pass (a temporary GL_TIME_ELAPSED query, not committed), mean /
+max over 2900 frames: 2D 1.12 / 1.61 ms; scene depth N=16 2.10 / 3.00 ms; all-far N=8 1.97 / 3.02,
+N=16 2.65 / 3.66, N=32 3.39 / 4.52, N=64 4.20 / 5.54 ms. N = 16 leaves wide headroom; no lower N or
+mesh fallback needed.
+
+Not seen by eye on the glasses: default strength and plane, doubled edges (owner).
 
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.

@@ -11,7 +11,8 @@ enum { XRD_SET_ZOOM = 1u << 0, XRD_SET_LAYOUT = 1u << 1, XRD_SET_SWAP = 1u << 2,
        XRD_SET_CONTENT_FOV = 1u << 3, XRD_SET_CONVERGENCE = 1u << 4,
        XRD_SET_PROJ = 1u << 5, XRD_SET_FLAT_ZOOM = 1u << 6, XRD_SET_PACKING = 1u << 7,
        XRD_SET_ZOOM_MODE = 1u << 8,
-       XRD_SET_POSITION = 1u << 9 /* playback position: not a view setting, see below */ };
+       XRD_SET_POSITION = 1u << 9, /* playback position: not a view setting, see below */
+       XRD_SET_DEPTH_STRENGTH = 1u << 10, XRD_SET_DEPTH_PLANE = 1u << 11 };
 
 typedef struct {
     float zoom;
@@ -23,6 +24,8 @@ typedef struct {
     float flat_zoom;
     xrd_packing packing;
     xrd_zoom_mode zoom_mode;
+    float depth_strength; /* depth 3D (photos) */
+    float depth_plane;
     double position;     /* seconds into the file (XRD_SET_POSITION), kept apart from the
                             view settings: apply, collect and equal's field loop skip it */
 } xrd_file_settings;
@@ -96,6 +99,7 @@ int xrd_filestate_delete(const char *dir, const char *key);
 #define XRD_FS_TOL_ZOOM 0.001f
 #define XRD_FS_TOL_FOV 0.01f
 #define XRD_FS_TOL_CONVERGENCE 0.001f
+#define XRD_FS_TOL_DEPTH 0.0001f
 
 /* Copies each field that is set in rec and whose bit is NOT in explicit_flags
  * into *s. Returns the bits copied. */
@@ -111,10 +115,12 @@ void xrd_filestate_collect(const xrd_filestate *loaded, unsigned explicit_flags,
  * 0.0005 s, what the record's three decimals hold). */
 bool xrd_filestate_equal(const xrd_filestate *a, const xrd_filestate *b);
 /* "zoom=0.75 layout=sbs-rl swap=yes content-fov=120x90 convergence=1.5 proj=flat
- * flat-zoom=1.65 packing=half zoom-mode=magnify" for the fields in
+ * flat-zoom=1.65 packing=half zoom-mode=magnify depth-strength=2.5% depth-plane=0.45"
+ * for the fields in
  * (st->set & mask), in that order, space separated. Returns length, 0 for
  * none, -1 if it does not fit. The position, last, is "position=H:MM:SS". Formats: zoom and flat-zoom %.2f, fov %gx%g,
- * convergence %.1f. */
+ * convergence %.1f, depth strength
+ * in percent %.1f%%, depth plane %.2f. */
 int xrd_filestate_describe(const xrd_filestate *st, unsigned mask, char *buf, size_t len);
 
 #endif

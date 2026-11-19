@@ -113,4 +113,37 @@ float xrd_minify_ratio(xrd_proj proj, const xrd_view_geom *g, int eye_src_w, int
                        int out_eye_w, int out_eye_h,
                        float content_hfov_deg, float content_vfov_deg);
 
+/* Depth 3D for a flat mono picture (spec 6 of the depth 3D design). A picture
+ * point with normalised depth z (0 far, 1 near) has the disparity
+ * strength * (z - plane), in picture widths; the left eye shows it shifted by
+ * +disparity / 2, the right eye by -disparity / 2, and swapped eyes invert
+ * that. */
+#define XRD_DEPTH_STRENGTH_DEFAULT 0.02f /* provisional: the owner picks by eye */
+#define XRD_DEPTH_STRENGTH_MAX 0.05f
+#define XRD_DEPTH_STRENGTH_STEP 0.005f
+#define XRD_DEPTH_PLANE_DEFAULT 0.5f     /* provisional */
+#define XRD_DEPTH_PLANE_STEP 0.05f
+#define XRD_DEPTH_SEARCH_N 16            /* positions the search tries per pixel */
+
+/* k for xrd_depth_source_u: +strength / 2 for the left viewport (eye 0),
+ * -strength / 2 for the right, the other way round with swap. */
+float xrd_depth_shift(int eye, bool swap, float strength);
+
+/* The depth at picture u (0 left edge, 1 right edge) on the row being drawn,
+ * in [0, 1]; the caller clamps u to the picture. */
+typedef float (*xrd_depth_sample_fn)(const void *ctx, float u);
+
+/* The picture u an eye shows at output u: the nearest picture point x with
+ * x + k * (depth(x) - plane) == u, where k is xrd_depth_shift. The search
+ * walks n >= 2 depths z from 1 (near) down to 0 in equal steps, trying the
+ * picture point x(z) = u - k * (z - plane) that z would put at u, and stops at
+ * the first whose depth is at least z (parallax-occlusion style). The answer
+ * is refined linearly between that try and the one before. When the hit is a
+ * wall (its depth is more than two steps nearer than z: a near edge seen past
+ * its side), the previous try is the answer: uncovered gaps show the
+ * background beside them. k == 0 returns u exactly. Mirrors depth_u() in
+ * vr180.frag: keep the two in step. */
+float xrd_depth_source_u(float u, float k, float plane, int n, xrd_depth_sample_fn depth,
+                         const void *ctx);
+
 #endif

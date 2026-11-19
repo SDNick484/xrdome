@@ -22,6 +22,7 @@
 #include "math/quat.h"
 #include "platform/platform.h"
 #include "pose/pose.h"
+#include "render/depthmap.h"
 #include "render/projection.h"
 #include "render/renderer_gl.h"
 #include "store/filestate.h"
@@ -116,6 +117,11 @@ typedef struct {
     xrd_imagedir photos;     /* the directory argument's photos; count 0 for a file */
     size_t photo_index;      /* which of them is open */
     int nav;                 /* PageDown +1 / PageUp -1 pressed, not yet acted on */
+    xrd_renderer *r;
+    int mpv_major, mpv_minor; /* xrd_mpv_version_parse of mpv's version, 0.0 if unknown */
+    int depth_w, depth_h;    /* the open photo's depth in the renderer; 0 x 0 for none */
+    bool depth_checked;      /* its aspect was checked against the picture shown */
+    const char *depth_why;   /* why the open file has no depth (D and I), NULL when it has */
 } xrd_app;
 
 /* F of spec 5.3 for the frame now playing: the video texture's (coded) size
@@ -277,6 +283,14 @@ static void print_sharpen(float s, const char *prefix)
         fprintf(stderr, "%ssharpen: off\n", prefix);
 }
 
+/* "depth: on, strength 2.0%, plane 0.50" or "depth: off ..." */
+static void print_depth(const xrd_controls *c, const char *prefix)
+{
+    fprintf(stderr, "%sdepth: %s, strength %.1f%%, plane %.2f\n", prefix,
+            c->depth_on ? "on" : "off", (double)c->depth_strength * 100.0,
+            (double)c->depth_plane);
+}
+
 /* The I key (spec 5.7): one item per line. */
 static void print_info(xrd_app *a)
 {
@@ -329,6 +343,10 @@ static void print_info(xrd_app *a)
             a->trilinear ? "trilinear" : xrd_value_filter_name(c->filter),
             a->mip_want ? "on" : "off");
     print_sharpen(c->sharpen, "info: ");
+    if (a->depth_why)
+        fprintf(stderr, "info: depth: none (%s)\n", a->depth_why);
+    else
+        print_depth(c, "info: ");
     int tw, th;
     xrd_player_texture_size(a->p, &tw, &th);
     if (!a->cfg->mpv_scale[0]) {
@@ -350,7 +368,7 @@ static void print_info(xrd_app *a)
             xrd_timing_missed_vsyncs(a->timing));
 }
 
-/* Prints the zoom, filter and sharpen lines for the values that differ
+/* Prints the zoom, filter, sharpen and depth lines for the values that differ
  * between before and after (a key press at a limit prints nothing). */
 static void report_display_changes(const xrd_controls *before, const xrd_controls *after)
 {
@@ -360,6 +378,86 @@ static void report_display_changes(const xrd_controls *before, const xrd_control
         fprintf(stderr, "filter: %s\n", xrd_value_filter_name(after->filter));
     if (after->sharpen != before->sharpen)
         print_sharpen(after->sharpen, "");
+    if (after->depth_on != before->depth_on || after->depth_strength != before->depth_strength ||
+        after->depth_plane != before->depth_plane)
+        print_depth(after, "");
+}
+
+/* Depth 3D (spec 6 and 7 of the depth 3D design): the cached depth of the
+ * photo now open, read into the renderer, or why there is none. At start and
+ * for each photo; one depth: line, warning or note per photo. The depth's
+ * aspect is checked against the picture once it is shown (depth_fits). */
+static void depth_load(xrd_app *a)
+{
+    xrd_renderer_set_depth(a->r, NULL, 0, 0, NULL, 0);
+    a->depth_w = a->depth_h = 0;
+    a->depth_checked = false;
+    a->depth_why = "not a photo";
+    if (!a->det.image)
+        return;
+    const char *file = a->cfg->file;
+    char key[XRD_DEPTH_KEY_LEN + 1], dir[4096], path[4200], err[256] = "";
+    if (xrd_depth_key(file, key) != 0) {
+        a->depth_why = "the photo cannot be read";
+        fprintf(stderr, "xrdome: warning: cannot read %s for its depth key: %s\n", file,
+                strerror(errno));
+        return;
+    }
+    if (xrd_depth_cache_dir(dir, sizeof dir) != 0 ||
+        xrd_depth_cache_path(dir, key, path, sizeof path) != 0) {
+        a->depth_why = "no cache directory (XDG_CACHE_HOME and HOME unset)";
+        fprintf(stderr, "depth: none: %s\n", a->depth_why);
+        return;
+    }
+    xrd_depthmap m;
+    switch (xrd_depthmap_read(path, &m, err, sizeof err)) {
+    case XRD_DEPTH_NONE:
+        a->depth_why = "none cached (xrdome-tools depth photo makes it)";
+        fprintf(stderr, "depth: none cached; 2D (xrdome-tools depth photo makes it)\n");
+        return;
+    case XRD_DEPTH_BAD:
+        a->depth_why = "its cache file is unreadable";
+        fprintf(stderr, "xrdome: warning: depth %s: %s; showing the photo in 2D\n", path, err);
+        return;
+    case XRD_DEPTH_OK:
+        break;
+    }
+    int orient = xrd_exif_orientation(file);
+    if (!xrd_depth_orientation_ok(orient, a->mpv_major, a->mpv_minor)) {
+        a->depth_why = "mirrored by EXIF, and this mpv does not mirror it";
+        fprintf(stderr, "xrdome: note: EXIF Orientation %d mirrors this photo and mpv %d.%d does "
+                        "not; showing it in 2D (mpv 0.42 does)\n",
+                orient, a->mpv_major, a->mpv_minor);
+    } else if (!xrd_renderer_set_depth(a->r, m.px, m.w, m.h, err, sizeof err)) {
+        a->depth_why = "the GPU did not take it";
+        fprintf(stderr, "xrdome: warning: depth %s: %s; showing the photo in 2D\n", path, err);
+    } else {
+        a->depth_w = m.w;
+        a->depth_h = m.h;
+        a->depth_why = NULL;
+        fprintf(stderr, "depth: %dx%d from the cache\n", m.w, m.h);
+    }
+    xrd_depthmap_free(&m);
+}
+
+/* Once the open photo is shown: its depth must have the picture's aspect, or
+ * it was made for another orientation (EXIF that mpv does not apply, outside
+ * JPEG); then it is dropped with a warning. */
+static void depth_fits(xrd_app *a)
+{
+    if (a->depth_checked || a->depth_w == 0)
+        return;
+    a->depth_checked = true;
+    int vw = 0, vh = 0;
+    xrd_player_video_size(a->p, &vw, &vh);
+    if (xrd_depth_aspect_matches(a->depth_w, a->depth_h, vw, vh))
+        return;
+    fprintf(stderr, "xrdome: warning: the depth (%dx%d) does not fit the picture shown (%dx%d): "
+                    "made for another orientation; showing the photo in 2D\n",
+            a->depth_w, a->depth_h, vw, vh);
+    xrd_renderer_set_depth(a->r, NULL, 0, 0, NULL, 0);
+    a->depth_w = a->depth_h = 0;
+    a->depth_why = "it does not fit the picture shown";
 }
 
 /* P (spec 5.7): the other projection, with its own zoom. A layout that was
@@ -511,6 +609,29 @@ static bool handle_key_action(const SDL_KeyboardEvent *k, xrd_app *a)
         if (!k->repeat)
             print_info(a);
         break;
+    case SDLK_d: /* depth 3D: photos only (spec 7 of the depth 3D design) */
+    case SDLK_MINUS:
+    case SDLK_EQUALS:
+    case SDLK_COMMA:
+    case SDLK_PERIOD:
+        if (!a->det.image) {
+            if (!k->repeat)
+                fprintf(stderr, "depth: photos only\n");
+            break;
+        }
+        if (k->keysym.sym == SDLK_d && !k->repeat)
+            xrd_controls_toggle_depth(ctl);
+        else if (k->keysym.sym == SDLK_MINUS)
+            xrd_controls_depth_weaker(ctl);
+        else if (k->keysym.sym == SDLK_EQUALS)
+            xrd_controls_depth_stronger(ctl);
+        else if (k->keysym.sym == SDLK_COMMA)
+            xrd_controls_plane_further(ctl);
+        else if (k->keysym.sym == SDLK_PERIOD)
+            xrd_controls_plane_nearer(ctl);
+        if (a->depth_why && !k->repeat)
+            fprintf(stderr, "depth: none for this photo: %s\n", a->depth_why);
+        break;
     default:
         break;
     }
@@ -606,7 +727,7 @@ static void memory_save(const xrd_memory *m, const xrd_config *cfg, const char *
     if (m->have_loaded && xrd_filestate_equal(&m->loaded, &out))
         return;
 
-    char err[256] = "", text[200];
+    char err[256] = "", text[256];
     if (xrd_filestate_save(m->dir, m->key, &out, file, err, sizeof err) != 0)
         fprintf(stderr, "xrdome: warning: cannot save settings: %s\n", err);
     else if (xrd_filestate_describe(&out, ~0u, text, sizeof text) > 0)
@@ -655,7 +776,7 @@ static void detect_and_start(xrd_app *a, const xrd_config *cfg, xrd_memory *mem,
         mem->resume_at = rpos;
         shown |= XRD_SET_POSITION;
     }
-    char text[200];
+    char text[256];
     if (rec && shown && xrd_filestate_describe(rec, shown, text, sizeof text) > 0)
         fprintf(stderr, "settings: restored %s\n", text);
     if (a->det.proj == XRD_PROJ_FLAT && (cfg->explicit_flags & XRD_SET_CONTENT_FOV))
@@ -674,8 +795,8 @@ static void detect_and_start(xrd_app *a, const xrd_config *cfg, xrd_memory *mem,
  * file (filter, sharpening, curve, screen lock, mouse look) carries over. The
  * old picture stays up until the new one has been drawn. *rendered is false
  * until that happens, so that a photo never shown never saves anything. */
-static int switch_photo(xrd_app *a, xrd_config *cfg, xrd_session *ss, xrd_renderer *r,
-                        bool *rendered, char *err, size_t errlen)
+static int switch_photo(xrd_app *a, xrd_config *cfg, xrd_session *ss, bool *rendered, char *err,
+                        size_t errlen)
 {
     long next = xrd_imagedir_step(&a->photos, a->photo_index, a->nav);
     bool forward = a->nav > 0;
@@ -708,8 +829,10 @@ static int switch_photo(xrd_app *a, xrd_config *cfg, xrd_session *ss, xrd_render
     a->ctl->screen_locked = old.screen_locked;
     a->ctl->mouse_yaw_deg = old.mouse_yaw_deg;
     a->ctl->mouse_pitch_deg = old.mouse_pitch_deg;
+    a->ctl->depth_on = old.depth_on;
     a->proj_keyed = a->layout_keyed = a->packing_keyed = false;
-    xrd_renderer_set_content_fov(r, ss->s.content_hfov, ss->s.content_vfov);
+    xrd_renderer_set_content_fov(a->r, ss->s.content_hfov, ss->s.content_vfov);
+    depth_load(a);
     apply_format(a);
     *rendered = false;
     return xrd_player_load(a->p, cfg->file, err, errlen);
@@ -789,7 +912,9 @@ int main(int argc, char **argv)
         goto out;
     }
 
-    for (const char *k = cfg.press; k[0];) { /* --press: names to SDL key codes */
+    /* --press: SDL key names to key codes; "comma" stands for ",", which
+     * separates the names. */
+    for (const char *k = cfg.press; k[0];) {
         size_t n = strcspn(k, ",");
         char name[32];
         if (n == 0 || n >= sizeof name || press_n == XRD_PRESS_MAX) {
@@ -798,7 +923,9 @@ int main(int argc, char **argv)
         }
         memcpy(name, k, n);
         name[n] = '\0';
-        if ((press_keys[press_n++] = SDL_GetKeyFromName(name)) == SDLK_UNKNOWN) {
+        if ((press_keys[press_n++] = strcmp(name, "comma") == 0 ? SDLK_COMMA
+                                                                : SDL_GetKeyFromName(name)) ==
+            SDLK_UNKNOWN) {
             fail("--press: unknown key '%s'", name);
             goto out;
         }
@@ -948,6 +1075,9 @@ int main(int argc, char **argv)
     app.trk = trk;
     app.p = p;
     app.timing = timing;
+    app.r = r;
+    xrd_mpv_version_parse(xrd_player_mpv_version(p), &app.mpv_major, &app.mpv_minor);
+    depth_load(&app);
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &app.max_tex);
     apply_format(&app); /* before the first xrd_player_update */
     xrd_renderer_set_content_fov(r, ss.s.content_hfov, ss.s.content_vfov);
@@ -1005,7 +1135,7 @@ int main(int argc, char **argv)
         }
         if (quit)
             break;
-        if (app.nav && switch_photo(&app, &cfg, &ss, r, &rendered, err, sizeof err) < 0) {
+        if (app.nav && switch_photo(&app, &cfg, &ss, &rendered, err, sizeof err) < 0) {
             fail("%s", err);
             goto out;
         }
@@ -1021,8 +1151,10 @@ int main(int argc, char **argv)
         /* After PageDown the texture still holds the old photo until the new
          * one is drawn; those frames are not the new photo's. */
         const bool shown = tex && xrd_player_file_shown(p);
-        if (shown)
+        if (shown) {
             rendered = true;
+            depth_fits(&app);
+        }
 
         if (size_dirty) {
             SDL_GL_GetDrawableSize(win, &out_w, &out_h);
@@ -1092,6 +1224,11 @@ int main(int argc, char **argv)
                 .geom = app.geom,
                 .trilinear = app.trilinear,
                 .screen_curve = xrd_controls_screen_curve(&ctl),
+                /* the depth belongs to the photo now open: not to the old
+                 * picture still up after PageDown */
+                .depth = ctl.depth_on && shown && app.depth_w > 0,
+                .depth_strength = ctl.depth_strength,
+                .depth_plane = ctl.depth_plane,
             };
             /* --mipmap-check: every draw that wants mipmaps must find a chain
              * generated for the frame in the texture. Without one the draw

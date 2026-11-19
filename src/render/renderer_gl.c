@@ -3,6 +3,7 @@
 #include <epoxy/gl.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "math/quat.h"
 #include "shaders_gen.h"
@@ -11,7 +12,9 @@ struct xrd_renderer {
     GLuint prog;
     GLuint vao;
     GLint u_video, u_rot, u_tan_half, u_proj, u_inv_fov, u_reject, u_flat_half, u_flat_curve,
-        u_eye_scale, u_eye_offset, u_filter, u_dither, u_mask, u_trilinear, u_max_level;
+        u_eye_scale, u_eye_offset, u_filter, u_dither, u_mask, u_trilinear, u_max_level,
+        u_depth, u_depth_on, u_depth_k, u_depth_plane, u_depth_n;
+    GLuint depth_tex; /* depth 3D: the picture's depth, 0 when there is none */
     /* Sharpening (sharpen.frag): its program, and the intermediate the eye
      * pass draws into while it is on, made on the first sharpened draw and
      * remade when the output size changes. */
@@ -130,6 +133,11 @@ xrd_renderer *xrd_renderer_new(char *err, size_t errlen)
     r->u_max_level = glGetUniformLocation(prog, "u_max_level");
     r->dither = false;
     r->u_mask = glGetUniformLocation(prog, "u_mask");
+    r->u_depth = glGetUniformLocation(prog, "u_depth");
+    r->u_depth_on = glGetUniformLocation(prog, "u_depth_on");
+    r->u_depth_k = glGetUniformLocation(prog, "u_depth_k");
+    r->u_depth_plane = glGetUniformLocation(prog, "u_depth_plane");
+    r->u_depth_n = glGetUniformLocation(prog, "u_depth_n");
     r->sharp_prog = sharp;
     r->s_src = glGetUniformLocation(sharp, "u_src");
     r->s_lo = glGetUniformLocation(sharp, "u_lo");
@@ -151,6 +159,8 @@ void xrd_renderer_free(xrd_renderer *r)
         glDeleteFramebuffers(1, &r->mid_fbo);
     if (r->mid_tex)
         glDeleteTextures(1, &r->mid_tex);
+    if (r->depth_tex)
+        glDeleteTextures(1, &r->depth_tex);
     free(r);
 }
 
@@ -178,6 +188,81 @@ void xrd_renderer_set_filter(xrd_renderer *r, xrd_filter f)
 void xrd_renderer_set_sharpen(xrd_renderer *r, float strength)
 {
     r->sharpen = strength > 0.f ? (strength < 1.f ? strength : 1.f) : 0.f;
+}
+
+bool xrd_renderer_set_depth(xrd_renderer *r, const uint16_t *px, int w, int h, char *err,
+                            size_t errlen)
+{
+    if (r->depth_tex) {
+        glDeleteTextures(1, &r->depth_tex);
+        r->depth_tex = 0;
+    }
+    if (!px)
+        return true;
+    GLint max = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max);
+    if (w < 1 || h < 1 || w > max || h > max) {
+        char what[64];
+        snprintf(what, sizeof what, "%dx%d", w, h);
+        set_err(err, errlen, what, "outside the GPU's texture size limit");
+        return false;
+    }
+    /* GL's rows run bottom up: the top row goes last, so that t = 1 is the
+     * top, as in the video texture. */
+    size_t row = (size_t)w;
+    uint16_t *flip = malloc(row * (size_t)h * sizeof *flip);
+    if (!flip) {
+        set_err(err, errlen, "depth", "out of memory");
+        return false;
+    }
+    for (int y = 0; y < h; y++)
+        memcpy(flip + (size_t)(h - 1 - y) * row, px + (size_t)y * row, row * sizeof *flip);
+    /* The unpack state is mpv's as much as ours: set what the upload needs
+     * and put it back. */
+    GLint align, row_len, skip_px, skip_rows, pbo;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &align);
+    glGetIntegerv(GL_UNPACK_ROW_LENGTH, &row_len);
+    glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &skip_px);
+    glGetIntegerv(GL_UNPACK_SKIP_ROWS, &skip_rows);
+    glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &pbo);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    while (glGetError() != GL_NO_ERROR)
+        ;
+    glGenTextures(1, &r->depth_tex);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, r->depth_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R16, w, h, 0, GL_RED, GL_UNSIGNED_SHORT, flip);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    GLenum e = glGetError();
+    glActiveTexture(GL_TEXTURE0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, align);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, row_len);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, skip_px);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, skip_rows);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, (GLuint)pbo);
+    free(flip);
+    if (e != GL_NO_ERROR) {
+        char what[64];
+        snprintf(what, sizeof what, "%dx%d R16 texture", w, h);
+        set_err(err, errlen, what, "GL error on upload");
+        glDeleteTextures(1, &r->depth_tex);
+        r->depth_tex = 0;
+        return false;
+    }
+    return true;
+}
+
+bool xrd_renderer_has_depth(const xrd_renderer *r)
+{
+    return r->depth_tex != 0;
 }
 
 /* Makes the intermediate w x h (GL_RGB10_A2: 10 bits per colour, the same
@@ -280,6 +365,19 @@ void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
     glUniform1i(r->u_filter, dp->trilinear ? 0 : filter_index(r->filter));
     glUniform1i(r->u_dither, r->dither && !sharpen);
     glUniform1i(r->u_mask, sharpen);
+    /* Depth 3D: only for a flat mono picture; at strength 0 the draw is
+     * exactly the one without it. */
+    bool depth = dp->depth && r->depth_tex && dp->proj == XRD_PROJ_FLAT &&
+                 dp->layout == XRD_LAYOUT_MONO && dp->depth_strength > 0.f;
+    glUniform1i(r->u_depth_on, depth);
+    glUniform1i(r->u_depth, 1);
+    if (depth) {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, r->depth_tex);
+        glActiveTexture(GL_TEXTURE0);
+        glUniform1f(r->u_depth_plane, dp->depth_plane);
+        glUniform1i(r->u_depth_n, XRD_DEPTH_SEARCH_N);
+    }
 
     int half = out_w / 2;
     for (int eye = 0; eye < 2; eye++) {
@@ -287,6 +385,8 @@ void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
         xrd_eye_uv_transform(dp->layout, eye, dp->swap_eyes, scale, offset);
         glUniform2f(r->u_eye_scale, scale[0], scale[1]);
         glUniform2f(r->u_eye_offset, offset[0], offset[1]);
+        if (depth)
+            glUniform1f(r->u_depth_k, xrd_depth_shift(eye, dp->swap_eyes, dp->depth_strength));
         /* Convergence, in head space after the view rotation: positive yaw
          * turns left, so the left viewport turns right by half (-c/2) and
          * the right viewport left (+c/2). */

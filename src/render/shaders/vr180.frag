@@ -14,6 +14,11 @@ uniform bool  u_dither;     // ordered dithering of the 8-bit output
 uniform bool  u_mask;       // black writes alpha 0: the picture mask for sharpen.frag
 uniform bool  u_trilinear;  // sample through the mipmap chain (levels 0..u_max_level)
 uniform int   u_max_level;  // XRD_MIP_MAX_LEVEL
+uniform sampler2D u_depth;  // depth 3D: the picture's depth (R16, 1 near), oriented like u_video
+uniform bool  u_depth_on;   // depth 3D for this draw (flat mono picture, strength > 0)
+uniform float u_depth_k;    // this eye's shift per unit of depth: +-strength/2 (xrd_depth_shift)
+uniform float u_depth_plane; // the depth that sits on the screen
+uniform int   u_depth_n;    // positions the search tries (XRD_DEPTH_SEARCH_N)
 in  vec2 v_ndc;             // -1..1 within this eye's viewport
 out vec4 o_color;
 
@@ -122,6 +127,40 @@ vec2 mip_margin(int k, vec2 ts)
     return e + ts / vec2(textureSize(u_video, k));
 }
 
+// Depth 3D (spec 6 of the depth 3D design): the picture u this eye shows at
+// output u, on row v. Walks the depths z from 1 (near) to 0 in u_depth_n
+// equal steps, trying the picture point x(z) = u - k (z - plane) that depth z
+// would put at u, and stops at the first whose depth is at least z (the
+// nearest surface wins), refined linearly between that try and the one
+// before. A hit more than two steps nearer than z is a wall, the side of a
+// near edge: the previous try is the answer, so an uncovered gap shows the
+// background beside it. Mirrors xrd_depth_source_u: keep the two in step.
+float depth_u(float u, float v)
+{
+    float k = u_depth_k;
+    float dz = 1.0 / float(u_depth_n - 1);
+    float zp = 1.0;
+    float xp = u - k * (1.0 - u_depth_plane);
+    float dp = textureLod(u_depth, vec2(xp, v), 0.0).r;
+    if (dp >= zp)
+        return xp;
+    for (int i = 1; i < u_depth_n; i++) {
+        float z = 1.0 - float(i) * dz;
+        float x = u - k * (z - u_depth_plane);
+        float d = textureLod(u_depth, vec2(x, v), 0.0).r;
+        if (d >= z) {
+            if (d - z > 2.0 * dz)
+                return xp;
+            float a = zp - dp, b = d - z;
+            return xp + (x - xp) * (a / (a + b));
+        }
+        zp = z;
+        xp = x;
+        dp = d;
+    }
+    return xp;
+}
+
 void main()
 {
     vec3 d = u_rot * normalize(vec3(v_ndc * u_tan_half, -1.0));
@@ -190,6 +229,10 @@ void main()
         return;
     }
     uv = clamp(uv, 0.0, 1.0);
+    // Depth 3D moves the lookup along the row only; the filters below then
+    // sample the picture there as they would without it.
+    if (u_depth_on)
+        uv.x = clamp(depth_u(uv.x, uv.y), 0.0, 1.0);
     vec3 c;
     if (u_trilinear) {
         float lod = clamp(log2(clamp(rho, 1e-6, 1e6)), 0.0, float(u_max_level));

@@ -52,6 +52,7 @@ core_sources = files(
   'src/app/session.c',
   'src/app/imagedir.c',
   'src/platform/platform.c',
+  'src/render/depthmap.c',
 )
 
 # Test names: each entry NAME builds tests/test_NAME.c into test_NAME.
@@ -78,6 +79,7 @@ test_names = [
   'mpv_scale',
   'platform',
   'imagedir',
+  'depthmap',
 ]
 # test_render draws through a surfaceless Mesa EGL context.
 if not egl_dep.found()
@@ -100,6 +102,9 @@ xrdcore = static_library('xrdcore', core_sources, shaders_gen,
 fixture_args = [
   '-DXRD_FIXTURE_DIR="' + (meson.current_source_dir() / 'tests/fixtures/ffprobe') + '"',
   '-DXRD_TESTS_DIR="' + (meson.current_source_dir() / 'tests') + '"',
+  # test_depthmap: the helper's cache writer, run to cross-check the C reader.
+  '-DXRD_TOOLS_DIR="' + (meson.current_source_dir() / 'tools') + '"',
+  '-DXRD_PYTHON="' + py.full_path() + '"',
 ]
 
 # cmocka 2.0's assert macros use the GNU ", ##__VA_ARGS__" extension, which
@@ -142,6 +147,12 @@ test('smoke_sbs', find_program('tests/smoke_sbs.sh'),
 
 # Photos under Xvfb: EXIF orientations, a directory with PageDown / PageUp.
 test('smoke_photos', find_program('tests/smoke_photos.sh'),
+  args : [xrdome_exe],
+  is_parallel : false,
+  timeout : 300)
+
+# Depth 3D for photos under Xvfb: a step depth in the cache, the eyes' shift.
+test('smoke_depth', find_program('tests/smoke_depth.sh'),
   args : [xrdome_exe],
   is_parallel : false,
   timeout : 300)
