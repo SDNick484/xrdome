@@ -470,6 +470,99 @@ static void describe_examples(void **s)
     assert_int_equal(xrd_detect_describe(&d, buf, 0), -1);
 }
 
+/* ---- photos ---- */
+
+static xrd_probe image_probe(int w, int h)
+{
+    xrd_probe p = mk(w, h);
+    p.image = true;
+    return p;
+}
+
+static void image_is_flat_mono(void **s)
+{
+    (void)s;
+    /* Whatever the shape says: 2:1 would be VR180 SBS, 3:1 flat SBS, for a film. */
+    int shapes[][2] = {{4000, 3000}, {3000, 4000}, {2000, 1000}, {3000, 1000}, {1000, 1125}};
+    for (size_t i = 0; i < sizeof shapes / sizeof shapes[0]; i++) {
+        xrd_probe p = image_probe(shapes[i][0], shapes[i][1]);
+        xrd_detect d = resolve(&p, "/photos/IMG_0001.jpg");
+        expect(&d, XRD_PROJ_FLAT, XRD_LAYOUT_MONO);
+        assert_true(d.image);
+        assert_int_equal(d.proj_src, XRD_SRC_IMAGE);
+        assert_int_equal(d.layout_src, XRD_SRC_IMAGE);
+        assert_int_equal(d.note_count, 0);
+        /* The probe's size is the stored one; EXIF may turn it. */
+        assert_true(d.frame_aspect == 0.0);
+    }
+    xrd_probe p = image_probe(4000, 3000);
+    char buf[200];
+    xrd_detect d = resolve(&p, "a.jpg");
+    assert_true(xrd_detect_describe(&d, buf, sizeof buf) > 0);
+    assert_string_equal(buf, "proj=flat (image file) layout=mono (image file)");
+}
+
+static void image_other_sources_win(void **s)
+{
+    (void)s;
+    xrd_probe p = image_probe(4000, 2000);
+    /* The name says what it says: a side-by-side photo pair. */
+    xrd_detect d = resolve(&p, "holiday_SBS.jpg");
+    expect(&d, XRD_PROJ_FLAT, XRD_LAYOUT_SBS_LR);
+    assert_int_equal(d.proj_src, XRD_SRC_IMAGE);
+    assert_int_equal(d.layout_src, XRD_SRC_NAME);
+    assert_true(d.image);
+    /* A flag and a record beat the image default. */
+    xrd_detect_given flags, record;
+    memset(&flags, 0, sizeof flags);
+    memset(&record, 0, sizeof record);
+    flags.have_proj = true; flags.proj = XRD_PROJ_HEQUIRECT;
+    record.have_layout = true; record.layout = XRD_LAYOUT_TB_LR;
+    xrd_detect_resolve(&flags, &record, &p, "pano.jpg", &d);
+    expect(&d, XRD_PROJ_HEQUIRECT, XRD_LAYOUT_TB_LR);
+    assert_int_equal(d.proj_src, XRD_SRC_FLAG);
+    assert_int_equal(d.layout_src, XRD_SRC_RECORD);
+    /* A record saved with the photo: flat mono is what it says. */
+    memset(&flags, 0, sizeof flags);
+    memset(&record, 0, sizeof record);
+    record.have_proj = true; record.proj = XRD_PROJ_FLAT;
+    record.have_layout = true; record.layout = XRD_LAYOUT_MONO;
+    xrd_detect_resolve(&flags, &record, &p, "a.jpg", &d);
+    expect(&d, XRD_PROJ_FLAT, XRD_LAYOUT_MONO);
+    assert_int_equal(d.proj_src, XRD_SRC_RECORD);
+}
+
+static void image_by_name_without_probe(void **s)
+{
+    (void)s;
+    xrd_detect d = resolve(NULL, "/photos/IMG_0001.JPG");
+    assert_true(d.image);
+    expect(&d, XRD_PROJ_FLAT, XRD_LAYOUT_MONO);
+    assert_int_equal(d.note_count, 0); /* no "could not detect" note for a photo */
+    /* A probe that says it is not an image outranks the extension. */
+    xrd_probe p = mk(1920, 1080);
+    d = resolve(&p, "/films/clip.jpg");
+    assert_false(d.image);
+    /* And a film is not an image. */
+    d = resolve(NULL, "/films/clip.mp4");
+    assert_false(d.image);
+    expect(&d, XRD_PROJ_HEQUIRECT, XRD_LAYOUT_SBS_LR);
+}
+
+static void image_names(void **s)
+{
+    (void)s;
+    const char *yes[] = {"a.jpg", "a.JPG", "a.jpeg", "/x/y/a.PnG", "a.webp", "a.bmp", "a.tif",
+                         "a.TIFF", "my.photo.jpg", "dir.d/a.jpg"};
+    const char *no[] = {"", "a", "a.mp4", "jpg", ".jpg.txt", "a.jpg.mp4", "a.gif", "a.heic",
+                        "dir.jpg/a", "a.jpgx", "a."};
+    for (size_t i = 0; i < sizeof yes / sizeof yes[0]; i++)
+        assert_true(xrd_detect_image_name(yes[i]));
+    for (size_t i = 0; i < sizeof no / sizeof no[0]; i++)
+        assert_false(xrd_detect_image_name(no[i]));
+    assert_false(xrd_detect_image_name(NULL));
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -484,6 +577,10 @@ int main(void)
         cmocka_unit_test(frame_aspect_values),
         cmocka_unit_test(relayout),
         cmocka_unit_test(describe_examples),
+        cmocka_unit_test(image_is_flat_mono),
+        cmocka_unit_test(image_other_sources_win),
+        cmocka_unit_test(image_by_name_without_probe),
+        cmocka_unit_test(image_names),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

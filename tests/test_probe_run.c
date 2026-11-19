@@ -102,8 +102,8 @@ static void run_argv(void **s)
     FILE *f = fopen(out, "r");
     assert_non_null(f);
     char line[600];
-    const char *want[] = { "-v", "error", "-show_streams", "-i", path };
-    for (size_t i = 0; i < 5; i++) {
+    const char *want[] = { "-v", "error", "-show_streams", "-show_format", "-i", path };
+    for (size_t i = 0; i < 6; i++) {
         assert_non_null(fgets(line, sizeof line, f));
         line[strcspn(line, "\n")] = '\0';
         assert_string_equal(line, want[i]);

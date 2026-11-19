@@ -121,6 +121,7 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 | Space | Pause / resume |
 | Left / Right | Seek -10 s / +10 s |
 | Up / Down | Seek +60 s / -60 s |
+| PageDown / PageUp | Next / previous photo, when a directory was opened (see [Photos](#photos)); prints `photo: 2 of 5: name.jpg` |
 | R | Recenter, yaw only (keeps the current pitch and roll reference) |
 | Shift+R | Recenter, full |
 | [ / ] | Zoom out / in (x1.1 per step, 0.25 to 4); prints `zoom: 1.10` |
@@ -419,11 +420,52 @@ VR180 subtitles are turned off, because mpv would draw them once across the whol
 them between the eyes; `M` and `P` switch them with the layout. `--mpv-opt sub-visibility=no`
 turns them off for flat 2D too.
 
+## Photos
+
+An image file is shown as a flat mono screen, held in the room like a flat film and at the
+photo's own shape, until you quit. An image is a file that `ffprobe` reports as coming from an
+image demuxer (`image2`, `jpeg_pipe`, `png_pipe`, `webp_pipe`, ...; not an animated GIF); with no
+working `ffprobe`, a file name ending in `.jpg`, `.jpeg`, `.png`, `.webp`, `.bmp`, `.tif` or
+`.tiff`. The usual flags, keys and per-file settings work as for a flat film; a photo is `flat`
+and `mono` unless a flag, the photo's saved record, or a file name word (`SBS`, `TB`, ...) says
+otherwise (the `detect:` line says `image file`). There is no time to pause or seek in: Space and
+the seek keys do nothing, and `--resume` is ignored.
+
+```
+xrdome photo.jpg
+xrdome ~/Pictures/holiday/
+```
+
+A directory argument opens its photos in name order (the bytes of the file names, so
+`IMG_10.jpg` comes before `IMG_2.jpg`; names starting with `.`, other file types and
+subdirectories are skipped) and shows the first. `PageDown` and `PageUp` go to the next and the
+previous; they stop at the ends and do not wrap. Each press prints `photo: 2 of 5: name.jpg`
+(`photo: 5 of 5 (end of the directory)` at a limit), then the usual `detect:` and `settings:
+restored` lines for that photo. The old photo stays up until the new one is drawn. Zoom,
+projection, layout and the other per-file settings are remembered for each photo (see
+[Per-file settings](#per-file-settings)); the filter, sharpening, curve, screen lock and mouse look
+carry over from one photo to the next. `I` also prints `info: photo: 2 of 5`. A single photo has no
+neighbours: the keys do nothing. A photo mpv cannot decode ends xrdome with an error, as a film
+would.
+
+Orientation: mpv turns a JPEG upright by its EXIF Orientation tag, and xrdome shows the picture
+mpv draws, at the displayed shape (a portrait photo is a tall screen). Measured on 2026-11-19 with
+a test picture of four coloured quadrants and each of the eight tags, against what Pillow's
+`ImageOps.exif_transpose` (the EXIF transpose the planned depth helper will apply) makes of the
+same file:
+
+| mpv, FFmpeg | tags 1, 3, 6, 8 (rotations; all a camera writes) | tags 2, 4, 5, 7 (mirrored) |
+|---|---|---|
+| 0.42.0, 9.0.2 (Gentoo, Arch) | as the transpose | as the transpose |
+| 0.37.0, 6.1.1 (Ubuntu 24.04) | as the transpose | turned, not mirrored: 2, 4, 5, 7 are shown as 3, 1, 6, 8 |
+
+Photos are not yet shown in 3D; the planned depth feature builds on this.
+
 ## Format detection
 
 Each file is opened as flat or VR180, with its layout and packing, without flags. Before mpv
-opens the file, xrdome runs `ffprobe -v error -show_streams -i FILE` (no shell; killed after 3
-seconds; skipped when the argument is not a regular file). For each of projection, layout and
+opens the file, xrdome runs `ffprobe -v error -show_streams -show_format -i FILE` (no shell; killed
+after 3 seconds; skipped when the argument is not a regular file). For each of projection, layout and
 packing, the first of these that has a value wins:
 
 1. A flag: `--proj`, `--layout`, `--packing`, when not `auto`.
@@ -432,6 +474,9 @@ packing, the first of these that has a value wins:
 4. File name hints.
 5. The frame shape.
 6. Fallback: VR180 side by side, what xrdome did before detection.
+
+An image file (see [Photos](#photos)) skips the last two: what 1 to 4 leave open is flat and
+`mono`.
 
 Container metadata:
 
@@ -484,7 +529,7 @@ detect: proj=flat (flag) layout=tb-lr (metadata) packing=full (auto)
 ```
 
 The sources are `flag`, `record`, `metadata`, `file name "<word>"`, `frame shape`, `auto`
-(packing only) and `fallback`; `packing=` is shown for flat 3D only. A failed or missing `ffprobe`
+(packing only), `fallback` and `image file`; `packing=` is shown for flat 3D only. A failed or missing `ffprobe`
 prints one `xrdome: note:` line and detection goes on without it; it never stops a file from
 playing.
 

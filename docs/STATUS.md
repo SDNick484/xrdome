@@ -11,8 +11,8 @@ Plan: `docs/superpowers/plans/2026-11-11-xrdome.md` (Tasks 0-10 done; Task 10's 
 - Head tracking from XRLinuxDriver over OpenTrack UDP (port 4242); recenter keys; seek; audio.
 - Frame timing: 0.6% late frames with defaults (mpv profile `fast`, bicubic, 10-bit FBO + dither).
 - Options and keys: see README.
-- CI (GitHub Actions) builds with `-Dwerror=true` and runs the whole suite, failing if any of the three
-  Xvfb smoke tests (`smoke`, `smoke_tracking`, `smoke_sbs`) skips, in two jobs: Ubuntu 24.04 (mpv 0.37)
+- CI (GitHub Actions) builds with `-Dwerror=true` and runs the whole suite, failing if any of the four
+  Xvfb smoke tests (`smoke`, `smoke_tracking`, `smoke_sbs`, `smoke_photos`) skips, in two jobs: Ubuntu 24.04 (mpv 0.37)
   and an `archlinux:latest` container (gcc 16.2.1, mpv 0.41 / libmpv 2.5.0, `sdl2-compat` 2.32.74 on
   SDL3, Mesa 26.2 on 2026-11-14). Arch's SDL adds `-D_GNU_SOURCE=1` to the cflags, and its
   `xvfb-run` (T2 SDE's copy of an old Debian script) sleeps 3 s per start, so `smoke` takes about 315 s there; that job
@@ -859,6 +859,56 @@ convergence on the XREAL.
 - Not done: a Viture SDK pose backend. Viture's C SDK (2026) lists macOS aarch64 and the
   Viture Pro (PIDs 0x1019, 0x101D), but its signatures are only in the SDK download; the backend
   waits for the headers (follow-up issue).
+
+## Photos in 2D (issue #68, Task 3 of the depth 3D plan, 2026-11-19)
+
+Spec `docs/superpowers/specs/2026-11-19-depth-3d-design.md` section 7 (first half), plan
+`docs/superpowers/plans/2026-11-19-depth-3d.md` Task 3. No depth yet: an image or a directory opens
+as a flat mono screen. README, Photos.
+- Detection: `ffprobe` now also runs with `-show_format`; `format_name` of `image2`, `image2pipe`
+  or `*_pipe` makes `xrd_probe.image` and `xrd_detect.image`. An image is flat mono (source
+  `image file`) wherever a flag, the record, metadata or the file name leave it open. No probe
+  data: the extension decides. `frame_aspect` is 0 for an image: ffprobe reports the stored size,
+  which EXIF may turn (a 96x48 JPEG with Orientation 6 probes as 96x48 and is shown 48x96).
+- Player: `image-display-duration=inf` at open; `xrd_player_load` replaces the file for
+  PageDown/PageUp. mpv's libmpv output does not flag a frame for the new file: after the video
+  reconfig for it xrdome must call render itself, or mpv waits for it ("mpv_render_context_render()
+  not being called or stuck") and the old picture stays. `xrd_player_file_shown` is false from the
+  load until that frame is drawn, and `--frames` counts only frames of the photo now open.
+- Directory: `src/app/imagedir.c` lists regular files with an image extension, byte order of the
+  name, no recursion, no dot files. No wrap at the ends. The per-photo record, `detect:` line and
+  controls are redone for each photo (`switch_photo` in `src/main.c`); the old photo's record is
+  saved first, only if it was drawn.
+- `--press KEYS` (development, with `--frames`): SDL key names pushed as key presses, one after
+  every 3 frames of the open photo; it is how `tests/smoke_photos.sh` presses PageDown under Xvfb.
+
+EXIF orientation, measured (2026-11-19). A 96x48 JPEG of four coloured quadrants, each of the eight
+Orientation tags written, shown by xrdome (`--frames`, `--dump-frame`), compared with Pillow 13
+`ImageOps.exif_transpose` on the same files (the helper's transpose, spec section 5):
+- mpv 0.42.0 / FFmpeg 9.0.2 (Gentoo and an `archlinux:latest` container): all eight tags are shown
+  as the transpose (size and quadrants), including the mirrored tags 2, 4, 5 and 7.
+- mpv 0.37.0 / FFmpeg 6.1.1 (`ubuntu:24.04` container, `--vo=image` frames): tags 1, 3, 6 and 8
+  as the transpose; 2, 4, 5 and 7 are turned but not mirrored (shown as 3, 1, 6 and 8). mpv
+  reports `video-params/rotate` 180, 0, 90 and 270 for them.
+- mpv reports the size already turned (`video-out-params` w x h with `rotate` 0), so the existing
+  `xrd_video_texture_size` needed no change. ffprobe 9.0.2 and 6.1 do not print the orientation.
+- So the spec's contract ("mpv must show the photo the way the helper's EXIF transpose does")
+  holds for every camera photo (tags 1, 3, 6, 8) on both mpv versions and for all eight tags on
+  0.42. On older mpv the depth of a mirrored photo would be flipped against the picture: Task 4 or
+  5 must either read the tag itself and mirror the depth, or let the helper skip mirrored tags.
+  Nothing is rotated in the player today. `tests/smoke_photos.sh` asserts the transpose for 1, 3, 6,
+  8 and the shape for all eight, and prints an `info:` line for the mirrored ones saying which
+  behaviour this mpv has.
+
+Tests: `test_probe` (the format block, fixtures `image_*.txt`), `test_detect` (photo rows),
+`test_imagedir`, `test_config` (`--press`), `test_controls` (README key list), and the Xvfb smoke test
+`smoke_photos` (registered in `meson.build` and in the CI "Require the smoke tests to have run"
+lists): eight orientations, a directory of a landscape and a portrait JPEG with PageDown and PageUp
+and the ends, a single file, an empty directory, per-photo zoom records.
+
+Not seen on the glasses: a portrait and a landscape photo upright and the right shape (owner).
+Limits: a photo mpv cannot decode ends the run, as a film does; HEIC is not opened (plan Task 6);
+`ffprobe` runs once per photo on PageDown, blocking the loop for its few tens of ms.
 
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.

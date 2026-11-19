@@ -50,6 +50,7 @@ core_sources = files(
   'src/detect/probe.c',
   'src/detect/detect.c',
   'src/app/session.c',
+  'src/app/imagedir.c',
   'src/platform/platform.c',
 )
 
@@ -76,6 +77,7 @@ test_names = [
   'sbs',
   'mpv_scale',
   'platform',
+  'imagedir',
 ]
 # test_render draws through a surfaceless Mesa EGL context.
 if not egl_dep.found()
@@ -135,5 +137,11 @@ test('smoke_tracking', find_program('tests/smoke_tracking.sh'),
 # The automatic SBS switch under Xvfb, against tests/fake_xr_driver.py.
 test('smoke_sbs', find_program('tests/smoke_sbs.sh'),
   args : [xrdome_exe, files('tools/make_pattern.sh'), files('tests/fake_xr_driver.py')],
+  is_parallel : false,
+  timeout : 300)
+
+# Photos under Xvfb: EXIF orientations, a directory with PageDown / PageUp.
+test('smoke_photos', find_program('tests/smoke_photos.sh'),
+  args : [xrdome_exe],
   is_parallel : false,
   timeout : 300)

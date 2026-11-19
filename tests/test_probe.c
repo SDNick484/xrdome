@@ -178,6 +178,45 @@ static void first_video_stream_wins(void **s)
     assert_int_equal(p.width, 320); assert_int_equal(p.height, 240);
 }
 
+static void image_formats(void **s)
+{
+    (void)s;
+    xrd_probe p;
+    assert_true(xrd_probe_parse(fixture("image_jpeg.txt"), &p));
+    assert_true(p.image);
+    /* The stored size: ffprobe does not report the EXIF turn mpv applies. */
+    assert_int_equal(p.width, 96); assert_int_equal(p.height, 48);
+    assert_true(xrd_probe_parse(fixture("image_png.txt"), &p));
+    assert_true(p.image);
+    assert_true(xrd_probe_parse(fixture("image_gif.txt"), &p));
+    assert_false(p.image);
+    assert_true(xrd_probe_parse(fixture("video_mp4_format.txt"), &p));
+    assert_false(p.image);
+    assert_int_equal(p.width, 64); assert_int_equal(p.height, 48);
+    /* No [FORMAT] block (-show_streams only), or an unfinished one: not an image. */
+    assert_true(xrd_probe_parse(fixture("sbs_mkv.txt"), &p));
+    assert_false(p.image);
+    assert_true(xrd_probe_parse(fixture("image_format_truncated.txt"), &p));
+    assert_false(p.image);
+    /* A format block with no usable stream does not make one. */
+    assert_false(xrd_probe_parse("[FORMAT]\nformat_name=image2\n[/FORMAT]\n", &p));
+    assert_false(p.image);
+}
+
+static void image_format_names(void **s)
+{
+    (void)s;
+    const char *yes[] = {"image2", "image2pipe", "jpeg_pipe", "png_pipe", "webp_pipe",
+                         "tiff_pipe", "bmp_pipe"};
+    const char *no[] = {"", "_pipe", "gif", "apng", "mov,mp4,m4a,3gp,3g2,mj2", "matroska,webm",
+                        "mpegts", "image", "pipe"};
+    for (size_t i = 0; i < sizeof yes / sizeof yes[0]; i++)
+        assert_true(xrd_probe_format_is_image(yes[i]));
+    for (size_t i = 0; i < sizeof no / sizeof no[0]; i++)
+        assert_false(xrd_probe_format_is_image(no[i]));
+    assert_false(xrd_probe_format_is_image(NULL));
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -192,6 +231,8 @@ int main(void)
         cmocka_unit_test(unknown_stereo_type),
         cmocka_unit_test(other_side_data_ignored),
         cmocka_unit_test(first_video_stream_wins),
+        cmocka_unit_test(image_formats),
+        cmocka_unit_test(image_format_names),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
