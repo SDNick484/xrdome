@@ -44,8 +44,29 @@ xvfb() { # as smoke_player.sh: the program's own exit status
     return "$_xst"
 }
 fail=0
-check() { # check DESCRIPTION CONDITION-EXIT-STATUS
-    if [ "$2" -eq 0 ]; then echo "ok:   $1"; else echo "FAIL: $1"; fail=1; fi
+failed="" # the cases (h1, h2, ...) with a failed check, for show_failed
+check() { # check DESCRIPTION CONDITION-EXIT-STATUS; DESCRIPTION starts with its case
+    if [ "$2" -eq 0 ]; then
+        echo "ok:   $1"
+    else
+        echo "FAIL: $1"
+        fail=1
+        _c=$(printf '%s' "${1%% *}" | tr 'H' 'h')
+        case " $failed " in *" $_c "*) ;; *) failed="$failed $_c" ;; esac
+    fi
+}
+# show_failed: what xrdome, the helper and the request log said in each
+# failed case, so that a CI failure can be read from the test log alone.
+show_failed() {
+    for _c in $failed; do
+        for _f in "$work/$_c.err" "$work/$_c.log" "$work/$_c.helper.err" \
+                  "$work/$_c.run/xrdome-depth.log"; do
+            [ -e "$_f" ] || continue
+            echo "---- ${_f#"$work"/}"
+            cat "$_f"
+        done
+        echo "---- $_c.run: $(ls -A "$work/$_c.run" 2>/dev/null | tr '\n' ' ')"
+    done
 }
 
 # The photo of smoke_depth.sh: 200x100, grey, a red bar at x 40-49 (the far
@@ -142,18 +163,25 @@ grep -qx 'depth: 200x100 from the cache' "$work/h2.err"; check "H2 depth from th
 [ ! -e "$work/h2.log" ]; check "H2 no helper started for a cached photo" $?
 
 # 3. A helper already running is used, not started again (the configured
-# helper does not even exist).
+# helper does not even exist). This helper must outlive the wait before
+# xrdome connects, which includes xvfb-run's start (Arch's sleeps a fixed
+# 3 s), so it does not exit when idle; the test stops it afterwards.
 photo h3.png
 mkdir -p "$work/h3.run"
-XDG_RUNTIME_DIR="$work/h3.run" FAKE_DEPTH_LOG="$work/h3.log" "$helper" depth serve \
-    --socket "$work/h3.run/xrdome-depth.sock" 2>"$work/h3.helper.err" &
-echo $! >>"$helpers"
-for _ in $(seq 100); do [ -S "$work/h3.run/xrdome-depth.sock" ] && break; sleep 0.1; done
+XDG_RUNTIME_DIR="$work/h3.run" FAKE_DEPTH_LOG="$work/h3.log" FAKE_DEPTH_IDLE=3600 "$helper" \
+    depth serve --socket "$work/h3.run/xrdome-depth.sock" 2>"$work/h3.helper.err" &
+h3pid=$!
+echo $h3pid >>"$helpers"
+for _ in $(seq 300); do [ -S "$work/h3.run/xrdome-depth.sock" ] && break; sleep 0.1; done
+[ -S "$work/h3.run/xrdome-depth.sock" ]; check "H3 the running helper opened its socket" $?
 play h3 "$work/no-such-helper" 240 "$work/h3.png"
 status H3 $?
 grep -qx 'depth: 200x100 from the depth helper' "$work/h3.err"; check "H3 depth from the running helper" $?
 [ -z "$(xrd_lines h3)" ]; check "H3 no xrdome errors, warnings or notes" $?
 in3d h3
+kill "$h3pid" 2>/dev/null
+wait "$h3pid" 2>/dev/null
+[ ! -e "$work/h3.run/xrdome-depth.sock" ]; check "H3 the helper removed its socket on SIGTERM" $?
 
 # 4. A directory: the open photo is asked for, then the previous and the next
 # are prefetched (the next last, so it is the helper's newest prefetch);
@@ -219,4 +247,5 @@ grep -qx 'depth: none cached; 2D (xrdome-tools depth photo makes it)' "$work/h8.
 check "H8 off: the line of a photo with no depth" $?
 [ ! -e "$work/h8.log" ] && [ ! -e "$work/h8.run/xrdome-depth.log" ]; check "H8 off: nothing started" $?
 
+[ -n "$failed" ] && show_failed
 exit $fail

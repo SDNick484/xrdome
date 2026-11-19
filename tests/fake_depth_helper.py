@@ -15,6 +15,7 @@ A photo whose name starts with "bad" fails with an error reply.
 """
 
 import os
+import signal
 import struct
 import sys
 import time
@@ -78,6 +79,7 @@ def main() -> int:
     server = Logged(sock, process, cached, idle_exit=float(os.environ.get("FAKE_DEPTH_IDLE", "5")))
     if not server.bind():
         return 0
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # as serve.main: the socket is removed
     log("start")
     try:
         server.serve()
