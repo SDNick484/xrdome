@@ -18,6 +18,12 @@ trap 'rm -rf "$work"' EXIT
 export LIBGL_ALWAYS_SOFTWARE=1
 export XRDOME_XR_DRIVER_DIR="$work/no-xr-driver"
 export XDG_STATE_HOME="$work/state"
+# No depth helper here (smoke_depth_serve.sh tests it): neither started nor
+# asked, and a helper the user runs is not reached.
+export XDG_RUNTIME_DIR="$work/run"
+export XDG_CONFIG_HOME="$work/config"
+mkdir -p "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME/xrdome"
+printf '[general]\ndepth_helper = off\n' >"$XDG_CONFIG_HOME/xrdome/config.ini"
 
 xvfb() { # as smoke_player.sh: the program's own exit status
     _xsf=$(mktemp "$work/status.XXXXXX") || return 99

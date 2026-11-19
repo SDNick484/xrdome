@@ -47,7 +47,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, sys
-          want = {"smoke", "smoke_tracking", "smoke_sbs", "smoke_photos", "smoke_depth"}
+          want = {"smoke", "smoke_tracking", "smoke_sbs", "smoke_photos", "smoke_depth", "smoke_depth_serve"}
           seen = {}
           with open("build/meson-logs/testlog.json") as f:
               for line in f:
@@ -113,7 +113,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, sys
-          want = {"smoke", "smoke_tracking", "smoke_sbs", "smoke_photos", "smoke_depth"}
+          want = {"smoke", "smoke_tracking", "smoke_sbs", "smoke_photos", "smoke_depth", "smoke_depth_serve"}
           seen = {}
           with open("build/meson-logs/testlog.json") as f:
               for line in f:

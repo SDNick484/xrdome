@@ -53,6 +53,7 @@ core_sources = files(
   'src/app/imagedir.c',
   'src/platform/platform.c',
   'src/render/depthmap.c',
+  'src/app/depthclient.c',
 )
 
 # Test names: each entry NAME builds tests/test_NAME.c into test_NAME.
@@ -80,6 +81,7 @@ test_names = [
   'platform',
   'imagedir',
   'depthmap',
+  'depthclient',
 ]
 # test_render draws through a surfaceless Mesa EGL context.
 if not egl_dep.found()
@@ -154,5 +156,12 @@ test('smoke_photos', find_program('tests/smoke_photos.sh'),
 # Depth 3D for photos under Xvfb: a step depth in the cache, the eyes' shift.
 test('smoke_depth', find_program('tests/smoke_depth.sh'),
   args : [xrdome_exe],
+  is_parallel : false,
+  timeout : 300)
+
+# The depth helper under Xvfb: tests/fake_depth_helper.py (serve.py's loop, a
+# fake depth) started by xrdome, prefetch, a missing or failing helper.
+test('smoke_depth_serve', find_program('tests/smoke_depth_serve.sh'),
+  args : [xrdome_exe, files('tests/fake_depth_helper.py')],
   is_parallel : false,
   timeout : 300)
