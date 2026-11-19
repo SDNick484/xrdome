@@ -853,7 +853,7 @@ convergence on the XREAL.
 - macOS: Cocoa/CGL forward-compatible GL 3.3 core context, high-DPI drawable, no X11 display for
   mpv, hwdec `videotoolbox`, fullscreen window, no SBS switch; BSD `getopt` reset (`optreset`);
   `_DARWIN_C_SOURCE`; EGL optional, so `test_render` (surfaceless Mesa EGL) is Linux only.
-- CI `macos-build-test` (`macos-14`, Apple Silicon): build with `-Dwerror=true` and unit tests;
+- CI `macos-build-test` (`macos-latest`, Apple Silicon): build with `-Dwerror=true` and unit tests;
   the smoke tests skip there (no xvfb-run). Not run on glasses: there is no owner Mac. Unknowns:
   an unscaled 3840x1080 mode on the glasses, compositor frame timing, VideoToolbox limits.
 - Not done: a Viture SDK pose backend. Viture's C SDK (2026) lists macOS aarch64 and the

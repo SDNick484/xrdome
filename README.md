@@ -832,7 +832,7 @@ names, and the SBS switch under XWayland. Notes: the project's
 
 ### macOS (experimental)
 
-xrdome builds on macOS (Apple Silicon; CI builds it and runs the unit tests on `macos-14`), but it
+xrdome builds on macOS (Apple Silicon; CI builds it and runs the unit tests on `macos-latest`), but it
 has not been run on glasses there. The platform is detected at build time; on Linux nothing
 changes. On macOS: SDL uses Cocoa with a CGL GL 3.3 core context (forward-compatible, high-DPI
 drawable), mpv gets no X11 display and decodes with `videotoolbox`, the glasses' window is
