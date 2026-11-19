@@ -124,7 +124,8 @@ def resolve_dep(dep: str, referrer: str, rpaths: Sequence[str], exe_dir: str,
 
 
 def collect(roots: Sequence[str], deps_of: Callable[[str], list[str]],
-            rpaths_of: Callable[[str], list[str]], search_dirs: Sequence[str] = ()
+            rpaths_of: Callable[[str], list[str]], search_dirs: Sequence[str] = (),
+            extras: dict[str, str] | None = None
             ) -> tuple[dict[str, str], dict[str, list[tuple[str, str]]]]:
     """Walks the non-system dylibs the roots load, transitively.
 
@@ -134,11 +135,16 @@ def collect(roots: Sequence[str], deps_of: Callable[[str], list[str]],
     (old install name, new) pairs: new is a bundled file name, or an absolute
     system path for an @rpath name that resolves into the system. Two
     different real files with one basename are an error.
+
+    extras maps a bundled file name to the real path of a library that nothing
+    links but that is loaded at run time (see sdl3_extra): it is bundled under
+    that name, and walked like any other library.
     """
     exe_dir = os.path.dirname(roots[0])
-    libs: dict[str, str] = {}
+    libs: dict[str, str] = dict(extras or {})
+    names = {real: name for name, real in libs.items()}  # a real file keeps its extra name
     edges: dict[str, list[tuple[str, str]]] = {}
-    todo: list[tuple[str, list[str]]] = [(r, []) for r in roots]
+    todo: list[tuple[str, list[str]]] = [(r, []) for r in roots] + [(r, []) for r in libs.values()]
     while todo:
         path, inherited = todo.pop()
         if path in edges:
@@ -154,7 +160,7 @@ def collect(roots: Sequence[str], deps_of: Callable[[str], list[str]],
             if is_system(real):
                 changes.append((dep, real))
                 continue
-            name = os.path.basename(real)
+            name = names.get(real) or os.path.basename(real)
             if libs.setdefault(name, real) != real:
                 raise BundleError(f"two different libraries are both called {name}: "
                                   f"{libs[name]} and {real}")
@@ -162,6 +168,28 @@ def collect(roots: Sequence[str], deps_of: Callable[[str], list[str]],
             todo.append((real, rpaths))
         edges[path] = changes
     return libs, edges
+
+
+def sdl3_extra(libs: dict[str, str], info: dict,
+               prefix_of: Callable[[str], str]) -> dict[str, str]:
+    """Homebrew's sdl2 is sdl2-compat: libSDL2's load-time constructor dlopen()s
+    SDL3 (never linked, so otool does not list it) and, when that fails, shows a
+    modal error dialog that nothing dismisses on a headless machine. It tries
+    @loader_path/libSDL3.dylib first, so SDL3 goes in lib/ under that name.
+    Returns {"libSDL3.dylib": real path} when a bundled libSDL2 comes from a
+    formula that depends on sdl3, else {}."""
+    for name, real in libs.items():
+        if not re.match(r"libSDL2-.*\.dylib$", name):
+            continue
+        keg = formula_of(real)
+        if keg is None or "sdl3" not in formula_record(info, keg[0]).get("dependencies", []):
+            continue
+        path = os.path.join(prefix_of("sdl3"), "lib", "libSDL3.dylib")
+        if not os.path.isfile(path):
+            raise BundleError(f"{keg[0]} loads SDL3 at run time but {path} is missing "
+                              "(brew install sdl3)")
+        return {"libSDL3.dylib": os.path.realpath(path)}
+    return {}
 
 
 def formula_of(real_path: str) -> tuple[str, str, str] | None:
@@ -312,7 +340,12 @@ def stage(args: argparse.Namespace) -> int:
     shutil.rmtree(out, ignore_errors=True)
     (out / "lib").mkdir(parents=True)
 
-    libs, edges = collect([xrdome, ffprobe], otool_deps, otool_rpaths, brew_lib_dirs())
+    info = json.loads(run(["brew", "info", "--json=v2", "--installed"]))
+    roots = [xrdome, ffprobe]
+    libs, edges = collect(roots, otool_deps, otool_rpaths, brew_lib_dirs())
+    extras = sdl3_extra(libs, info, lambda f: run(["brew", "--prefix", f]).strip())
+    if extras:  # again, with the run-time library and what it loads
+        libs, edges = collect(roots, otool_deps, otool_rpaths, brew_lib_dirs(), extras)
 
     # Copy, rewrite the copies' load paths, sign them.
     targets = {xrdome: out / "xrdome", ffprobe: out / "ffprobe"}
@@ -354,7 +387,6 @@ def stage(args: argparse.Namespace) -> int:
         if not any(dest.iterdir()):
             (dest / "NO-LICENSE-FILE.txt").write_text(
                 f"The {name} {ver} bottle has no licence file; see SOURCES.md.\n")
-    info = json.loads(run(["brew", "info", "--json=v2", "--installed"]))
     commit = os.environ.get("GITHUB_SHA") or run(["git", "-C", str(root), "rev-parse", "HEAD"]).strip()
     (out / "SOURCES.md").write_text(build_sources_md(version, commit, kegs, info, buildconf))
 

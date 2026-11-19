@@ -877,6 +877,12 @@ convergence on the XREAL.
   `env -i PATH=/usr/bin:/bin`, `xrdome --version` and `ffprobe -show_streams` on a sample; then the
   zip is uploaded as artifact `xrdome-macos-arm64` (the download is a zip holding the zip, because
   upload-artifact drops file modes).
+- Run-time library: Homebrew's `sdl2` is sdl2-compat, whose load-time constructor `dlopen()`s SDL3
+  (tries `@loader_path/libSDL3.dylib` first); nothing links it, so `otool` never lists it, and a
+  failed load is a modal error dialog that hangs a headless runner. `bundle.py` (`sdl3_extra`) adds
+  `$(brew --prefix sdl3)/lib/libSDL3.dylib` to `lib/` under that name, with its own dependencies,
+  whenever the bundled libSDL2's formula depends on `sdl3`. CI fails if libSDL3 is not loaded from
+  `dist/xrdome/lib` (dyld trace).
 - `ffprobe` lookup (`src/platform/exepath.c`): with `[general] ffprobe` unset, `<dir of xrdome>/ffprobe`
   if it runs, else `ffprobe` on `PATH`; the directory comes from `_NSGetExecutablePath` (macOS) or
   `/proc/self/exe` (Linux), unknown elsewhere. A directory that is itself on `PATH` keeps `PATH`'s order,

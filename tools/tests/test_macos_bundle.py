@@ -260,3 +260,63 @@ def test_version_subcommand_and_template(capsys):
     text = (BUNDLE_DIR / "README-macos.txt").read_text()
     for token in ("@VERSION@", "@BUILT_ON@", "@ISSUE_URL@", "xattr -dr com.apple.quarantine"):
         assert token in text
+
+
+# ---- SDL3: loaded at run time by sdl2-compat, so nothing links it -----------
+
+
+def sdl_tree(brew, sdl2_deps=("sdl3",)):
+    tmp, cellar, prefix = brew
+    sdl2 = touch(cellar / "sdl2/2.32.60/lib/libSDL2-2.0.0.dylib")
+    sdl3 = touch(cellar / "sdl3/3.4.0/lib/libSDL3.0.dylib")
+    (sdl3.parent / "libSDL3.dylib").symlink_to(sdl3.name)
+    link_opt(prefix, cellar, "sdl3", "3.4.0")
+    info = {"formulae": [{"name": "sdl2", "dependencies": list(sdl2_deps)}]}
+    return sdl2, sdl3, info, (lambda f: str(prefix / "opt" / f))
+
+
+def test_sdl3_extra_for_sdl2_compat(brew):
+    sdl2, sdl3, info, prefix_of = sdl_tree(brew)
+    libs = {"libSDL2-2.0.0.dylib": str(sdl2.resolve())}
+    # Named as sdl2-compat's loader asks for it (@loader_path/libSDL3.dylib).
+    assert b.sdl3_extra(libs, info, prefix_of) == {"libSDL3.dylib": str(sdl3.resolve())}
+
+
+def test_sdl3_extra_not_for_a_real_sdl2_or_no_sdl2(brew):
+    sdl2, _, info, prefix_of = sdl_tree(brew, sdl2_deps=())
+    assert b.sdl3_extra({"libSDL2-2.0.0.dylib": str(sdl2.resolve())}, info, prefix_of) == {}
+    assert b.sdl3_extra({"libmpv.2.dylib": str(sdl2.resolve())}, info, prefix_of) == {}
+
+
+def test_sdl3_extra_missing_library_is_an_error(brew):
+    tmp, cellar, prefix = brew
+    sdl2 = touch(cellar / "sdl2/2.32.60/lib/libSDL2-2.0.0.dylib")
+    info = {"formulae": [{"name": "sdl2", "dependencies": ["sdl3"]}]}
+    with pytest.raises(b.BundleError, match="sdl3"):
+        b.sdl3_extra({"libSDL2-2.0.0.dylib": str(sdl2.resolve())}, info,
+                     lambda f: str(prefix / "opt" / f))
+
+
+def test_collect_bundles_extras_under_their_name_and_walks_them(brew):
+    tmp, cellar, prefix = brew
+    exe = touch(tmp / "build/xrdome")
+    sdl2, sdl3, _, _ = sdl_tree(brew)
+    usb = touch(cellar / "libusb/1.0/lib/libusb-1.0.0.dylib")
+    graph = {
+        str(exe): [str(sdl2)],
+        str(sdl2.resolve()): [],                       # SDL3 is not linked
+        str(sdl3.resolve()): [str(usb), "/usr/lib/libSystem.B.dylib"],
+        str(usb.resolve()): [],
+    }
+    libs, edges = b.collect([str(exe)], lambda p: graph[p], lambda p: [],
+                            extras={"libSDL3.dylib": str(sdl3.resolve())})
+    assert libs["libSDL3.dylib"] == str(sdl3.resolve())
+    assert "libusb-1.0.0.dylib" in libs                # its own dependencies come along
+    assert "libSDL3.0.dylib" not in libs               # not twice under another name
+    assert edges[str(sdl3.resolve())] == [(str(usb), "libusb-1.0.0.dylib")]
+    # Something that does link SDL3 by its versioned name is pointed at the one copy.
+    graph[str(exe)] = [str(sdl2), str(sdl3.parent / "libSDL3.0.dylib")]
+    libs, edges = b.collect([str(exe)], lambda p: graph[p], lambda p: [],
+                            extras={"libSDL3.dylib": str(sdl3.resolve())})
+    assert (str(sdl3.parent / "libSDL3.0.dylib"), "libSDL3.dylib") in edges[str(exe)]
+    assert [n for n in libs if n.startswith("libSDL3")] == ["libSDL3.dylib"]

@@ -217,6 +217,13 @@ jobs:
             echo "::error::xrdome loaded a library from Homebrew at run time"
             exit 1
           fi
+          # sdl2-compat dlopen()s SDL3 at load time, which no tool lists: it must
+          # have come from the bundle's lib/ (bundle.py adds it), nowhere else.
+          if ! grep -q 'libSDL3' "$RUNNER_TEMP/xrdome.out" ||
+             grep 'libSDL3' "$RUNNER_TEMP/xrdome.out" | grep -vq "/dist/xrdome/lib/libSDL3"; then
+            echo "::error::libSDL3 was not loaded, or not from dist/xrdome/lib"
+            exit 1
+          fi
           if [ "$rc" -ne 0 ] || ! grep -q '^xrdome ' "$RUNNER_TEMP/xrdome.out"; then
             echo "::error::xrdome --version exited $rc without printing its version"
             exit 1
