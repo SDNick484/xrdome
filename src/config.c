@@ -3,6 +3,7 @@
 #endif
 
 #include "config.h"
+#include "platform/exepath.h"
 #include "platform/platform.h"
 #include "values.h"
 #include "video/player_mpv.h"
@@ -238,7 +239,7 @@ void xrd_config_defaults(xrd_config *c)
     c->screen_curve = 0.f;
     c->mipmap = true;
     c->sbs_switch = true;
-    copy_str(c->ffprobe, sizeof c->ffprobe, "ffprobe");
+    xrd_exepath_default_ffprobe(c->ffprobe, sizeof c->ffprobe); /* beside xrdome, else PATH */
     copy_str(c->depth_helper, sizeof c->depth_helper, "xrdome-tools");
 }
 

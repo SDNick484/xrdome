@@ -134,9 +134,9 @@ jobs:
           name: testlog-arch
           path: build/meson-logs/testlog.txt
 
-  # macOS (Apple Silicon via macos-latest, experimental): build and unit tests only. The smoke
-  # tests need xvfb-run and skip (77) here; nothing on this runner drives a
-  # display, so playback on macOS is checked by hand (docs/STATUS.md).
+  # macOS (Apple Silicon via macos-latest, experimental): build, unit tests and the
+  # test bundle. The smoke tests need xvfb-run and skip (77) here; nothing on this
+  # runner drives a display, so playback on macOS is checked by hand (docs/STATUS.md).
   macos-build-test:
     runs-on: macos-latest
     timeout-minutes: 30
@@ -147,7 +147,7 @@ jobs:
       # is not on pkg-config's default path and mpv's cflags cannot resolve.
       - name: Install dependencies
         run: |
-          brew install meson ninja pkgconf mpv sdl2 libepoxy cmocka
+          brew install meson ninja pkgconf mpv ffmpeg sdl2 libepoxy cmocka
           echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
 
       - name: Versions
@@ -164,6 +164,42 @@ jobs:
 
       - name: Test
         run: meson test -C build --print-errorlogs
+
+      # The test bundle for the hardware check (#65): xrdome, ffprobe and their
+      # Homebrew libraries, ad-hoc signed, zipped (packaging/macos/bundle.sh).
+      - name: Bundle
+        run: packaging/macos/bundle.sh
+
+      # The bundle must need nothing from Homebrew: no load path or rpath into it
+      # (bundle.py verify, and otool by hand), then run with /opt/homebrew moved
+      # away and an empty environment. The sample is made first, with Homebrew's ffmpeg.
+      - name: Smoke-test the bundle without Homebrew
+        run: |
+          set -euo pipefail
+          ffmpeg -v error -f lavfi -i testsrc2=size=64x64:rate=5 -t 1 -pix_fmt yuv420p "$RUNNER_TEMP/sample.mp4"
+          python3 packaging/macos/bundle.py verify dist/xrdome
+          for f in dist/xrdome/xrdome dist/xrdome/ffprobe dist/xrdome/lib/*.dylib; do
+            if otool -L "$f" | grep -E '/opt/homebrew|/usr/local/'; then
+              echo "::error::$f loads a Homebrew library"
+              exit 1
+            fi
+          done
+          sudo mv /opt/homebrew /opt/homebrew.hidden
+          trap 'sudo mv /opt/homebrew.hidden /opt/homebrew' EXIT
+          env -i PATH=/usr/bin:/bin ./dist/xrdome/xrdome --version
+          streams=$(env -i PATH=/usr/bin:/bin ./dist/xrdome/ffprobe -v error -show_streams "$RUNNER_TEMP/sample.mp4")
+          grep -q '^codec_type=video' <<<"$streams"
+          ls -l dist/*.zip
+          du -sh dist/xrdome
+
+      # upload-artifact zips what it uploads and drops file modes, so it gets the
+      # finished zip (the modes live inside it): the download is a zip holding the zip.
+      - name: Upload the test bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: xrdome-macos-arm64
+          path: dist/xrdome-*-macos-arm64.zip
+          if-no-files-found: error
 
       - name: Upload test log
         if: failure()

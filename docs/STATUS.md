@@ -861,6 +861,31 @@ convergence on the XREAL.
   Viture Pro (PIDs 0x1019, 0x101D), but its signatures are only in the SDK download; the backend
   waits for the headers (follow-up issue).
 
+## macOS test bundle from CI (issue #83, 2026-11-19)
+- `packaging/macos/bundle.sh` (after the CI build) runs `bundle.py`, standard library only: copies
+  `xrdome` and Homebrew's `ffprobe` to `dist/xrdome/`, every non-system dylib they load
+  (transitively, through `otool -L`; `@rpath` names resolved through the rpaths) to `lib/`, rewrites
+  load paths to `@executable_path/lib/<name>` with `install_name_tool` (and drops absolute rpaths),
+  signs each file ad hoc (`codesign --force -s -`), adds `COPYING`, `LICENSES/<formula>/` (licence
+  files from each formula's keg), `SOURCES.md` (formula, version, licence and source URL from
+  `brew info --json=v2 --installed`, plus ffprobe's build configuration) and `README-macos.txt`,
+  then zips `xrdome-<version>-macos-arm64.zip`. It fails on `--enable-nonfree` in
+  `ffprobe -buildconf`. Homebrew's FFmpeg is built `--enable-gpl --enable-version3`, so the bundle
+  as a whole is under GPL 3 or later (xrdome is GPL-2.0-or-later); SOURCES.md says so.
+- CI `macos-build-test`, after the unit tests: bundle; `bundle.py verify` and `otool -L` on every
+  file (no `/opt/homebrew` or `/usr/local` path); then with `/opt/homebrew` moved away and
+  `env -i PATH=/usr/bin:/bin`, `xrdome --version` and `ffprobe -show_streams` on a sample; then the
+  zip is uploaded as artifact `xrdome-macos-arm64` (the download is a zip holding the zip, because
+  upload-artifact drops file modes).
+- `ffprobe` lookup (`src/platform/exepath.c`): with `[general] ffprobe` unset, `<dir of xrdome>/ffprobe`
+  if it runs, else `ffprobe` on `PATH`; the directory comes from `_NSGetExecutablePath` (macOS) or
+  `/proc/self/exe` (Linux), unknown elsewhere. A directory that is itself on `PATH` keeps `PATH`'s order,
+  so a normal install behaves as before. The pure choice is unit tested (`tests/test_exepath.c`).
+- New: `xrdome --version` (prints `xrdome <meson version>`), used by the smoke check.
+- Not verified: no Mac here, so the script and the CI steps are written from the documentation and
+  only the pure parts (otool parsing, resolution, the walk, SOURCES.md) are tested
+  (`tools/tests/test_macos_bundle.py`); whether the bundle runs on a Mac with glasses is #65.
+
 ## Photos in 2D (issue #68, Task 3 of the depth 3D plan, 2026-11-19)
 
 Spec `docs/superpowers/specs/2026-11-19-depth-3d-design.md` section 7 (first half), plan
