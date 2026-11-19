@@ -18,6 +18,8 @@ epoxy_dep = dependency('epoxy')
 egl_dep = dependency('egl', required : not is_macos)
 sdl2_dep = dependency('sdl2')
 mpv_dep = dependency('mpv')
+# shm_open: in libc on glibc 2.34+ and macOS, in librt before.
+rt_dep = cc.find_library('rt', required : false)
 py = find_program('python3')
 
 shaders_gen = custom_target('shaders_gen',
@@ -26,6 +28,14 @@ shaders_gen = custom_target('shaders_gen',
   output : 'shaders_gen.h',
   command : [py, files('tools/embed_shaders.py'), '@OUTPUT@',
              'VR180_VERT=@INPUT0@', 'VR180_FRAG=@INPUT1@', 'SHARPEN_FRAG=@INPUT2@'])
+
+# The frame sink's downscale (src/video/framesink.c): its own header, so no
+# translation unit carries shaders it does not use.
+framesink_gen = custom_target('framesink_gen',
+  input : ['src/render/shaders/vr180.vert', 'src/video/framesink.frag'],
+  output : 'framesink_gen.h',
+  command : [py, files('tools/embed_shaders.py'), '@OUTPUT@',
+             'FRAMESINK_VERT=@INPUT0@', 'FRAMESINK_FRAG=@INPUT1@'])
 
 # Core sources: append one line per task.
 core_sources = files(
@@ -54,6 +64,7 @@ core_sources = files(
   'src/platform/platform.c',
   'src/render/depthmap.c',
   'src/app/depthclient.c',
+  'src/video/framesink.c',
 )
 
 # Test names: each entry NAME builds tests/test_NAME.c into test_NAME.
@@ -82,12 +93,14 @@ test_names = [
   'imagedir',
   'depthmap',
   'depthclient',
+  'framesink',
+  'framesink_gl',
 ]
-# test_render draws through a surfaceless Mesa EGL context.
+# test_render and test_framesink_gl draw through a surfaceless Mesa EGL context.
 if not egl_dep.found()
   kept = []
   foreach n : test_names
-    if n != 'render'
+    if n != 'render' and n != 'framesink_gl'
       kept += n
     endif
   endforeach
@@ -96,9 +109,9 @@ endif
 
 inc = include_directories('src')
 
-xrdcore = static_library('xrdcore', core_sources, shaders_gen,
+xrdcore = static_library('xrdcore', core_sources, shaders_gen, framesink_gen,
   include_directories : inc,
-  dependencies : [m_dep, threads_dep, epoxy_dep, sdl2_dep, mpv_dep])
+  dependencies : [m_dep, threads_dep, epoxy_dep, sdl2_dep, mpv_dep, rt_dep])
 
 # Paths the probe tests read fixtures and the fake ffprobe from.
 fixture_args = [
@@ -118,7 +131,7 @@ foreach t : test_names
     include_directories : inc,
     c_args : test_c_args,
     link_with : xrdcore,
-    dependencies : [cmocka_dep, m_dep, threads_dep, epoxy_dep, egl_dep, sdl2_dep, mpv_dep])
+    dependencies : [cmocka_dep, m_dep, threads_dep, epoxy_dep, egl_dep, sdl2_dep, mpv_dep, rt_dep])
   test(t, exe, env : ['LIBGL_ALWAYS_SOFTWARE=1', 'EGL_PLATFORM=surfaceless',
                       'XRD_TEST_DATA=' + (meson.current_source_dir() / 'tests/data')])
 endforeach
@@ -126,7 +139,7 @@ endforeach
 xrdome_exe = executable('xrdome', 'src/main.c',
   include_directories : inc,
   link_with : xrdcore,
-  dependencies : [m_dep, threads_dep, epoxy_dep, sdl2_dep, mpv_dep],
+  dependencies : [m_dep, threads_dep, epoxy_dep, sdl2_dep, mpv_dep, rt_dep],
   install : true)
 
 # Desktop smoke test under Xvfb; skipped (77) without xvfb-run or ffmpeg.
@@ -162,6 +175,13 @@ test('smoke_depth', find_program('tests/smoke_depth.sh'),
 # The depth helper under Xvfb: tests/fake_depth_helper.py (serve.py's loop, a
 # fake depth) started by xrdome, prefetch, a missing or failing helper.
 test('smoke_depth_serve', find_program('tests/smoke_depth_serve.sh'),
+  args : [xrdome_exe, files('tests/fake_depth_helper.py')],
+  is_parallel : false,
+  timeout : 300)
+
+# Video frames out to the depth helper under Xvfb: the fake helper maps the
+# ring, reads frames and writes depth back; 3D off reads nothing back.
+test('smoke_depth_video', find_program('tests/smoke_depth_video.sh'),
   args : [xrdome_exe, files('tests/fake_depth_helper.py')],
   is_parallel : false,
   timeout : 300)

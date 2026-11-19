@@ -11,9 +11,9 @@ Plan: `docs/superpowers/plans/2026-11-11-xrdome.md` (Tasks 0-10 done; Task 10's 
 - Head tracking from XRLinuxDriver over OpenTrack UDP (port 4242); recenter keys; seek; audio.
 - Frame timing: 0.6% late frames with defaults (mpv profile `fast`, bicubic, 10-bit FBO + dither).
 - Options and keys: see README.
-- CI (GitHub Actions) builds with `-Dwerror=true` and runs the whole suite, failing if any of the six
+- CI (GitHub Actions) builds with `-Dwerror=true` and runs the whole suite, failing if any of the seven
   Xvfb smoke tests (`smoke`, `smoke_tracking`, `smoke_sbs`, `smoke_photos`, `smoke_depth`,
-  `smoke_depth_serve`) skips, in two jobs: Ubuntu 24.04 (mpv 0.37)
+  `smoke_depth_serve`, `smoke_depth_video`) skips, in two jobs: Ubuntu 24.04 (mpv 0.37)
   and an `archlinux:latest` container (gcc 16.2.1, mpv 0.41 / libmpv 2.5.0, `sdl2-compat` 2.32.74 on
   SDL3, Mesa 26.2 on 2026-11-14). Arch's SDL adds `-D_GNU_SOURCE=1` to the cflags, and its
   `xvfb-run` (T2 SDE's copy of an old Debian script) sleeps 3 s per start, so `smoke` takes about 315 s there; that job
@@ -975,6 +975,55 @@ Not run: the real model behind the socket (no depth venv on the development mach
 owner's check: browse 20 photos on the glasses, each 3D within about 1 s, `--timing-log` < 1%
 missed. Reading the depth file (up to 2048x1536, 6 MB) and the texture upload happen in the frame
 the reply lands, as with a cached depth at PageDown; their cost on the glasses is unmeasured.
+
+## Video frames out to the depth helper (issue #72, Task 7 of the depth 3D plan, 2026-11-19)
+
+Spec `docs/superpowers/specs/2026-11-19-depth-3d-design.md` section 8, first half. `D` on a flat mono
+film sends its frames to `depth serve`, which makes their depth live and writes it back; the film is
+still drawn in 2D (uploading that depth is Task 8). README, Depth for films; docs/tools.md, depth
+serve and depth bench-video.
+- Player (`src/video/framesink.c`): only for a film, flat, mono, 3D on and a helper configured
+  (`xrd_framesink_wanted`); otherwise no FBO, PBO or ring exists. Films start with 3D off (photos
+  still start on). Each new mpv frame (`xrd_player_frame_serial`): a box filter (4 x 4 bilinear
+  taps, level 0) into a 322x182 RGBA8 FBO with the rows flipped so the readback is top row first,
+  `glReadPixels` into one of 3 `GL_STREAM_READ` PBOs, a fence, `glFlush`. Each loop iteration first
+  copies every PBO whose fence `glClientWaitSync(..., 0)` reports done into the ring (so one frame
+  late at the earliest); with all 3 in flight a new frame is skipped and counted. The step runs
+  before the pose sample; its CPU time is the new `frames_out_us` column of `--timing-log`, and a
+  `depth: video stopped:` line gives the totals when 3D goes off or xrdome exits.
+- Ring: POSIX `shm_open` `/xrdome-<pid>-<n>` (fits macOS's 31 bytes), mode 0600, 1.25 MB: a
+  4096-byte header, 4 RGBA8 frame slots, 3 16-bit depth slots, native byte order. Per slot a seqlock
+  (number 0 while written, C11 atomics in C, aligned 64-bit memoryview words in Python). The helper
+  removes the name as soon as it has mapped it; xrdome removes it too when it stops (ENOENT
+  ignored) and replaces a stale one of the same name at start.
+- Helper: `serve.py` gains `{"op": "video", "shm": ...}` per connection (a new ring replaces the
+  old; closed flag or disconnect ends it); video comes before photos in the loop, which polls the
+  ring every 4 ms while one is mapped. `video.py` holds the ring, a 30 Hz cap (90% of the period
+  between starts, so a 30 fps film is never held back by polling), the 322x182 model call
+  (normalised per frame like photos; smoothing is Task 8), statistics in the spike's terms, and
+  `--bench` (`depth bench-video`).
+- RGBA, not RGB, in the ring: 4-byte pixels are GL's fast readback path; the helper drops alpha.
+- Tests: `test_framesink` (layout numbers, seqlock reads that are lapped or torn, depth back with its
+  frame number, closed flag, shm names, `xrd_framesink_wanted`, and the C ring against
+  `tools/xrdome_depth/video.py` through real shared memory via `tests/vring_peer.py`),
+  `test_framesink_gl` (EGL surfaceless: scaled, top row first, never in the same step, numbering,
+  no texture), `test_depthclient` (video line and replies), `test_timing` (`frames_out_us`),
+  `tools/tests/test_depth_video.py` (ring, torn copies, shm, the 30 Hz cap, statistics, the bench
+  with a fake clock, the video op over the socket, the launcher; the numpy depth function with a fake
+  backend skips without numpy), `smoke_depth_video` under Xvfb with the fake helper: frames out and
+  depth back with red at the top and blue at the bottom, 3D off reads nothing back and starts no
+  helper, on then off, a helper refusing video, `--depth-helper off`, a stereo film.
+
+Measured on the development laptop's desktop (Radeon 860M, RADV/radeonsi, Xorg, windowed 1280x360,
+not the glasses; fake helper), a 1920x1080 30 fps H.264 film (vaapi), 1800 frames, twice each with
+`--timing-log`: 3D off 2 and 0 missed vsyncs; 3D on 2 and 0, 900 frames out, 0 skipped, 899 depth
+maps back. `frames_out_us` median 56 and 63 us, p99 293 and 308 us, max 4.4 and 1.4 ms: the max is
+the frame `D` is pressed (the ring, FBO, PBOs and shader are made then; that frame was late once).
+pose-to-swap is unchanged (the step runs before the pose sample).
+
+Not run: the real 322x182 model behind the ring (no depth venv on the development machine), so no
+helper Hz; the owner's check: `--timing-log` with 3D on against 3D off on the glasses, and the
+helper's `video:` lines (or `depth bench-video` beside xrdome) on the laptop.
 
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.

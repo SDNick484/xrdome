@@ -10,6 +10,14 @@
  *   reply    {"ok": true, "path": "<as asked>", "depth": "<cache file>"}
  *            {"ok": false, "path": "<as asked>", "error": "..."}
  *
+ *   request  {"op": "video", "shm": "/xrdome-<pid>-<n>"}       (spec 8)
+ *   reply    {"ok": true, "op": "video", "shm": "<as asked>"}
+ *            {"ok": false, "op": "video", "shm": "<as asked>", "error": "..."}
+ *
+ * A video request names the shared-memory ring a film's frames go into
+ * (video/framesink.h); the helper maps it and makes depth for it until the
+ * ring is closed or the connection goes.
+ *
  * Paths travel as their bytes (UTF-8 JSON; other bytes as they are). Every
  * call here is non-blocking: the render loop polls once per frame. The helper
  * is started, the first time a request needs it and its socket does not
@@ -44,16 +52,22 @@ int xrd_depth_abs_path(const char *path, char *buf, size_t len);
  * it does not fit len. */
 int xrd_depth_request_line(const char *path, bool prefetch, char *buf, size_t len);
 
+/* One video request line, as xrd_depth_request_line. */
+int xrd_depth_video_line(const char *shm, char *buf, size_t len);
+
 typedef struct {
     bool ok;
+    bool video;                     /* a reply to a video request ("op": "video") */
+    char shm[64];                   /* video: the ring it answers */
     char path[XRD_DEPTH_PATH_MAX];  /* the request it answers; "" when the reply has none */
     char depth[XRD_DEPTH_PATH_MAX]; /* ok: the cache file */
     char error[512];                /* !ok: why */
 } xrd_depth_reply;
 
 /* Parses one reply line (without the newline). False for anything that is not
- * a JSON object with a boolean "ok", strings that do not fit, or an ok reply
- * without "depth". Unknown keys are skipped. */
+ * a JSON object with a boolean "ok", strings that do not fit, an ok photo
+ * reply without "depth", or a video reply without "shm". Unknown keys are
+ * skipped. */
 bool xrd_depth_reply_parse(const char *line, size_t len, xrd_depth_reply *out);
 
 typedef struct xrd_depthclient xrd_depthclient;
@@ -67,6 +81,8 @@ void xrd_depthclient_free(xrd_depthclient *dc);
 
 /* Queues a request for the absolute path. False once the client has failed. */
 bool xrd_depthclient_request(xrd_depthclient *dc, const char *path, bool prefetch);
+/* Queues a video request for the ring shm. False once the client has failed. */
+bool xrd_depthclient_video(xrd_depthclient *dc, const char *shm);
 
 typedef enum {
     XRD_DC_NONE,   /* nothing new */

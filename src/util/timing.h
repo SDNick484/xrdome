@@ -32,10 +32,16 @@ xrd_timing *xrd_timing_open(const char *csv_path);
  * tracker, pre_swap_ns just before the swap, pose_t_mono_ns the receipt time
  * of the pose used (0 = no pose yet), swap_ns the time spent inside the swap
  * call (plus glFinish with --sync-after-swap). CSV row:
- * frame,interval_us,pose_to_swap_us,pose_age_us,swap_us, where interval_us is
- * 0 for the first frame and pose_age_us is 0 without a pose. */
+ * frame,interval_us,pose_to_swap_us,pose_age_us,swap_us,frames_out_us, where
+ * interval_us is 0 for the first frame, pose_age_us is 0 without a pose and
+ * frames_out_us is what xrd_timing_frames_out set for this frame (0 when
+ * nothing was). */
 void xrd_timing_frame(xrd_timing *t, uint64_t pose_sample_ns, uint64_t pre_swap_ns,
                       uint64_t pose_t_mono_ns, uint64_t swap_ns);
+/* The CPU time the frame sink (video frames to the depth helper,
+ * video/framesink.h) took in the frame now being timed; logged as
+ * frames_out_us by the next xrd_timing_frame, then reset to 0. */
+void xrd_timing_frames_out(xrd_timing *t, uint64_t ns);
 unsigned xrd_timing_missed_vsyncs(const xrd_timing *t);   /* swap-to-swap intervals > 20 ms */
 uint64_t xrd_timing_max_pose_to_swap_ns(const xrd_timing *t);
 /* Median pose-to-swap over the most recent XRD_TIMING_MEDIAN_SAMPLES frames

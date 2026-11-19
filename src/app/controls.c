@@ -256,7 +256,7 @@ const xrd_key_help xrd_key_list[] = {
     {"L", "screen: fixed / head-locked (flat)"},
     {"B", "debanding on / off"},
     {"C", "screen: flat / curved (flat)"},
-    {"D", "depth 3D on / off (a photo with depth)"},
+    {"D", "depth 3D on / off (a photo with depth; a flat film: frames to the depth helper)"},
     {"- / =", "depth strength down / up"},
     {", / .", "screen plane further / nearer (depth 3D)"},
     {"?", "this list"},

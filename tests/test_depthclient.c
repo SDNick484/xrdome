@@ -277,6 +277,54 @@ static void talks_to_a_running_helper(void **state)
     close(ls);
 }
 
+static void video_lines_and_replies(void **state)
+{
+    (void)state;
+    char buf[128];
+    int n = xrd_depth_video_line("/xrdome-42-1", buf, sizeof buf);
+    assert_string_equal(buf, "{\"op\": \"video\", \"shm\": \"/xrdome-42-1\"}\n");
+    assert_int_equal(n, (int)strlen(buf));
+    assert_int_equal(xrd_depth_video_line("/a\"b", buf, sizeof buf), -1);
+    assert_int_equal(xrd_depth_video_line("/xrdome-42-1", buf, 10), -1);
+
+    xrd_depth_reply r;
+    assert_true(parse("{\"ok\": true, \"op\": \"video\", \"shm\": \"/xrdome-42-1\"}", &r));
+    assert_true(r.ok && r.video);
+    assert_string_equal(r.shm, "/xrdome-42-1");
+    assert_true(parse("{\"ok\": false, \"op\": \"video\", \"shm\": \"/x\", \"error\": \"no\"}", &r));
+    assert_true(!r.ok && r.video);
+    assert_string_equal(r.error, "no");
+    assert_false(parse("{\"ok\": true, \"op\": \"video\"}", &r)); /* which ring? */
+    assert_false(parse("{\"ok\": false, \"op\": \"video\", \"error\": \"x\"}", &r));
+    /* a photo reply is not a video one, whatever else it carries */
+    assert_true(parse("{\"ok\": true, \"op\": \"photo\", \"path\": \"/a\", \"depth\": \"/d\"}", &r));
+    assert_false(r.video);
+}
+
+static void sends_a_video_request(void **state)
+{
+    (void)state;
+    int ls = listen_on(g_sock);
+    xrd_depthclient *dc = xrd_depthclient_new(g_sock, NULL);
+    assert_non_null(dc);
+    xrd_depth_reply r;
+    assert_true(xrd_depthclient_video(dc, "/xrdome-42-1"));
+    assert_int_equal(poll_until(dc, &r, 20), XRD_DC_NONE);
+    int c = accept(ls, NULL, NULL);
+    assert_true(c >= 0);
+    char want[128], got[128];
+    int n = xrd_depth_video_line("/xrdome-42-1", want, sizeof want);
+    read_exactly(c, got, (size_t)n);
+    assert_string_equal(got, want);
+    const char *rep = "{\"ok\": true, \"op\": \"video\", \"shm\": \"/xrdome-42-1\"}\n";
+    assert_int_equal(write(c, rep, strlen(rep)), (ssize_t)strlen(rep));
+    assert_int_equal(poll_until(dc, &r, 2000), XRD_DC_REPLY);
+    assert_true(r.ok && r.video);
+    close(c);
+    xrd_depthclient_free(dc);
+    close(ls);
+}
+
 static void writing_to_a_closed_helper_does_not_kill(void **state)
 {
     (void)state;
@@ -420,6 +468,8 @@ int main(void)
         cmocka_unit_test(socket_path_follows_the_python_rule),
         cmocka_unit_test(log_path),
         cmocka_unit_test(request_lines),
+        cmocka_unit_test(video_lines_and_replies),
+        cmocka_unit_test_setup_teardown(sends_a_video_request, setup, teardown),
         cmocka_unit_test(replies),
         cmocka_unit_test_setup_teardown(talks_to_a_running_helper, setup, teardown),
         cmocka_unit_test_setup_teardown(writing_to_a_closed_helper_does_not_kill, setup, teardown),

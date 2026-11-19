@@ -103,6 +103,9 @@ int         xrd_player_update(xrd_player *p);
 /* Call after each buffer swap (mpv_render_context_report_swap). */
 void        xrd_player_report_swap(xrd_player *p);
 unsigned    xrd_player_texture(const xrd_player *p);     /* 0 until the first frame */
+/* Changes whenever the video texture's level 0 changes: each frame mpv draws
+ * into it and each reallocation. */
+unsigned long xrd_player_frame_serial(const xrd_player *p);
 /* Bits per colour channel of the video texture actually allocated: 10 for
  * GL_RGB10_A2, 8 for GL_RGBA8 (also after a fallback), 0 before the FBO exists. */
 int         xrd_player_texture_bits(const xrd_player *p);

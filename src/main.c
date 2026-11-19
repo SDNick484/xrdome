@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "app/controls.h"
 #include "app/depthclient.h"
@@ -30,6 +31,7 @@
 #include "track/tracker.h"
 #include "util/timing.h"
 #include "values.h"
+#include "video/framesink.h"
 #include "video/mpv_scale.h"
 #include "video/player_mpv.h"
 
@@ -126,6 +128,12 @@ typedef struct {
     xrd_depthclient *dc;     /* the depth helper (depth serve); NULL when off or not photos */
     char depth_asked[XRD_DEPTH_PATH_MAX]; /* the open photo's absolute path while the helper
                                              makes its depth; "" otherwise */
+    /* Video depth (spec 8): a film's frames to the depth helper while it is
+     * flat mono with 3D on. */
+    xrd_framesink *sink;     /* NULL while no frames go out */
+    unsigned sink_n;         /* rings made in this run: the shm name's counter */
+    bool video_failed;       /* the helper cannot take video: no more rings this run */
+    uint64_t sink_ns, sink_max_ns, sink_steps; /* CPU time of the sink's steps */
 } xrd_app;
 
 /* F of spec 5.3 for the frame now playing: the video texture's (coded) size
@@ -462,8 +470,13 @@ static void depth_load(xrd_app *a)
     a->depth_checked = false;
     a->depth_why = "not a photo";
     a->depth_asked[0] = '\0';
-    if (!a->det.image)
+    if (!a->det.image) {
+        if (!a->cfg->depth_helper[0])
+            a->depth_why = "a film's depth comes from the depth helper, which is off";
+        else
+            a->depth_why = a->video_failed ? "the depth helper failed" : NULL;
         return;
+    }
     const char *file = a->cfg->file;
     char key[XRD_DEPTH_KEY_LEN + 1], dir[4096], path[4200];
     if (xrd_depth_key(file, key) != 0) {
@@ -495,6 +508,96 @@ static void depth_load(xrd_app *a)
     }
 }
 
+/* Video depth (spec 8 of the depth 3D design, first half). The frame sink
+ * stops: one line with what went out and came back. */
+static void video_stop(xrd_app *a)
+{
+    if (!a->sink)
+        return;
+    xrd_framesink_stats st;
+    xrd_framesink_get_stats(a->sink, &st);
+    uint64_t back = xrd_vring_depth_head(xrd_framesink_ring(a->sink));
+    fprintf(stderr,
+            "depth: video stopped: %llu frames out, %llu skipped (readbacks busy), %llu depth "
+            "maps back; CPU %.3f ms a frame on average, %.3f ms max\n",
+            (unsigned long long)st.sent, (unsigned long long)st.skipped,
+            (unsigned long long)back,
+            a->sink_steps ? (double)a->sink_ns / (double)a->sink_steps / 1e6 : 0.0,
+            (double)a->sink_max_ns / 1e6);
+    xrd_framesink_free(a->sink);
+    a->sink = NULL;
+}
+
+/* The helper cannot take the film's frames: no more for this run. */
+static void video_failed(xrd_app *a)
+{
+    a->video_failed = true;
+    a->depth_why = "the depth helper failed";
+    video_stop(a);
+}
+
+/* A ring and the request that the helper map it; the helper is started by
+ * the first request when it is not running. */
+static void video_start(xrd_app *a)
+{
+    if (!a->dc) {
+        char sock[256];
+        if (xrd_depth_socket_path(sock, sizeof sock) != 0) {
+            fprintf(stderr, "xrdome: note: depth helper: no socket path (XDG_RUNTIME_DIR or "
+                            "TMPDIR is too long); the film stays 2D\n");
+            a->video_failed = true;
+            return;
+        }
+        if (!(a->dc = xrd_depthclient_new(sock, a->cfg->depth_helper))) {
+            fprintf(stderr, "xrdome: note: depth helper: out of memory; the film stays 2D\n");
+            a->video_failed = true;
+            return;
+        }
+    }
+    char name[32], err[512] = "";
+    if (xrd_vring_shm_name(name, sizeof name, (long)getpid(), ++a->sink_n) != 0 ||
+        !(a->sink = xrd_framesink_new(name, err, sizeof err))) {
+        fprintf(stderr, "xrdome: warning: depth: %s; the film stays 2D\n",
+                err[0] ? err : "no shared-memory name");
+        video_failed(a);
+        return;
+    }
+    if (!xrd_depthclient_video(a->dc, name)) {
+        fprintf(stderr, "xrdome: note: depth helper: %s; the film stays 2D\n",
+                xrd_depthclient_error(a->dc));
+        video_failed(a);
+        return;
+    }
+    a->sink_ns = a->sink_max_ns = a->sink_steps = 0;
+    fprintf(stderr, "depth: video frames to the depth helper (%dx%d through %s)\n", XRD_VRING_W,
+            XRD_VRING_H, name);
+}
+
+/* Once per frame: frames go out only for a flat mono film with 3D on
+ * (xrd_framesink_wanted); otherwise nothing is scaled or read back, and a
+ * sink still running is stopped. Its CPU time goes in the timing log. */
+static void video_step(xrd_app *a, xrd_timing *timing, unsigned tex)
+{
+    const xrd_controls *c = a->ctl;
+    if (a->video_failed || !xrd_framesink_wanted(a->det.image, c->proj, c->layout, c->depth_on,
+                                                 a->cfg->depth_helper[0] != '\0')) {
+        video_stop(a);
+        return;
+    }
+    uint64_t t0 = xrd_now_ns();
+    if (!a->sink)
+        video_start(a);
+    if (!a->sink)
+        return;
+    xrd_framesink_step(a->sink, tex, xrd_player_frame_serial(a->p), t0);
+    uint64_t dt = xrd_now_ns() - t0;
+    xrd_timing_frames_out(timing, dt);
+    a->sink_ns += dt;
+    a->sink_steps++;
+    if (dt > a->sink_max_ns)
+        a->sink_max_ns = dt;
+}
+
 /* Once per frame, without waiting: the depth helper's replies. The one for
  * the open photo switches it to 3D; the others (prefetches, photos left
  * behind) only warmed the cache. A helper that cannot be started or goes away
@@ -506,6 +609,24 @@ static void depth_poll(xrd_app *a)
     xrd_depth_reply rep;
     xrd_dc_event ev;
     while ((ev = xrd_depthclient_poll(a->dc, xrd_now_ns(), &rep)) != XRD_DC_NONE) {
+        if (ev == XRD_DC_FAILED && !a->det.image) {
+            fprintf(stderr, "xrdome: note: depth helper: %s; the film stays 2D\n",
+                    xrd_depthclient_error(a->dc));
+            video_failed(a);
+            continue;
+        }
+        if (ev == XRD_DC_REPLY && rep.video) {
+            if (!a->sink || strcmp(rep.shm, xrd_framesink_shm_name(a->sink)) != 0)
+                continue; /* a ring already stopped */
+            if (rep.ok) {
+                fprintf(stderr, "depth: the depth helper reads %s\n", rep.shm);
+            } else {
+                fprintf(stderr, "xrdome: note: depth helper: %s; the film stays 2D\n",
+                        rep.error);
+                video_failed(a);
+            }
+            continue;
+        }
         if (ev == XRD_DC_FAILED) {
             fprintf(stderr, "xrdome: note: depth helper: %s; photos without cached depth stay "
                             "2D\n", xrd_depthclient_error(a->dc));
@@ -699,14 +820,14 @@ static bool handle_key_action(const SDL_KeyboardEvent *k, xrd_app *a)
         if (!k->repeat)
             print_info(a);
         break;
-    case SDLK_d: /* depth 3D: photos only (spec 7 of the depth 3D design) */
+    case SDLK_d: /* depth 3D: photos and flat mono films (spec 7 and 8 of the depth 3D design) */
     case SDLK_MINUS:
     case SDLK_EQUALS:
     case SDLK_COMMA:
     case SDLK_PERIOD:
-        if (!a->det.image) {
+        if (!a->det.image && (ctl->proj != XRD_PROJ_FLAT || ctl->layout != XRD_LAYOUT_MONO)) {
             if (!k->repeat)
-                fprintf(stderr, "depth: photos only\n");
+                fprintf(stderr, "depth: photos and flat mono films only\n");
             break;
         }
         if (k->keysym.sym == SDLK_d && !k->repeat)
@@ -720,7 +841,8 @@ static bool handle_key_action(const SDL_KeyboardEvent *k, xrd_app *a)
         else if (k->keysym.sym == SDLK_PERIOD)
             xrd_controls_plane_nearer(ctl);
         if (a->depth_why && !k->repeat)
-            fprintf(stderr, "depth: none for this photo: %s\n", a->depth_why);
+            fprintf(stderr, "depth: none for this %s: %s\n", a->det.image ? "photo" : "film",
+                    a->depth_why);
         break;
     default:
         break;
@@ -1162,6 +1284,9 @@ int main(int argc, char **argv)
         goto out;
     }
     xrd_session_controls(&ss, &cfg, &ctl);
+    /* A film starts in 2D: its depth needs the helper running beside it (D). */
+    if (!app.det.image)
+        ctl.depth_on = false;
     app.ctl = &ctl;
     app.trk = trk;
     app.p = p;
@@ -1303,6 +1428,9 @@ int main(int argc, char **argv)
             }
         }
 
+        /* Video frames to the depth helper, before the pose sample: never waits */
+        video_step(&app, timing, tex);
+
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, out_w, out_h);
 
@@ -1422,6 +1550,7 @@ out:
     if (pose && strcmp(pose->name, "udp-opentrack") == 0)
         fprintf(stderr, "pose: %u malformed UDP packets dropped\n",
                 (unsigned)xrd_pose_udp_dropped(pose));
+    video_stop(&app);         /* needs the GL context current */
     xrd_timing_close(timing); /* prints the missed-vsync summary */
     xrd_player_free(p);       /* needs the GL context current */
     xrd_imagedir_free(&app.photos);

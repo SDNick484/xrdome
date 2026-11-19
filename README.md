@@ -134,7 +134,7 @@ head up does not move it down, flip the axis in the pose spec, e.g.
 | L | Screen lock, flat only; prints `screen: head-locked` or `screen: fixed` |
 | B | Debanding on / off (mpv `deband`); prints `deband: on` or `deband: off`. Not remembered per file |
 | C | Curved screen on or off, flat only; prints `screen curve: 1.00` or `screen curve: off` |
-| D | Depth 3D on / off, for a photo with depth (see [Depth 3D for photos](#depth-3d-for-photos)); prints `depth: off, strength 2.0%, plane 0.50`. On at start; carries over from one photo to the next |
+| D | Depth 3D on / off, for a photo with depth (see [Depth 3D for photos](#depth-3d-for-photos)); prints `depth: off, strength 2.0%, plane 0.50`. On at start; carries over from one photo to the next. On a flat 2D film: off at start; on sends the film's frames to the depth helper (see [Depth for films](#depth-for-films)) |
 | - / = | Depth strength down / up (0.5% of the picture width per step, 0 to 5%); prints the `depth:` line. Remembered per photo |
 | , / . | Screen plane further / nearer (0.05 per step, 0 to 1): further brings the picture forward; prints the `depth:` line. Remembered per photo |
 | ? | Print the key list to stderr (`keys:` lines) |
@@ -291,9 +291,10 @@ To diagnose a slow GPU, compare `--mpv-profile default` against the default run,
 `--mpv-opt gpu-dumb-mode=yes` as the cheapest render path.
 
 `--timing-log PATH` writes one CSV row per presented frame:
-`frame,interval_us,pose_to_swap_us,pose_age_us,swap_us` (swap-to-swap interval, pose sample to swap
-call, age of the pose at the swap, time spent inside the swap call; `0` for the first frame or
-before any pose). The log is line buffered,
+`frame,interval_us,pose_to_swap_us,pose_age_us,swap_us,frames_out_us` (swap-to-swap interval, pose
+sample to swap call, age of the pose at the swap, time spent inside the swap call, CPU time spent
+sending video frames to the depth helper; `0` for the first frame, before any pose, or when no
+frames go out). The log is line buffered,
 so `tail -f` works. At exit stderr always shows a summary such as
 `timing: 18000 frames, 0 missed vsyncs (swap interval > 20 ms), pose-to-swap max 1.234 ms, median 0.812 ms (last 4096 frames)`
 (the max covers every frame; the median is computed from the most recent 4096 frames) and,
@@ -519,6 +520,27 @@ xrdome-tools depth photo ~/Pictures/holiday/      # or all of it ahead of time
   `xrdome: note:` line, when mpv is older than 0.42: older mpv turns it without mirroring it (table
   above), so the depth would not line up. A depth whose shape does not fit the picture mpv shows
   (EXIF that mpv does not apply, outside JPEG) is dropped with a warning.
+
+### Depth for films
+
+Work in progress (spec section 8 of `docs/superpowers/specs/2026-11-19-depth-3d-design.md`): a flat
+2D film is not drawn in 3D yet, but `D` already sends its frames to the depth helper, which makes
+their depth live. 3D is off at the start of a film. With it on, each new frame is scaled on the GPU
+to 322x182 and read back a frame later, never waiting, into a shared-memory ring that
+[`xrdome-tools depth serve`](docs/tools.md#depth-serve) reads (xrdome starts it as for photos):
+
+```
+depth: video frames to the depth helper (322x182 through /xrdome-4242-1)
+depth: the depth helper reads /xrdome-4242-1
+...
+depth: video stopped: 900 frames out, 0 skipped (readbacks busy), 899 depth maps back; CPU 0.086 ms a frame on average, 4.425 ms max
+```
+
+The last line comes when 3D goes off or xrdome exits. Only a flat mono film sends frames; a stereo
+film, VR180 and photos never read anything back. With `--depth-helper off`, `D` says the film has
+no depth source. The CPU time of each frame's sending is the `frames_out_us` column of
+`--timing-log`. A helper that cannot take the frames gives one `xrdome: note:` and the film plays on
+in 2D. `xrdome-tools depth bench-video` reports the rate the helper reaches.
 
 ## Format detection
 

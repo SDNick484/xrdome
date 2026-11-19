@@ -13,6 +13,13 @@ contract:
   - requests are served newest first among the ones that are not prefetches; prefetches come after them,
     newest first too. A photo already in the cache is answered at once.
 
+Spec 8 adds video: request {"op": "video", "shm": "/xrdome-<pid>-<n>"}, the name of the shared-memory
+ring xrdome copies a film's frames into (video.py and src/video/framesink.h). The helper maps it, removes
+the name, and replies {"ok": true, "op": "video", "shm": "<as asked>"} or {"ok": false, "op": "video",
+"shm": "<as asked>", "error": "..."}. From then on it makes depth for the ring's newest frame, before any
+photo, until xrdome marks the ring closed, sends another video request on the same connection, or
+disconnects.
+
 Paths travel as their bytes: a file name that is not UTF-8 goes through Python's surrogateescape both
 ways, so the reply's "path" is byte for byte what the player sent.
 
@@ -38,7 +45,7 @@ from typing import Callable
 if __package__ in (None, ""):  # started as a script: make xrdome_depth importable, not this folder's files
     sys.path[0] = str(Path(__file__).resolve().parents[1])
 
-from xrdome_depth import cache
+from xrdome_depth import cache, video
 
 MAX_LINE = 64 * 1024     # a request line longer than this closes the connection
 MAX_JOBS = 256           # queued photos; past this the oldest prefetch (else the oldest) is dropped
@@ -57,8 +64,13 @@ class Request:
     prefetch: bool
 
 
-def parse_request(line: bytes) -> Request:
-    """One request line (without its newline). ProtocolError for anything but a photo request."""
+@dataclass(frozen=True)
+class VideoRequest:
+    shm: str
+
+
+def parse_request(line: bytes) -> Request | VideoRequest:
+    """One request line (without its newline). ProtocolError for anything but a photo or video request."""
     try:
         obj = json.loads(line.decode("utf-8", "surrogateescape"))
     except ValueError as e:
@@ -67,8 +79,13 @@ def parse_request(line: bytes) -> Request:
         raise ProtocolError("not a JSON object")
     path = obj.get("path")
     path = path if isinstance(path, str) else None
+    if obj.get("op") == "video":
+        shm = obj.get("shm")
+        if not video.valid_name(shm):
+            raise ProtocolError("a video request needs a \"shm\" name such as \"/xrdome-1-1\"")
+        return VideoRequest(shm)
     if obj.get("op") != "photo":
-        raise ProtocolError(f"unknown op {obj.get('op')!r} (this helper serves \"photo\")", path)
+        raise ProtocolError(f"unknown op {obj.get('op')!r} (this helper serves \"photo\" and \"video\")", path)
     if path is None or not path:
         raise ProtocolError("a photo request needs a \"path\" string")
     if not os.path.isabs(path):
@@ -86,6 +103,12 @@ def encode_reply(reply: dict) -> bytes:
 
 def ok_reply(path: str, depth: Path) -> dict:
     return {"ok": True, "path": path, "depth": os.fsdecode(depth)}
+
+
+def video_reply(shm: str, error: str | None = None) -> dict:
+    if error is None:
+        return {"ok": True, "op": "video", "shm": shm}
+    return {"ok": False, "op": "video", "shm": shm, "error": error}
 
 
 def error_reply(path: str | None, error: str) -> dict:
@@ -160,6 +183,7 @@ class Conn:
         self.inbuf = b""
         self.outbuf = b""
         self.closed = False
+        self.video = None  # its VideoSession while it sends video
 
 
 def socket_in_use(path: Path) -> bool:
@@ -176,14 +200,18 @@ def socket_in_use(path: Path) -> bool:
 
 class Server:
     """The socket loop. process(path) makes the depth of one photo (slow) and returns its cache file;
-    cached(path) returns the cache file when it already exists, else None (both may raise)."""
+    cached(path) returns the cache file when it already exists, else None (both may raise).
+    open_video(shm) maps a video ring and returns its video.VideoSession (may raise); None: this helper
+    refuses video."""
 
     def __init__(self, path: Path, process: Callable[[Path], Path], cached: Callable[[Path], Path | None],
                  idle_exit: float = IDLE_EXIT_S, clock: Callable[[], float] = time.monotonic,
-                 log: Callable[[str], None] = lambda s: None):
+                 log: Callable[[str], None] = lambda s: None,
+                 open_video: Callable[[str], "video.VideoSession"] | None = None):
         self.path = Path(path)
         self.process = process
         self.cached = cached
+        self.open_video = open_video
         self.idle_exit = idle_exit
         self.clock = clock
         self.log = log
@@ -258,6 +286,7 @@ class Server:
         if c.closed:
             return
         c.closed = True
+        self._end_video(c)
         self.queue.forget(c)
         self.conns.remove(c)
         self.sel.unregister(c.sock)
@@ -316,6 +345,9 @@ class Server:
         except ProtocolError as e:
             self.send(c, error_reply(e.path, str(e)))
             return
+        if isinstance(req, VideoRequest):
+            self.start_video(c, req.shm)
+            return
         try:
             hit = self.cached(Path(req.path))
         except OSError as e:
@@ -327,6 +359,50 @@ class Server:
         for job in self.queue.add(req, c):
             for w in job.waiters:
                 self.send(w, error_reply(job.path, "dropped: too many photos queued"))
+
+    # ---- video ---------------------------------------------------------------
+
+    def start_video(self, c: Conn, shm: str) -> None:
+        """Maps c's ring (replacing a ring c sent before) and answers."""
+        self._end_video(c)
+        if self.open_video is None:
+            self.send(c, video_reply(shm, "this helper does not make depth for video"))
+            return
+        try:
+            c.video = self.open_video(shm)
+        except Exception as e:  # a bad ring must not stop the service
+            self.log(f"video {shm}: {e}")
+            self.send(c, video_reply(shm, f"cannot map {shm}: {e}"))
+            return
+        self.log(f"video {shm}: mapped")
+        self.send(c, video_reply(shm))
+
+    def _end_video(self, c: Conn) -> None:
+        if c.video is not None:
+            c.video.close()
+            c.video = None
+
+    def videos(self) -> list[Conn]:
+        return [c for c in self.conns if c.video is not None]
+
+    def run_video(self) -> bool:
+        """Depth for each ring's newest frame that is due; rings the player closed are let go. True when
+        any depth was made."""
+        busy = False
+        for c in self.videos():
+            if c.video.done():
+                self.log("video: the player stopped sending")
+                self._end_video(c)
+                continue
+            try:
+                busy = c.video.step() or busy
+            except Exception as e:  # e.g. the GPU fails: say so once, drop the ring, keep serving photos
+                self.log(f"video: failed: {e}")
+                self._end_video(c)
+                continue
+            if busy:
+                self.last_busy = self.clock()
+        return busy
 
     def run_one(self) -> bool:
         """Makes the depth of the next queued photo and answers everyone waiting for it."""
@@ -369,13 +445,15 @@ class Server:
         is known when the next photo is chosen."""
         while True:
             self.step(0)
-            if self.run_one():
+            if self.run_video() or self.run_one():
                 continue
             left = self.idle_for()
             if left is not None and left <= 0:
                 self.log(f"idle for {self.idle_exit:g} s, exiting")
                 return
-            self.step(left if left is not None else None)
+            if self.videos():  # a ring has no wake-up: look at it again soon
+                left = video.POLL_S if left is None else min(left, video.POLL_S)
+            self.step(left)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -419,7 +497,20 @@ def main(argv: list[str] | None = None) -> int:
         dest = cache.cache_path(args.cache_dir, cache.cache_key(p))
         return dest if dest.is_file() else None
 
-    server = Server(args.socket, process, cached, args.idle_exit, log=log)
+    video_depth = None
+
+    def open_video(shm: str) -> video.VideoSession:
+        nonlocal video_depth
+        if video_depth is None:  # the 322x182 model, loaded and warmed on the first film
+            fn = video.make_depth_fn(backend)
+            start = time.monotonic()
+            video.warm(fn)
+            log(f"model {video.WIDTH}x{video.HEIGHT} warm in {time.monotonic() - start:.2f} s")
+            video_depth = fn
+        ring, mm = video.open_shm(shm)
+        return video.VideoSession(ring, video_depth, mm=mm, log=log)
+
+    server = Server(args.socket, process, cached, args.idle_exit, log=log, open_video=open_video)
     if not server.bind():
         log(f"another helper already serves {args.socket}")
         return 0

@@ -118,6 +118,15 @@ int xrd_depth_request_line(const char *path, bool prefetch, char *buf, size_t le
     return (int)n;
 }
 
+int xrd_depth_video_line(const char *shm, char *buf, size_t len)
+{
+    for (const char *p = shm; *p; p++)
+        if (*p == '"' || *p == '\\' || (unsigned char)*p < 0x20)
+            return -1; /* ring names are xrdome's own: nothing to escape */
+    int n = snprintf(buf, len, "{\"op\": \"video\", \"shm\": \"%s\"}\n", shm);
+    return n < 0 || (size_t)n >= len ? -1 : n;
+}
+
 typedef struct {
     const char *p, *end;
 } cursor;
@@ -313,7 +322,7 @@ bool xrd_depth_reply_parse(const char *line, size_t len, xrd_depth_reply *out)
 {
     memset(out, 0, sizeof *out);
     cursor c = {line, line + len};
-    bool have_ok = false, have_depth = false;
+    bool have_ok = false, have_depth = false, have_shm = false;
     skip_ws(&c);
     if (c.p >= c.end || *c.p++ != '{')
         return false;
@@ -343,6 +352,12 @@ bool xrd_depth_reply_parse(const char *line, size_t len, xrd_depth_reply *out)
                 good = parse_string(&c, out->path, sizeof out->path, false);
             } else if (strcmp(key, "depth") == 0) {
                 good = have_depth = parse_string(&c, out->depth, sizeof out->depth, false);
+            } else if (strcmp(key, "op") == 0) {
+                char op[16];
+                good = parse_string(&c, op, sizeof op, true);
+                out->video = good && strcmp(op, "video") == 0;
+            } else if (strcmp(key, "shm") == 0) {
+                good = have_shm = parse_string(&c, out->shm, sizeof out->shm, false);
             } else if (strcmp(key, "error") == 0) {
                 good = parse_string(&c, out->error, sizeof out->error, true);
             } else {
@@ -363,6 +378,8 @@ bool xrd_depth_reply_parse(const char *line, size_t len, xrd_depth_reply *out)
     skip_ws(&c);
     if (c.p != c.end || !have_ok)
         return false;
+    if (out->video)
+        return have_shm && out->shm[0];
     return !out->ok || (have_depth && out->depth[0]);
 }
 
@@ -463,6 +480,25 @@ bool xrd_depthclient_request(xrd_depthclient *dc, const char *path, bool prefetc
     int n = xrd_depth_request_line(path, prefetch, line, sizeof line);
     if (n < 0)
         return true; /* a path this long gets no depth; the client stays usable */
+    if (!append(&dc->out, &dc->out_len, &dc->out_cap, line, (size_t)n)) {
+        fail(dc, "out of memory");
+        return false;
+    }
+    if (dc->st == ST_IDLE) {
+        dc->st = ST_CONNECTING;
+        dc->next_try_ns = 0;
+    }
+    return true;
+}
+
+bool xrd_depthclient_video(xrd_depthclient *dc, const char *shm)
+{
+    if (!dc || dc->st == ST_FAILED)
+        return false;
+    char line[128];
+    int n = xrd_depth_video_line(shm, line, sizeof line);
+    if (n < 0)
+        return false;
     if (!append(&dc->out, &dc->out_len, &dc->out_cap, line, (size_t)n)) {
         fail(dc, "out of memory");
         return false;
