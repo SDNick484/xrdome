@@ -33,8 +33,10 @@ jobs:
 
       # -Dwerror=true makes any warning in xrdome's own sources (src/, tests/)
       # fail the build; warnings in system headers are not reported by gcc.
+      # -Dviture_sdk_include builds helpers/xrdome-pose-viture and its tests against
+      # stand-in headers and a fake SDK (the real SDK is VITURE's, never in the repo).
       - name: Configure
-        run: meson setup build -Dwerror=true
+        run: meson setup build -Dwerror=true -Dviture_sdk_include=helpers/xrdome-pose-viture/tests/fake_include
 
       - name: Build
         run: meson compile -C build
@@ -96,7 +98,7 @@ jobs:
           pkg-config --modversion mpv sdl2
 
       - name: Configure
-        run: meson setup build -Dwerror=true
+        run: meson setup build -Dwerror=true -Dviture_sdk_include=helpers/xrdome-pose-viture/tests/fake_include
 
       - name: Build
         run: meson compile -C build
@@ -158,7 +160,7 @@ jobs:
           pkg-config --modversion mpv sdl2 epoxy cmocka
 
       - name: Configure
-        run: meson setup build -Dwerror=true
+        run: meson setup build -Dwerror=true -Dviture_sdk_include=helpers/xrdome-pose-viture/tests/fake_include
 
       - name: Build
         run: meson compile -C build
@@ -307,7 +309,7 @@ jobs:
           pkg-config --modversion mpv sdl2 epoxy cmocka
 
       - name: Configure
-        run: meson setup build -Dwerror=true
+        run: meson setup build -Dwerror=true -Dviture_sdk_include=helpers/xrdome-pose-viture/tests/fake_include
 
       - name: Build
         run: meson compile -C build
