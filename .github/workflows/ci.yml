@@ -42,12 +42,12 @@ jobs:
         run: meson test -C build --print-errorlogs
 
       # meson reports a skipped test (exit 77) as non-failing, and a skipped
-      # smoke test proves nothing, so require all three to have really passed.
+      # smoke test proves nothing, so require all four to have really passed.
       - name: Require the smoke tests to have run
         run: |
           python3 - <<'PY'
           import json, sys
-          want = {"smoke", "smoke_tracking", "smoke_sbs"}
+          want = {"smoke", "smoke_tracking", "smoke_sbs", "smoke_photos"}
           seen = {}
           with open("build/meson-logs/testlog.json") as f:
               for line in f:
@@ -113,7 +113,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, sys
-          want = {"smoke", "smoke_tracking", "smoke_sbs"}
+          want = {"smoke", "smoke_tracking", "smoke_sbs", "smoke_photos"}
           seen = {}
           with open("build/meson-logs/testlog.json") as f:
               for line in f:

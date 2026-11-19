@@ -378,7 +378,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
 {
     enum { OPT_PROJ = 256, OPT_LAYOUT, OPT_POSE, OPT_OUTPUT, OPT_DEVICE, OPT_ZOOM,
            OPT_CONTENT_FOV, OPT_HWDEC, OPT_WINDOWED, OPT_TIMING, OPT_SYNC, OPT_FRAMES,
-           OPT_MIPMAP_FORCE, OPT_MIPMAP_CHECK, OPT_DUMP,
+           OPT_MIPMAP_FORCE, OPT_MIPMAP_CHECK, OPT_DUMP, OPT_PRESS,
            OPT_MPV_PROFILE, OPT_MPV_OPT, OPT_MPV_LOG, OPT_CONVERGENCE, OPT_FILTER,
            OPT_FBO_FORMAT, OPT_DITHER, OPT_NO_MEMORY, OPT_FORGET, OPT_RESUME, OPT_NO_RESUME,
            OPT_PACKING, OPT_ZOOM_MODE, OPT_SCREEN, OPT_MIPMAP, OPT_DEBAND, OPT_SCREEN_CURVE,
@@ -400,6 +400,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"mipmap-force", no_argument, NULL, OPT_MIPMAP_FORCE},
         {"mipmap-check", no_argument, NULL, OPT_MIPMAP_CHECK},
         {"dump-frame", required_argument, NULL, OPT_DUMP},
+        {"press", required_argument, NULL, OPT_PRESS},
         {"mpv-profile", required_argument, NULL, OPT_MPV_PROFILE},
         {"mpv-opt", required_argument, NULL, OPT_MPV_OPT},
         {"mpv-log", required_argument, NULL, OPT_MPV_LOG},
@@ -515,6 +516,14 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
             break;
         case OPT_DUMP:
             rc = set_string("--dump-frame", c->dump_frame, sizeof c->dump_frame, optarg, err, errlen);
+            break;
+        case OPT_PRESS:
+            if (optarg[0] == '\0') {
+                set_err(err, errlen, "--press: empty key list");
+                rc = -1;
+            } else {
+                rc = set_string("--press", c->press, sizeof c->press, optarg, err, errlen);
+            }
             break;
         case OPT_MPV_PROFILE:
             if (optarg[0] == '\0') {
@@ -661,6 +670,10 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
 
     if (c->dump_frame[0] && c->frames == 0) {
         set_err(err, errlen, "--dump-frame needs --frames");
+        return -1;
+    }
+    if (c->press[0] && c->frames == 0) {
+        set_err(err, errlen, "--press needs --frames");
         return -1;
     }
     if (optind >= argc) {

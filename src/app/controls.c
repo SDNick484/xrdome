@@ -192,6 +192,7 @@ const xrd_key_help xrd_key_list[] = {
     {"Space", "pause / resume"},
     {"Left / Right", "seek -10 s / +10 s"},
     {"Up / Down", "seek +60 s / -60 s"},
+    {"PageDown / PageUp", "next / previous photo (a directory)"},
     {"R", "recenter, yaw only"},
     {"Shift+R", "recenter, full"},
     {"[ / ]", "zoom out / in"},

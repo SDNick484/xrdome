@@ -53,6 +53,10 @@ typedef struct {
     const char *scale;
     /* mpv "hwdec"; NULL = "vaapi" (what xrdome always set before). */
     const char *hwdec;
+    /* The file is a photo: mpv's image-display-duration is inf, so the picture
+     * stays up instead of ending. Set before opts, so --mpv-opt wins. It stays
+     * set for every file xrd_player_load opens. */
+    bool image;
 } xrd_player_options;
 
 /* As xrd_player_open; opt may be NULL (profile "fast", no extra options,
@@ -61,6 +65,16 @@ typedef struct {
 xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void *x11_display,
                                const xrd_player_options *opt, char *err, size_t errlen);
 void        xrd_player_free(xrd_player *p);
+/* Replaces the file now playing (mpv loadfile ... replace), for the next photo
+ * of a directory. The video texture keeps showing the old picture until the
+ * new file's first frame is drawn (xrd_player_file_shown). The resume
+ * position, the duration, a finish and the one-time aspect warning start over.
+ * Returns <0 with err set when mpv refuses the command; a file mpv cannot
+ * decode fails later, in xrd_player_update. */
+int         xrd_player_load(xrd_player *p, const char *file, char *err, size_t errlen);
+/* False from xrd_player_load until a frame of the new file has been drawn into
+ * the video texture; always true when no file was ever replaced. */
+bool        xrd_player_file_shown(const xrd_player *p);
 /* What the one-time aspect warning expects of the video: the layout and the
  * content FOV (--content-fov). Defaults are sbs-lr and 180 x 180. The warning
  * is checked when the video size becomes known and when it is turned on

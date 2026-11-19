@@ -1368,6 +1368,30 @@ static void args_dev_dump_requires_frames(void **state)
     assert_non_null(strstr(err, "--frames"));
 }
 
+static void args_dev_press(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    xrd_config c;
+    xrd_config_defaults(&c);
+    assert_string_equal(c.press, "");
+
+    char *a[] = {"xrdome", "--frames", "5", "--press", "PageDown,PageUp", "a.jpg", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 6, a, err, sizeof err), 0);
+    assert_string_equal(c.press, "PageDown,PageUp");
+
+    xrd_config_defaults(&c);
+    char *n[] = {"xrdome", "--press", "PageDown", "a.jpg", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, n, err, sizeof err), -1);
+    assert_non_null(strstr(err, "--press"));
+    assert_non_null(strstr(err, "--frames"));
+
+    xrd_config_defaults(&c);
+    char *e[] = {"xrdome", "--frames", "5", "--press", "", "a.jpg", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 6, e, err, sizeof err), -1);
+    assert_non_null(strstr(err, "--press"));
+}
+
 static void args_dev_mipmap_flags(void **state)
 {
     (void)state;
@@ -1586,6 +1610,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(default_path_falls_back_to_home, save_env, restore_env),
         cmocka_unit_test_setup_teardown(default_path_fails_without_env_or_space, save_env, restore_env),
         cmocka_unit_test(args_dev_frames_and_dump),
+        cmocka_unit_test(args_dev_press),
         cmocka_unit_test(args_dev_frames_bad_values),
         cmocka_unit_test(args_dev_dump_requires_frames),
         cmocka_unit_test(args_dev_mipmap_flags),

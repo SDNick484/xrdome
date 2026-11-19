@@ -42,3 +42,18 @@ coverart_first.txt    `ffmpeg -i art.jpg -i video.mp4 -map 0 -map 1 -c:v:0 copy
 audio_only.txt        `ffmpeg -f lavfi -i sine=d=0.5 -c:a aac audio.mkv`.
 empty.txt             Zero bytes.
 truncated.txt         The first 700 bytes of sbs_mkv.txt (cut inside the first block).
+
+The next five were captured with `ffprobe -v error -show_streams -show_format`
+(what xrdome runs since photo mode), FFmpeg / ffprobe 9.0.2, 2026-11-19, the
+local path in `filename=` cut to the file name. Sources: `testsrc=s=64x48`
+through ffmpeg for the PNG, GIF and H.264 MP4; a 96x48 JPEG (a Pillow-written
+EXIF Orientation 6) for the JPEG.
+
+image_jpeg.txt        format_name=jpeg_pipe, one mjpeg stream. ffprobe 9.0.2 does
+                      not print the EXIF orientation: width x height is the
+                      stored size, 96x48, although mpv shows the photo 48x96.
+image_png.txt         format_name=png_pipe.
+image_gif.txt         format_name=gif: an animation, not a photo.
+video_mp4_format.txt  format_name=mov,mp4,m4a,3gp,3g2,mj2: a film, not a photo.
+image_format_truncated.txt  image_jpeg.txt cut inside the [FORMAT] block (its closing
+                      line is missing), so the format is not trusted.

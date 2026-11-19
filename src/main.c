@@ -12,6 +12,7 @@
 #include <time.h>
 
 #include "app/controls.h"
+#include "app/imagedir.h"
 #include "app/session.h"
 #include "config.h"
 #include "detect/detect.h"
@@ -34,6 +35,8 @@
 #define WINDOWED_W 1280
 #define WINDOWED_H 360
 #define XRD_PI_D 3.14159265358979323846
+#define XRD_PRESS_GAP 3  /* --press: frames of the photo shown before each key */
+#define XRD_PRESS_MAX 32
 
 static int fail(const char *fmt, const char *arg)
 {
@@ -110,6 +113,9 @@ typedef struct {
     xrd_size_debounce scale_db; /* --mpv-scale: the texture size asked of the player */
     const char *scale_why;   /* --mpv-scale: why mpv is not enlarging, NULL while it is */
     unsigned long frames;    /* video frames presented */
+    xrd_imagedir photos;     /* the directory argument's photos; count 0 for a file */
+    size_t photo_index;      /* which of them is open */
+    int nav;                 /* PageDown +1 / PageUp -1 pressed, not yet acted on */
 } xrd_app;
 
 /* F of spec 5.3 for the frame now playing: the video texture's (coded) size
@@ -240,6 +246,7 @@ static const char *src_text(xrd_detect_src s, const char *tok, bool keyed, char 
     case XRD_SRC_SHAPE:    w = "frame shape"; break;
     case XRD_SRC_AUTO:     w = "auto"; break;
     case XRD_SRC_FALLBACK: w = "fallback"; break;
+    case XRD_SRC_IMAGE:    w = "image file"; break;
     default:               w = "unknown"; break;
     }
     return w;
@@ -283,6 +290,8 @@ static void print_info(xrd_app *a)
     double fps = xrd_player_fps(a->p);
 
     fprintf(stderr, "info: file: %s\n", a->cfg->file);
+    if (a->photos.count > 0)
+        fprintf(stderr, "info: photo: %zu of %zu\n", a->photo_index + 1, a->photos.count);
     fprintf(stderr, "info: video: %s %dx%d", codec[0] ? codec : "unknown codec", vw, vh);
     if (fps > 0.0)
         fprintf(stderr, " %.3f fps\n", fps);
@@ -364,7 +373,8 @@ static void key_proj(xrd_app *a)
     xrd_controls_toggle_proj(c);
     a->proj_keyed = true;
     if (!c->layout_chosen &&
-        (a->det.layout_src == XRD_SRC_SHAPE || a->det.layout_src == XRD_SRC_FALLBACK)) {
+        (a->det.layout_src == XRD_SRC_SHAPE || a->det.layout_src == XRD_SRC_FALLBACK ||
+         a->det.layout_src == XRD_SRC_IMAGE)) {
         xrd_detect_relayout(frame_aspect_now(a), c->proj, &c->layout, &c->packing);
         if (a->det.packing_src != XRD_SRC_AUTO)
             c->packing = packing0;
@@ -390,20 +400,29 @@ static bool handle_key_action(const SDL_KeyboardEvent *k, xrd_app *a)
     case SDLK_q:
         return true;
     case SDLK_SPACE:
-        if (!k->repeat)
+        if (!k->repeat && !a->det.image) /* a photo has no time to pause or seek in */
             xrd_player_toggle_pause(a->p);
         break;
     case SDLK_LEFT:
-        xrd_player_seek(a->p, -XRD_SEEK_SMALL_S);
+        if (!a->det.image)
+            xrd_player_seek(a->p, -XRD_SEEK_SMALL_S);
         break;
     case SDLK_RIGHT:
-        xrd_player_seek(a->p, XRD_SEEK_SMALL_S);
+        if (!a->det.image)
+            xrd_player_seek(a->p, XRD_SEEK_SMALL_S);
         break;
     case SDLK_UP:
-        xrd_player_seek(a->p, XRD_SEEK_LARGE_S);
+        if (!a->det.image)
+            xrd_player_seek(a->p, XRD_SEEK_LARGE_S);
         break;
     case SDLK_DOWN:
-        xrd_player_seek(a->p, -XRD_SEEK_LARGE_S);
+        if (!a->det.image)
+            xrd_player_seek(a->p, -XRD_SEEK_LARGE_S);
+        break;
+    case SDLK_PAGEDOWN: /* acted on in the main loop, which owns the player */
+    case SDLK_PAGEUP:
+        if (a->photos.count > 0)
+            a->nav = k->keysym.sym == SDLK_PAGEDOWN ? 1 : -1;
         break;
     case SDLK_r:
         xrd_tracker_recenter(a->trk, !shift); /* R: yaw only, Shift+R: full */
@@ -631,7 +650,7 @@ static void detect_and_start(xrd_app *a, const xrd_config *cfg, xrd_memory *mem,
     /* --resume: the record's position, handed to mpv as its start option (main). */
     double rpos = 0.0;
     unsigned shown = ss->applied;
-    if (xrd_session_resume_start(cfg, rec, &rpos)) {
+    if (!a->det.image && xrd_session_resume_start(cfg, rec, &rpos)) {
         mem->resume = true;
         mem->resume_at = rpos;
         shown |= XRD_SET_POSITION;
@@ -649,6 +668,53 @@ static void detect_and_start(xrd_app *a, const xrd_config *cfg, xrd_memory *mem,
     a->content_vfov = ss->s.content_vfov;
 }
 
+/* PageDown / PageUp (a.nav) in a directory of photos: the settings of the
+ * photo that was open are saved, the next one is detected and its record
+ * applied like at start, and the player loads it. What is not remembered per
+ * file (filter, sharpening, curve, screen lock, mouse look) carries over. The
+ * old picture stays up until the new one has been drawn. *rendered is false
+ * until that happens, so that a photo never shown never saves anything. */
+static int switch_photo(xrd_app *a, xrd_config *cfg, xrd_session *ss, xrd_renderer *r,
+                        bool *rendered, char *err, size_t errlen)
+{
+    long next = xrd_imagedir_step(&a->photos, a->photo_index, a->nav);
+    bool forward = a->nav > 0;
+    a->nav = 0;
+    if (next < 0) {
+        fprintf(stderr, "photo: %zu of %zu (%s of the directory)\n", a->photo_index + 1,
+                a->photos.count, forward ? "end" : "start");
+        return 0;
+    }
+    xrd_memory *mem = a->mem;
+    if (mem->on && !mem->block_save && *rendered)
+        memory_save(mem, cfg, cfg->file, a->ctl, -1.0, -1.0);
+    a->photo_index = (size_t)next;
+    snprintf(cfg->file, sizeof cfg->file, "%s", a->photos.path[next]);
+    const char *name = strrchr(cfg->file, '/');
+    fprintf(stderr, "photo: %zu of %zu: %s\n", a->photo_index + 1, a->photos.count,
+            name ? name + 1 : cfg->file);
+
+    xrd_config load = *cfg; /* --forget was for the photo the run opened with */
+    load.forget = false;
+    memory_load(mem, &load);
+    detect_and_start(a, cfg, mem, ss);
+
+    const xrd_controls old = *a->ctl;
+    xrd_session_controls(ss, cfg, a->ctl);
+    a->ctl->filter = old.filter;
+    a->ctl->sharpen = old.sharpen;
+    a->ctl->screen_curved = old.screen_curved;
+    a->ctl->screen_curve = old.screen_curve;
+    a->ctl->screen_locked = old.screen_locked;
+    a->ctl->mouse_yaw_deg = old.mouse_yaw_deg;
+    a->ctl->mouse_pitch_deg = old.mouse_pitch_deg;
+    a->proj_keyed = a->layout_keyed = a->packing_keyed = false;
+    xrd_renderer_set_content_fov(r, ss->s.content_hfov, ss->s.content_vfov);
+    apply_format(a);
+    *rendered = false;
+    return xrd_player_load(a->p, cfg->file, err, errlen);
+}
+
 int main(int argc, char **argv)
 {
     char err[512] = "";
@@ -658,18 +724,26 @@ int main(int argc, char **argv)
     if (xrd_config_load(&cfg, have_ini ? ini : NULL, argc, argv, err, sizeof err) != 0)
         return fail("%s", err);
 
-    xrd_memory mem;
-    memory_load(&mem, &cfg);
     xrd_app app;
     memset(&app, 0, sizeof app);
+    /* A directory argument opens its first photo; PageDown / PageUp walk it. */
+    if (xrd_imagedir_is_dir(cfg.file)) {
+        if (xrd_imagedir_open(cfg.file, &app.photos, err, sizeof err) != 0)
+            return fail("%s", err);
+        snprintf(cfg.file, sizeof cfg.file, "%s", app.photos.path[0]);
+    }
+    xrd_memory mem;
+    memory_load(&mem, &cfg);
     app.cfg = &cfg;
     app.mem = &mem;
     xrd_session ss;
     detect_and_start(&app, &cfg, &mem, &ss);
 
     xrd_pose_source *pose = xrd_pose_source_create(cfg.pose, err, sizeof err);
-    if (!pose)
+    if (!pose) {
+        xrd_imagedir_free(&app.photos);
         return fail("%s", err);
+    }
 
     int rc = 1;
     xrd_tracker *trk = NULL;
@@ -684,6 +758,8 @@ int main(int argc, char **argv)
     bool sbs_switched = false; /* xrdome switched the glasses to SBS: switch back at exit */
     bool glasses_gone = false; /* the glasses' output disconnected during playback */
     xrd_controls ctl;      /* valid once rendered is set */
+    int press_keys[XRD_PRESS_MAX]; /* --press: SDL key codes, pressed in order */
+    int press_n = 0, press_next = 0;
 
     trk = xrd_tracker_new(pose);
     if (!trk) {
@@ -711,6 +787,22 @@ int main(int argc, char **argv)
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         fail("SDL_Init: %s", SDL_GetError());
         goto out;
+    }
+
+    for (const char *k = cfg.press; k[0];) { /* --press: names to SDL key codes */
+        size_t n = strcspn(k, ",");
+        char name[32];
+        if (n == 0 || n >= sizeof name || press_n == XRD_PRESS_MAX) {
+            fail("--press: bad key list '%s'", cfg.press);
+            goto out;
+        }
+        memcpy(name, k, n);
+        name[n] = '\0';
+        if ((press_keys[press_n++] = SDL_GetKeyFromName(name)) == SDLK_UNKNOWN) {
+            fail("--press: unknown key '%s'", name);
+            goto out;
+        }
+        k += n + (k[n] == ',');
     }
 
     int x = SDL_WINDOWPOS_CENTERED, y = SDL_WINDOWPOS_CENTERED;
@@ -845,7 +937,7 @@ int main(int argc, char **argv)
                                .fbo_format = cfg.fbo_format, .deband = cfg.deband,
                                .resume_at = mem.resume ? mem.resume_at : 0.0,
                                .scale = cfg.mpv_scale[0] ? cfg.mpv_scale : NULL,
-                               .hwdec = hwdec};
+                               .hwdec = hwdec, .image = app.det.image};
     p = xrd_player_open_ex(cfg.file, gl_get_proc, x11_display, &popt, err, sizeof err);
     if (!p) {
         fail("%s", err);
@@ -913,6 +1005,10 @@ int main(int argc, char **argv)
         }
         if (quit)
             break;
+        if (app.nav && switch_photo(&app, &cfg, &ss, r, &rendered, err, sizeof err) < 0) {
+            fail("%s", err);
+            goto out;
+        }
 
         if (xrd_player_update(p) < 0) {
             fail("%s", xrd_player_error(p));
@@ -922,7 +1018,10 @@ int main(int argc, char **argv)
             break;
 
         unsigned tex = xrd_player_texture(p);
-        if (tex)
+        /* After PageDown the texture still holds the old photo until the new
+         * one is drawn; those frames are not the new photo's. */
+        const bool shown = tex && xrd_player_file_shown(p);
+        if (shown)
             rendered = true;
 
         if (size_dirty) {
@@ -1023,11 +1122,24 @@ int main(int argc, char **argv)
         }
 
         bool last = false;
-        if (cfg.frames > 0 && tex && ++presented >= cfg.frames) {
-            last = true;
-            if (cfg.dump_frame[0] && dump_ppm(cfg.dump_frame, out_w, out_h) != 0) {
-                fail("cannot write %s", cfg.dump_frame);
-                goto out;
+        if (cfg.frames > 0 && shown) {
+            presented++;
+            if (press_next < press_n) {
+                if (presented >= XRD_PRESS_GAP) { /* --press: the next key, as if typed */
+                    SDL_Event kev;
+                    memset(&kev, 0, sizeof kev);
+                    kev.type = SDL_KEYDOWN;
+                    kev.key.state = SDL_PRESSED;
+                    kev.key.keysym.sym = press_keys[press_next++];
+                    SDL_PushEvent(&kev);
+                    presented = 0;
+                }
+            } else if (presented >= cfg.frames) {
+                last = true;
+                if (cfg.dump_frame[0] && dump_ppm(cfg.dump_frame, out_w, out_h) != 0) {
+                    fail("cannot write %s", cfg.dump_frame);
+                    goto out;
+                }
             }
         }
 
@@ -1072,6 +1184,7 @@ out:
                 (unsigned)xrd_pose_udp_dropped(pose));
     xrd_timing_close(timing); /* prints the missed-vsync summary */
     xrd_player_free(p);       /* needs the GL context current */
+    xrd_imagedir_free(&app.photos);
     xrd_renderer_free(r);
     if (gl)
         SDL_GL_DeleteContext(gl);

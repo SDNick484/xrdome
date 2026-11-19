@@ -29,6 +29,12 @@ struct xrd_player {
      * what the chain was generated from (0 = none). */
     unsigned long frame_serial, mip_serial;
     bool finished;
+    bool active;       /* a file is loading or playing (no END_FILE for it yet) */
+    int stop_pending;  /* END_FILE events with reason STOP owed to xrd_player_load */
+    bool awaiting_frame; /* after xrd_player_load: no frame of the new file yet */
+    bool started;        /* mpv began the new file (START_FILE) */
+    bool restarted;      /* mpv showed the new file's first frame (PLAYBACK_RESTART) */
+    bool drawn;          /* a frame was drawn since the new file started */
     bool warned_aspect;
     bool aspect_warning; /* xrd_player_set_aspect_warning */
     bool sub_pref;       /* mpv's sub-visibility at open */
@@ -47,6 +53,7 @@ static void set_err(char *err, size_t errlen, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
 static void check_aspect(xrd_player *p);
 static void check_resume(xrd_player *p);
+static int render_frame(xrd_player *p);
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...)
 {
@@ -323,6 +330,10 @@ xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void 
     if (opt && opt->scale && set_opt(p, "keepaspect", "no", err, errlen))
         goto fail;
 
+    /* A photo stays up until the next one is opened. */
+    if (opt && opt->image && set_opt(p, "image-display-duration", "inf", err, errlen))
+        goto fail;
+
     /* User overrides last: they win over the profile and the options above. */
     for (int i = 0; opt && i < opt->opt_count; i++) {
         char key[256], val[256];
@@ -384,6 +395,7 @@ xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void 
         set_err(err, errlen, "cannot play '%s': %s", file, mpv_error_string(rc));
         goto fail;
     }
+    p->active = true;
     return p;
 
 fail:
@@ -391,6 +403,36 @@ fail:
         drain_log(p->mpv);
     xrd_player_free(p);
     return NULL;
+}
+
+int xrd_player_load(xrd_player *p, const char *file, char *err, size_t errlen)
+{
+    const char *cmd[] = {"loadfile", file, "replace", NULL};
+    int rc = mpv_command(p->mpv, cmd);
+    if (rc < 0) {
+        set_err(err, errlen, "cannot play '%s': %s", file, mpv_error_string(rc));
+        return -1;
+    }
+    snprintf(p->file, sizeof p->file, "%s", file);
+    /* mpv ends the file it replaces with an END_FILE of reason STOP, which is
+     * not this player's end. */
+    if (p->active)
+        p->stop_pending++;
+    p->active = true;
+    p->finished = false;
+    p->at_end = false;
+    p->duration = 0.0;
+    p->resume_at = 0.0;
+    p->warned_aspect = false;
+    p->err[0] = '\0';
+    p->awaiting_frame = true;
+    p->started = p->restarted = p->drawn = false;
+    return 0;
+}
+
+bool xrd_player_file_shown(const xrd_player *p)
+{
+    return !p->awaiting_frame;
 }
 
 void xrd_player_set_content(xrd_player *p, xrd_layout layout, float hfov_deg, float vfov_deg)
@@ -623,8 +665,28 @@ static int handle_events(xrd_player *p)
                 return -1;
             }
             check_aspect(p);
+            /* mpv waits for the render API user to draw after it reconfigures
+             * for the next file, and flags no new frame for it: draw. */
+            if (p->awaiting_frame && p->started && render_frame(p) < 0) {
+                p->finished = true;
+                return -1;
+            }
             break;
         }
+        case MPV_EVENT_START_FILE:
+            /* The first events after xrd_player_load still belong to the old
+             * file; the new one begins here. */
+            if (p->awaiting_frame)
+                p->started = true;
+            break;
+        case MPV_EVENT_PLAYBACK_RESTART:
+            /* The new file's first frame was drawn and shown. */
+            if (p->awaiting_frame && p->started) {
+                p->restarted = true;
+                if (p->drawn)
+                    p->awaiting_frame = false;
+            }
+            break;
         case MPV_EVENT_FILE_LOADED: {
             /* Checked here, before audio or video output start, so a file
              * without video fails the same way everywhere. */
@@ -642,6 +704,11 @@ static int handle_events(xrd_player *p)
         }
         case MPV_EVENT_END_FILE: {
             const mpv_event_end_file *ef = ev->data;
+            if (ef->reason == MPV_END_FILE_REASON_STOP && p->stop_pending > 0) {
+                p->stop_pending--; /* the file xrd_player_load replaced */
+                break;
+            }
+            p->active = false;
             p->finished = true;
             if (ef->reason == MPV_END_FILE_REASON_EOF)
                 p->at_end = true;
@@ -693,6 +760,11 @@ static int render_frame(xrd_player *p)
     }
     p->have_frame = true;
     p->frame_serial++;
+    if (p->awaiting_frame && p->started) {
+        p->drawn = true;
+        if (p->restarted)
+            p->awaiting_frame = false;
+    }
     /* Right after the frame: the eye pass never sees level 0 ahead of
      * its chain. */
     if (xrd_mip_on_frame(&p->mip))

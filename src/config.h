@@ -62,6 +62,8 @@ typedef struct {
     bool mipmap_check;     /* --mipmap-check: exit 1 if a trilinear draw would sample a
                               chain not regenerated for the frame in the texture */
     char dump_frame[4096]; /* --dump-frame PATH: PPM of the last frame; needs --frames */
+    char press[256];       /* --press KEYS: SDL key names, comma separated, pressed one by one
+                              XRD_PRESS_GAP frames apart; needs --frames */
 } xrd_config;
 
 void xrd_config_defaults(xrd_config *c);

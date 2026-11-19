@@ -8,7 +8,7 @@
 #include "render/projection.h"
 
 typedef enum { XRD_SRC_NONE, XRD_SRC_FLAG, XRD_SRC_RECORD, XRD_SRC_METADATA, XRD_SRC_NAME,
-               XRD_SRC_SHAPE, XRD_SRC_AUTO, XRD_SRC_FALLBACK } xrd_detect_src;
+               XRD_SRC_SHAPE, XRD_SRC_AUTO, XRD_SRC_FALLBACK, XRD_SRC_IMAGE } xrd_detect_src;
 
 typedef struct {               /* what one source states; unset fields are open */
     bool have_proj, have_layout, have_packing;
@@ -20,14 +20,24 @@ typedef struct {
     xrd_packing packing;       /* AUTO unless a source fixed it */
     xrd_detect_src proj_src, layout_src, packing_src; /* packing_src AUTO when packing is AUTO */
     char proj_token[16], layout_token[16], packing_token[16]; /* for XRD_SRC_NAME */
-    double frame_aspect;       /* F of spec 5.3; 0 when the size is unknown */
+    double frame_aspect;       /* F of spec 5.3; 0 when the size is unknown, and for an image
+                                  (its EXIF orientation may turn the probe's size) */
+    bool image;                /* a photo: still shown, no time-based settings */
     char notes[3][200]; int note_count; /* text after "xrdome: note: " */
 } xrd_detect;
 
 void xrd_detect_name_hints(const char *path, xrd_detect_given *out,
                            char proj_tok[16], char layout_tok[16], char packing_tok[16]);
 
-/* flags and record may be NULL; probe NULL means no probe data. */
+/* True when path's extension is one of the image types xrdome opens as photos
+ * (jpg, jpeg, png, webp, bmp, tif, tiff; any case). Used to list a directory,
+ * and for a file when there is no probe data. */
+bool xrd_detect_image_name(const char *path);
+
+/* flags and record may be NULL; probe NULL means no probe data. An image (the
+ * probe says an image demuxer, or with no probe the file name has an image
+ * extension) is flat mono, source XRD_SRC_IMAGE, for whatever the flags, the
+ * record, the metadata and the file name leave open. */
 void xrd_detect_resolve(const xrd_detect_given *flags, const xrd_detect_given *record,
                         const xrd_probe *probe, const char *path, xrd_detect *out);
 

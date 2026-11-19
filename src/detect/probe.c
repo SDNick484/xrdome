@@ -48,7 +48,17 @@ static bool parse_pos(const char *s, size_t len, long *out)
     return true;
 }
 
-typedef enum { SEC_NONE, SEC_STREAM, SEC_SIDE } section;
+bool xrd_probe_format_is_image(const char *format_name)
+{
+    if (!format_name)
+        return false;
+    size_t n = strlen(format_name);
+    if (!strcmp(format_name, "image2") || !strcmp(format_name, "image2pipe"))
+        return true;
+    return n > 5 && !strcmp(format_name + n - 5, "_pipe");
+}
+
+typedef enum { SEC_NONE, SEC_STREAM, SEC_SIDE, SEC_FORMAT } section;
 typedef enum { SIDE_OTHER, SIDE_STEREO, SIDE_SPHERICAL } side_kind;
 
 bool xrd_probe_parse(const char *text, xrd_probe *out)
@@ -61,6 +71,8 @@ bool xrd_probe_parse(const char *text, xrd_probe *out)
     side_kind side = SIDE_OTHER;
     xrd_probe cur;
     bool is_video = false, attached = false;
+    bool found = false;        /* *out holds the first usable stream */
+    char fmt[32] = "";
     probe_zero(&cur);
 
     const char *p = text;
@@ -76,10 +88,17 @@ bool xrd_probe_parse(const char *text, xrd_probe *out)
             probe_zero(&cur);
             is_video = attached = false;
         } else if (len == 9 && !memcmp(p, "[/STREAM]", 9)) {
-            if (sec != SEC_NONE && is_video && !attached) {
+            if (sec != SEC_NONE && is_video && !attached && !found) {
                 *out = cur;
-                return true;
+                found = true;
             }
+            sec = SEC_NONE;
+        } else if (len == 8 && !memcmp(p, "[FORMAT]", 8)) {
+            sec = SEC_FORMAT;
+            fmt[0] = '\0';
+        } else if (len == 9 && !memcmp(p, "[/FORMAT]", 9)) {
+            if (sec == SEC_FORMAT && found)
+                out->image = xrd_probe_format_is_image(fmt);
             sec = SEC_NONE;
         } else if (sec != SEC_NONE && len == 11 && !memcmp(p, "[SIDE_DATA]", 11)) {
             sec = SEC_SIDE;
@@ -94,7 +113,10 @@ bool xrd_probe_parse(const char *text, xrd_probe *out)
                 size_t vlen = len - klen - 1;
                 #define KEY_IS(s) (klen == sizeof(s) - 1 && !memcmp(p, s, klen))
                 #define VAL_IS(s) (vlen == sizeof(s) - 1 && !memcmp(v, s, vlen))
-                if (sec == SEC_STREAM) {
+                if (sec == SEC_FORMAT) {
+                    if (KEY_IS("format_name"))
+                        copy_name(fmt, sizeof fmt, v, vlen);
+                } else if (sec == SEC_STREAM) {
                     long n;
                     if (KEY_IS("codec_type")) {
                         is_video = VAL_IS("video");
@@ -150,7 +172,7 @@ bool xrd_probe_parse(const char *text, xrd_probe *out)
         }
         p = next;
     }
-    return false;
+    return found;
 }
 
 /* ---- running ffprobe ---------------------------------------------------- */
@@ -246,7 +268,7 @@ xrd_probe_status xrd_probe_run(const char *ffprobe, const char *file, int timeou
                 close(dn);
         }
         dup2(outp[1], 1);
-        char *argv[] = { (char *)ffprobe, "-v", "error", "-show_streams", "-i", (char *)file, NULL };
+        char *argv[] = { (char *)ffprobe, "-v", "error", "-show_streams", "-show_format", "-i", (char *)file, NULL };
         execvp(ffprobe, argv);
         int e = errno;
         ssize_t w = write(errp[1], &e, sizeof e);

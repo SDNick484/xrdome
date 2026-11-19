@@ -96,6 +96,22 @@ void xrd_detect_name_hints(const char *path, xrd_detect_given *out,
     }
 }
 
+bool xrd_detect_image_name(const char *path)
+{
+    static const char *const ext[] = {"jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"};
+    if (!path)
+        return false;
+    const char *slash = strrchr(path, '/');
+    const char *dot = strrchr(slash ? slash + 1 : path, '.');
+    if (!dot)
+        return false;
+    dot++;
+    for (size_t i = 0; i < sizeof ext / sizeof ext[0]; i++)
+        if (tok_ci(dot, strlen(dot), ext[i]))
+            return true;
+    return false;
+}
+
 /* ---- shape rules -------------------------------------------------------- */
 
 static bool within(double f, double x, double frac)
@@ -230,9 +246,23 @@ void xrd_detect_resolve(const xrd_detect_given *flags, const xrd_detect_given *r
         if (!isfinite(f) || f <= 0)
             f = 0;
     }
+    out->image = probe ? probe->image : xrd_detect_image_name(path);
+    if (out->image)
+        f = 0;
     out->frame_aspect = f;
 
-    if (!have_proj || !have_layout) {
+    if (out->image) {
+        /* A photo is a flat mono screen unless a flag, the record, or the name
+         * says otherwise; its shape says nothing (a portrait photo is not 2:1). */
+        if (!have_proj) {
+            out->proj = XRD_PROJ_FLAT;
+            out->proj_src = XRD_SRC_IMAGE;
+        }
+        if (!have_layout) {
+            out->layout = XRD_LAYOUT_MONO;
+            out->layout_src = XRD_SRC_IMAGE;
+        }
+    } else if (!have_proj || !have_layout) {
         if (f > 0) {
             if (!have_proj && !have_layout) {
                 if (within(f, 2.0, 0.02)) {
@@ -287,6 +317,7 @@ static int put_src(char *buf, size_t len, size_t at, xrd_detect_src s, const cha
     case XRD_SRC_SHAPE:    return snprintf(buf + at, len - at, "frame shape");
     case XRD_SRC_AUTO:     return snprintf(buf + at, len - at, "auto");
     case XRD_SRC_FALLBACK: return snprintf(buf + at, len - at, "fallback");
+    case XRD_SRC_IMAGE:    return snprintf(buf + at, len - at, "image file");
     default:               return snprintf(buf + at, len - at, "unknown");
     }
 }
