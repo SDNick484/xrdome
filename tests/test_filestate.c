@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 200809L /* mkdtemp, setenv, symlink */
+#define _XOPEN_SOURCE 700 /* POSIX 2008 plus realpath: mkdtemp, setenv, symlink */
 
 #include <stdarg.h>
 #include <stddef.h>
