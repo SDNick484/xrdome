@@ -26,7 +26,9 @@ failed; 130 interrupted; a failing child program's own status otherwise.
 
     python3 -m pytest tools/tests -q
 
-CI runs this in the `tools` job, beside the existing meson job.
+CI runs this in the `tools` job, beside the existing meson job. The tests of `tools/xrdome_depth/`
+that need numpy (the `depth` pipeline with a fake backend) skip when it is missing, as it is in CI;
+run them with a Python that has numpy to see them.
 
 ## doctor
 
@@ -312,6 +314,43 @@ BT.601 below 720 lines) and the intermediate is tagged with it. HDR sources are 
 
 **Unverified on hardware:** speed of both ncnn programs on AMD and NVIDIA, and the real
 programs' output against these command lines (the tests use stand-ins).
+
+## depth
+
+    xrdome-tools depth photo FILE|DIR [--force]
+
+Writes the depth cache the player reads for 3D photos (depth-based 3D, spec section 5 of
+`docs/superpowers/specs/2026-11-19-depth-3d-design.md`). Needs `setup depth`; without it the
+command exits 2 and says so. `FILE` is one photo; `DIR` is every image in it (`.jpg`, `.jpeg`,
+`.png`, `.webp`, `.bmp`, `.tif`, `.tiff`, by name, not recursive). The work is done by
+`tools/xrdome_depth/photo.py` in the depth venv, with Depth Anything V2 Small on ncnn, Vulkan, fp16.
+
+For each photo, one line: the file name, the time (decode, depth, write) and the cache file; or
+`cached` when the file already exists and `--force` was not given. A photo that cannot be read
+is reported on stderr and skipped, the rest of a folder goes on, and the exit status is 1. A
+missing or unloadable model file, or no Vulkan GPU, stops everything with exit 2 (the same cause
+would hit every photo). If `setup depth` was run with `--cpu`, `depth` warns that depth on the
+CPU is slow and costs xrdome frames while it renders.
+
+The cache file, which the player computes the same way:
+
+- Folder `~/.cache/xrdome-tools/depth/` (`$XDG_CACHE_HOME/xrdome-tools/depth/`), one file per photo
+  named `<sha256 of the photo file's bytes>-dav2s-v1.pgm`. The name does not depend on where the
+  photo is or what it is called; a different photo file, even a re-save, is a different key.
+- Binary PGM: `P5\n<W> <H>\n65535\n`, then W x H big-endian 16-bit samples, row 0 at the top.
+- The depth is of the photo as **displayed**: the EXIF orientation is applied first, so a
+  camera-rotated landscape photo gets a portrait depth map. The model input follows the
+  displayed orientation: 518x392 for width >= height, otherwise 392x518 (RGB, bicubic resize, the
+  aspect is not kept, ImageNet mean and std).
+- Normalised: the 1st and 99th percentiles of the model's output map to 0 and 65535, values
+  outside are clipped, larger is nearer. A completely flat output becomes mid-grey (32768).
+- Size: the displayed photo size, shrunk to 2048 on the long side (aspect kept) when larger;
+  the model output is upsampled bilinearly.
+- Written to `<name>.part` and renamed, so a reader never sees half a file.
+
+Not verified on hardware: the times (the spike measured about 400 ms per photo warm, a few
+seconds cold start for the process and the model load) and a camera-rotated photo on the real
+model.
 
 ## Output names and tags
 
