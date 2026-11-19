@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h> /* mkdtemp on macOS */
 #include <cmocka.h>
 
 #include "driver/xrdriver.h"

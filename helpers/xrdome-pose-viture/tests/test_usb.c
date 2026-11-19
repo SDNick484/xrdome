@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h> /* mkdtemp on macOS */
 #include <cmocka.h>
 
 #include "test_compat.h"
