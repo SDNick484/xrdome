@@ -330,6 +330,38 @@ static void sbs_switch_ini(void **state)
     unlink(path);
 }
 
+static void hwdec_flag_and_ini(void **state)
+{
+    (void)state;
+    xrd_config c;
+    char path[64], err[256] = "";
+    xrd_config_defaults(&c);
+    assert_string_equal(c.hwdec, ""); /* "" = the platform's default */
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--hwdec", "nvdec"), 0);
+    assert_string_equal(c.hwdec, "nvdec");
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--hwdec", "auto-safe"), 0);
+    assert_string_equal(c.hwdec, "auto-safe");
+    assert_int_equal(parse_flags(&c, err, sizeof err, "--hwdec", "Vaapi"), -1);
+    assert_non_null(strstr(err, "--hwdec"));
+    assert_int_equal((int)c.explicit_flags, 0); /* not a per-file setting */
+
+    write_tmp(path, "[general]\nhwdec = videotoolbox\n");
+    char *argv[] = {"xrdome", "movie.mp4", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 2, argv, err, sizeof err), 0);
+    assert_string_equal(c.hwdec, "videotoolbox");
+    /* The flag wins over the ini. */
+    char *argv2[] = {"xrdome", "--hwdec", "vaapi", "movie.mp4", NULL};
+    assert_int_equal(xrd_config_load(&c, path, 4, argv2, err, sizeof err), 0);
+    assert_string_equal(c.hwdec, "vaapi");
+    unlink(path);
+
+    write_tmp(path, "[general]\nhwdec = vaapi copy\n");
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_load_ini(&c, path, err, sizeof err), -1);
+    assert_non_null(strstr(err, "hwdec"));
+    unlink(path);
+}
+
 static void flat_flag_proj(void **state)
 {
     (void)state;
@@ -1566,6 +1598,7 @@ int main(void)
         cmocka_unit_test(ini_rejects_new_keys),
         cmocka_unit_test(sbs_switch_flag),
         cmocka_unit_test(sbs_switch_ini),
+        cmocka_unit_test(hwdec_flag_and_ini),
     };
     save_env(NULL);
     int failed = cmocka_run_group_tests(tests, NULL, NULL);

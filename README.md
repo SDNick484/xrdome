@@ -179,7 +179,9 @@ start gives a tilted picture, and `R` does not correct that. Hold your head leve
 `--layout auto|sbs-lr|sbs-rl|tb-lr|tb-rl|mono`, `--packing auto|half|full`,
 `--zoom-mode screen|magnify`, `--screen fixed|locked`, `--screen-curve off|R`, `--mipmap on|off`,
 `--windowed`, `--sbs-switch auto|off`,
-`--require-hwdec` (exit 1 unless mpv decodes with VA-API), `--timing-log PATH`,
+`--hwdec NAME` (mpv's hwdec; default `vaapi` on Linux, `videotoolbox` on macOS; for example
+`nvdec` or `auto-safe` on an NVIDIA machine), `--require-hwdec` (exit 1 unless mpv decodes
+zero-copy: any decoder but `no` and the `-copy` ones), `--timing-log PATH`,
 `--content-fov HxV`, `--sync-after-swap` (diagnostic, see [Diagnostics](#diagnostics)),
 `--mpv-profile NAME`, `--mpv-opt KEY=VALUE` (repeatable, up to 16), `--mpv-log LEVEL`,
 `--mpv-scale off|NAME`, `--convergence DEG`, `--filter bilinear|bicubic|bicubic-ar|mitchell`,
@@ -312,8 +314,8 @@ to highest: built-in defaults, built-in device values, the ini file, the command
 `--screen-curve`, default `off`), `sbs_switch` (`auto` or `off`, as `--sbs-switch`, default
 `auto`), `ffprobe` (the program run for format detection, default `ffprobe` looked up on
 `PATH`), `deband` (`yes` or `no`, also `on` or `off`, as `--deband`, default `no`),
-`mpv_scale` (`off` or an mpv scaler name, as `--mpv-scale`, default `off`) and `sharpen` (0 to 1,
-as `--sharpen`, default 0, off).
+`mpv_scale` (`off` or an mpv scaler name, as `--mpv-scale`, default `off`), `sharpen` (0 to 1,
+as `--sharpen`, default 0, off) and `hwdec` (as `--hwdec`, default by platform).
 
 `[device.<name>]` keys, read for the device selected with `--device` (default `viture-pro`):
 `fov_diag` (diagonal FOV in degrees, 10 to 120), `zoom` (the VR180 zoom, 0.25 to 4, default 1)
@@ -827,6 +829,30 @@ change modes with `xrandr` and a scaled output shows a size other than 3840x1080
 yet run on hardware: frame timing (compare `--timing-log` against Xorg), `--require-hwdec`, output
 names, and the SBS switch under XWayland. Notes: the project's
 `xrdome-xwayland-and-steamdeck-notes.md`.
+
+### macOS (experimental)
+
+xrdome builds on macOS (Apple Silicon; CI builds it and runs the unit tests on `macos-latest`), but it
+has not been run on glasses there. The platform is detected at build time; on Linux nothing
+changes. On macOS: SDL uses Cocoa with a CGL GL 3.3 core context (forward-compatible, high-DPI
+drawable), mpv gets no X11 display and decodes with `videotoolbox`, the glasses' window is
+fullscreen in its own Space, and the automatic SBS switch is off (it needs XRLinuxDriver, which
+is Linux only): switch the glasses to SBS with their own button. Head tracking comes over the same
+OpenTrack UDP port from any sender; without one use `--pose null` (drag with the mouse). Config
+and per-file state keep their XDG paths (`~/.config/xrdome`, `~/.local/state/xrdome`).
+
+```sh
+brew install meson ninja pkgconf mpv sdl2 libepoxy cmocka
+meson setup build && meson compile -C build && meson test -C build
+./build/xrdome --pose null --require-hwdec --timing-log mac.csv --frames 3600 video.mp4
+```
+
+Unknown until tried on hardware: whether macOS offers the glasses an unscaled 3840x1080 mode
+(a scaled one shows xrdome a smaller size and output detection fails; `--windowed` still plays),
+frame timing through the compositor, and VideoToolbox limits (no AV1 hardware decode before M3).
+For glasses not built in, add a `[device.NAME]` section, for example `fov_diag = 57` for an XREAL
+One Pro (XREAL's figure, not measured), and keep their own screen stabilisation off (head-locked),
+or head turns are corrected twice.
 
 ## Diagnostics
 

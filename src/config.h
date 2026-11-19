@@ -19,7 +19,9 @@ typedef struct {
     xrd_layout layout;     /* default XRD_LAYOUT_SBS_LR; valid when !layout_auto */
     float content_hfov;    /* --content-fov HxV (degrees the video covers), default 180 */
     float content_vfov;    /* default 180 */
-    bool require_hwdec;
+    bool require_hwdec;    /* exit 1 unless mpv decodes zero-copy (xrd_hwdec_is_zero_copy) */
+    char hwdec[32];        /* --hwdec, [general] hwdec: mpv hwdec; "" = the platform's
+                              default (xrd_platform_default_hwdec) */
     bool windowed;         /* development: skip the 3840x1080 check, 1280x360 window */
     bool sbs_switch;       /* --sbs-switch auto|off, [general] sbs_switch; default auto (true):
                               ask XRLinuxDriver to switch 1080p glasses to SBS at start */

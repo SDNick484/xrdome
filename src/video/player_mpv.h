@@ -12,7 +12,8 @@ typedef struct xrd_player xrd_player;
 typedef void *(*xrd_gl_get_proc)(void *ctx, const char *name);
 
 /* Needs a current GL 3.3 core context, which must stay current for every call
- * below. x11_display is the X11 Display* the context lives on. Starts loading
+ * below. x11_display is the X11 Display* the context lives on, or NULL
+ * where there is none (macOS); it is then not passed to mpv. Starts loading
  * file; a load failure is reported later by xrd_player_update. Returns NULL
  * and fills err on failure. */
 xrd_player *xrd_player_open(const char *file, xrd_gl_get_proc get_proc, void *x11_display,
@@ -50,6 +51,8 @@ typedef struct {
      * A name mpv rejects fails the open, err naming it, after mpv's own reason
      * is logged. */
     const char *scale;
+    /* mpv "hwdec"; NULL = "vaapi" (what xrdome always set before). */
+    const char *hwdec;
 } xrd_player_options;
 
 /* As xrd_player_open; opt may be NULL (profile "fast", no extra options,

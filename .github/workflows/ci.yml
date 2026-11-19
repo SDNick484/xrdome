@@ -134,6 +134,40 @@ jobs:
           name: testlog-arch
           path: build/meson-logs/testlog.txt
 
+  # macOS (Apple Silicon via macos-latest, experimental): build and unit tests only. The smoke
+  # tests need xvfb-run and skip (77) here; nothing on this runner drives a
+  # display, so playback on macOS is checked by hand (docs/STATUS.md).
+  macos-build-test:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install meson ninja pkgconf mpv sdl2 libepoxy cmocka
+
+      - name: Versions
+        run: |
+          sw_vers
+          cc --version | head -n 1
+          pkg-config --modversion mpv sdl2 epoxy cmocka
+
+      - name: Configure
+        run: meson setup build -Dwerror=true
+
+      - name: Build
+        run: meson compile -C build
+
+      - name: Test
+        run: meson test -C build --print-errorlogs
+
+      - name: Upload test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testlog-macos
+          path: build/meson-logs/testlog.txt
+
   # xrdome-tools (tools/): standard-library Python; pytest and ffmpeg are the only needs.
   tools:
     runs-on: ubuntu-24.04

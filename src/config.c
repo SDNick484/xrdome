@@ -3,6 +3,7 @@
 #endif
 
 #include "config.h"
+#include "platform/platform.h"
 #include "values.h"
 #include "video/player_mpv.h"
 
@@ -129,6 +130,18 @@ static int parse_onoff(const char *what, const char *s, bool yes_no, bool *out, 
 }
 
 /* "auto" or "off" into *on. what names the flag or key. */
+static int parse_hwdec(const char *what, const char *s, char *out, size_t outlen, char *err,
+                       size_t errlen)
+{
+    if (!xrd_hwdec_name_valid(s) || strlen(s) >= outlen) {
+        snprintf(err, errlen, "%s: '%s' is not an mpv hwdec name (lower-case letters, digits, "
+                 "'-' and ',', at most 31)", what, s);
+        return -1;
+    }
+    snprintf(out, outlen, "%s", s);
+    return 0;
+}
+
 static int parse_sbs_switch(const char *what, const char *s, bool *on, char *err, size_t errlen)
 {
     if (!strcmp(s, "auto"))
@@ -331,6 +344,8 @@ static int ini_read(xrd_config *c, const char *path, bool *device_found, char *e
             rc = parse_screen_curve("screen_curve", val, &c->screen_curve, msg, sizeof msg);
         } else if (sec == SEC_GENERAL && !strcmp(key, "sbs_switch")) {
             rc = parse_sbs_switch("sbs_switch", val, &c->sbs_switch, msg, sizeof msg);
+        } else if (sec == SEC_GENERAL && !strcmp(key, "hwdec")) {
+            rc = parse_hwdec("hwdec", val, c->hwdec, sizeof c->hwdec, msg, sizeof msg);
         } else if (sec == SEC_GENERAL && !strcmp(key, "ffprobe")) {
             rc = set_string("ffprobe", c->ffprobe, sizeof c->ffprobe, val, msg, sizeof msg);
         } else if (sec == SEC_GENERAL && !strcmp(key, "sharpen")) {
@@ -367,7 +382,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
            OPT_MPV_PROFILE, OPT_MPV_OPT, OPT_MPV_LOG, OPT_CONVERGENCE, OPT_FILTER,
            OPT_FBO_FORMAT, OPT_DITHER, OPT_NO_MEMORY, OPT_FORGET, OPT_RESUME, OPT_NO_RESUME,
            OPT_PACKING, OPT_ZOOM_MODE, OPT_SCREEN, OPT_MIPMAP, OPT_DEBAND, OPT_SCREEN_CURVE,
-           OPT_SBS_SWITCH, OPT_MPV_SCALE, OPT_SHARPEN };
+           OPT_SBS_SWITCH, OPT_MPV_SCALE, OPT_SHARPEN, OPT_HWDEC_NAME };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
         {"layout", required_argument, NULL, OPT_LAYOUT},
@@ -377,6 +392,7 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"zoom", required_argument, NULL, OPT_ZOOM},
         {"content-fov", required_argument, NULL, OPT_CONTENT_FOV},
         {"require-hwdec", no_argument, NULL, OPT_HWDEC},
+        {"hwdec", required_argument, NULL, OPT_HWDEC_NAME},
         {"windowed", no_argument, NULL, OPT_WINDOWED},
         {"timing-log", required_argument, NULL, OPT_TIMING},
         {"sync-after-swap", no_argument, NULL, OPT_SYNC},
@@ -407,8 +423,14 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {NULL, 0, NULL, 0},
     };
 
-    /* glibc re-initialises (including its argv permutation state) only for 0. */
+    /* glibc re-initialises (including its argv permutation state) only for 0;
+     * BSD getopt (macOS) needs optreset and starts again at 1. */
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+    optreset = 1;
+    optind = 1;
+#else
     optind = 0;
+#endif
     opterr = 0;
 
     int opt;
@@ -461,6 +483,9 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
             break;
         case OPT_HWDEC:
             c->require_hwdec = true;
+            break;
+        case OPT_HWDEC_NAME:
+            rc = parse_hwdec("--hwdec", optarg, c->hwdec, sizeof c->hwdec, err, errlen);
             break;
         case OPT_WINDOWED:
             c->windowed = true;

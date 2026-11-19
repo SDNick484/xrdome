@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 200809L /* mkdtemp, setenv, symlink */
+#define _XOPEN_SOURCE 700 /* POSIX 2008 plus realpath: mkdtemp, setenv, symlink */
 
 #include <stdarg.h>
 #include <stddef.h>
@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -555,7 +556,7 @@ static void save_load_delete(void **state)
 static void save_relative_path_label(void **state)
 {
     (void)state;
-    char dir[160], rec[200], err[128], want[256], cwd[256];
+    char dir[160], rec[200], err[128], want[PATH_MAX + 32], cwd[256];
     assert_non_null(getcwd(cwd, sizeof cwd));
     assert_int_equal(chdir(g_dir), 0);
     snprintf(dir, sizeof dir, "%s/files", g_dir);
@@ -570,7 +571,11 @@ static void save_relative_path_label(void **state)
     size_t n = fread(text, 1, sizeof text - 1, f);
     text[n] = '\0';
     fclose(f);
-    snprintf(want, sizeof want, "path = %s/clip.mp4\n", g_dir);
+    /* The label comes from getcwd, which resolves symlinks: on macOS /tmp
+     * is /private/tmp. */
+    char real[PATH_MAX];
+    assert_non_null(realpath(g_dir, real));
+    snprintf(want, sizeof want, "path = %s/clip.mp4\n", real);
     assert_non_null(strstr(text, want));
 }
 

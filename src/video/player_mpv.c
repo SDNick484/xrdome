@@ -290,7 +290,7 @@ xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void 
             }
         }
     }
-    if (set_opt(p, "vo", "libmpv", err, errlen) || set_opt(p, "hwdec", "vaapi", err, errlen) ||
+    if (set_opt(p, "vo", "libmpv", err, errlen) || set_opt(p, "hwdec", opt && opt->hwdec ? opt->hwdec : "vaapi", err, errlen) ||
         set_opt(p, "osd-level", "0", err, errlen))
         goto fail;
     if (set_opt(p, "deband", opt && opt->deband ? "yes" : "no", err, errlen))
@@ -370,6 +370,8 @@ xrd_player *xrd_player_open_ex(const char *file, xrd_gl_get_proc get_proc, void 
         {MPV_RENDER_PARAM_X11_DISPLAY, x11_display},
         {MPV_RENDER_PARAM_INVALID, NULL},
     };
+    if (!x11_display) /* no X11 (macOS): end the list before the display */
+        params[2] = (mpv_render_param){MPV_RENDER_PARAM_INVALID, NULL};
     rc = mpv_render_context_create(&p->rctx, p->mpv, params);
     if (rc < 0) {
         set_err(err, errlen, "mpv_render_context_create: %s", mpv_error_string(rc));
