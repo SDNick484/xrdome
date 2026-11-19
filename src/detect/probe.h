@@ -39,11 +39,30 @@ bool xrd_probe_parse(const char *text, xrd_probe *out);
 typedef enum { XRD_PROBE_OK, XRD_PROBE_SKIPPED, XRD_PROBE_FAILED } xrd_probe_status;
 
 /* Runs: <ffprobe> -v error -show_streams -show_format -i <file>   (execvp; stdin and stderr
- * to /dev/null). SKIPPED when file is not a regular file (no err). FAILED, with
+ * to /dev/null; Windows: CreateProcessW with xrd_win_command_line, stdin and stderr
+ * to NUL, src/detect/probe_win.c). SKIPPED when file is not a regular file (no err). FAILED, with
  * err set, when the program cannot be started, exits non-zero, exceeds
  * timeout_ms (it is killed and reaped), prints more than XRD_PROBE_MAX_BYTES,
  * or prints no video stream. *out is zeroed (sar 1:1) unless the status is OK. */
 xrd_probe_status xrd_probe_run(const char *ffprobe, const char *file, int timeout_ms,
                                xrd_probe *out, char *err, size_t errlen);
+
+/* *p as after a failed parse: zeroed, sar 1:1. */
+void xrd_probe_zero(xrd_probe *p);
+
+/* One argument for a Windows command line, quoted so the C runtime's startup
+ * code (and CommandLineToArgvW) splits it back to the same bytes: as it is
+ * when non-empty and free of space, tab, newline, vertical tab and '"';
+ * otherwise in double quotes, each '"' preceded by a backslash and the
+ * backslashes before a '"' or the closing quote doubled. Appended at
+ * buf[*n], NUL kept after it; false when it does not fit len. */
+bool xrd_win_quote_arg(const char *arg, char *buf, size_t len, size_t *n);
+
+/* argv (NULL-terminated) as one command line, the arguments quoted by
+ * xrd_win_quote_arg and separated by a space. argv[0], the program, follows
+ * the startup code's simpler rule for it (no escapes): it is quoted when it
+ * holds a space or tab, and may not hold '"'. 0, or -1 when it does not fit
+ * or argv[0] is empty or holds '"'. Pure: unit tested on every platform. */
+int xrd_win_command_line(const char *const *argv, char *buf, size_t len);
 
 #endif

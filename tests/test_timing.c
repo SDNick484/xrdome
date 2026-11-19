@@ -10,6 +10,8 @@
 #include <unistd.h>
 #include <cmocka.h>
 
+#include "test_compat.h"
+
 #include "util/timing.h"
 
 #define MS(x) ((uint64_t)((x) * 1000000.0 + 0.5))

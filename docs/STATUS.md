@@ -1096,6 +1096,34 @@ resets the smoothing on fast action; too high lets a cut blend the old scene's d
 frames). The owner's check (plan Task 9): a flat film in 3D on the glasses, `xrdome-tools depth
 flicker` on a near-static shot, `--timing-log` with 3D on against off.
 
+## Windows build (issue #80, 2026-11-19)
+- `XRD_PLATFORM_WINDOWS` (`_WIN32`, name `windows`) in `src/platform/`: no X11 (SDL's windows
+  driver, WGL, no X11 display for mpv), GL 3.3 core not forward-compatible, desktop fullscreen on
+  the glasses, no XRLinuxDriver, hwdec `d3d11va-copy` (libmpv's GL render API is zero-copy on
+  Windows only through ANGLE; xrdome uses WGL). `--require-hwdec` keeps its meaning and refuses the
+  copy; its message and the warning say Windows copies by default. Unit tested on Linux with every
+  other platform (`tests/test_platform.c`).
+- Paths: `xrd_platform_user_path` (pure, tested for every platform): an absolute `XDG_CONFIG_HOME` /
+  `XDG_STATE_HOME` wins everywhere; else `~/.config`, `~/.local/state`, or on Windows the known
+  folders from `SHGetKnownFolderPath` (`%APPDATA%\xrdome\config.ini`, `%LOCALAPPDATA%\xrdome\files`).
+  Records: `mkdir` without a mode, `_commit` for `fsync`, and the atomic replace through
+  `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` (`xrd_replace_file`).
+- ffprobe: `src/detect/probe_win.c` runs it with `CreateProcessW` (only the pipe and NUL handles
+  inherited), stdout read through a pipe with `PeekNamedPipe` and 1 ms waits on the process, the
+  timeout by `TerminateProcess`. The command line is quoted by the C runtime's documented rules
+  (`xrd_win_quote_arg`, `xrd_win_command_line`: pure, tested on every platform against a reference
+  splitter, 3000 random argument lists). The POSIX runner is unchanged. `tests/fake_ffprobe.c`
+  replaces the shell fake on every platform.
+- UDP pose: Winsock (`WSAStartup` once, `closesocket`, `SO_RCVTIMEO` as a DWORD of ms). Timing:
+  `QueryPerformanceCounter`; sleeps on a high-resolution waitable timer. `xrdriver.c` compiles and
+  stays inert. Depth: the helper client is a failed one on Windows ("not available on Windows") and
+  the frame ring cannot be created, so photos without cached depth show in 2D and films get no 3D.
+- `packaging/windows/xrdome.manifest` (through `xrdome.rc`): UTF-8 active code page, long-path aware,
+  per-monitor DPI aware (the window is placed in pixels, not scaled), Windows 10/11.
+- CI `windows-build-test` (`windows-latest`, MSYS2 UCRT64): build with `-Dwerror=true` and unit tests;
+  the smoke tests skip (no xvfb-run). Not run on Windows hardware: window placement on the glasses,
+  the WGL context, `d3d11va-copy` at 60 fps, frame timing.
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship

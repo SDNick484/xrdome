@@ -1,23 +1,76 @@
 #define _POSIX_C_SOURCE 200809L /* sockets, pthread, strtol */
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
-#include <errno.h>
 #include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+#endif
+#include <errno.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <unistd.h>
 
 #include "pose/opentrack_packet.h"
 #include "pose/pose_internal.h"
 #include "util/timing.h"
 
 #define DEFAULT_PORT 4242
+
+/* Winsock: SOCKET handles, closesocket, errors from WSAGetLastError, and
+ * WSAStartup before the first socket. */
+#ifdef _WIN32
+typedef SOCKET sock_t;
+#define SOCK_NONE INVALID_SOCKET
+#define sock_close closesocket
+
+static BOOL CALLBACK wsa_start(PINIT_ONCE once, PVOID param, PVOID *ctx)
+{
+    (void)once;
+    (void)ctx;
+    WSADATA wsa;
+    *(int *)param = WSAStartup(MAKEWORD(2, 2), &wsa);
+    return TRUE;
+}
+
+/* WSAStartup once per process (never cleaned up: the process exit does). */
+static int sock_init(void)
+{
+    static INIT_ONCE once = INIT_ONCE_STATIC_INIT;
+    static int rc;
+    InitOnceExecuteOnce(&once, wsa_start, &rc, NULL);
+    return rc;
+}
+
+static const char *sock_strerror(char *buf, size_t len)
+{
+    snprintf(buf, len, "Winsock error %d", WSAGetLastError());
+    return buf;
+}
+#else
+typedef int sock_t;
+#define SOCK_NONE (-1)
+#define sock_close close
+
+static int sock_init(void)
+{
+    return 0;
+}
+
+static const char *sock_strerror(char *buf, size_t len)
+{
+    (void)buf;
+    (void)len;
+    return strerror(errno);
+}
+#endif
 
 /* Latest pose, published through a seqlock.
  *
@@ -40,7 +93,7 @@ typedef struct {
 
 typedef struct {
     xrd_pose_source base; /* must be first */
-    int fd;
+    sock_t fd;
     pthread_t thread;
     bool thread_started;
     atomic_bool stop;
@@ -114,7 +167,8 @@ static void *recv_thread(void *arg)
     udp_backend *b = arg;
     uint8_t buf[256];
     while (!atomic_load(&b->stop)) {
-        ssize_t n = recv(b->fd, buf, sizeof buf, 0);
+        /* char * and int on Winsock */
+        int n = (int)recv(b->fd, (char *)buf, (int)sizeof buf, 0);
         if (n < 0)
             continue; /* timeout (re-check stop) or EINTR */
         uint64_t t = xrd_now_ns();
@@ -194,17 +248,23 @@ static int udp_open(xrd_pose_source *src, const char *args)
 {
     udp_backend *b = (udp_backend *)src;
     int port = DEFAULT_PORT;
+    char ebuf[64];
     b->errmsg[0] = '\0';
-    b->fd = -1;
+    b->fd = SOCK_NONE;
     atomic_store(&b->stop, false);
 
     if (parse_args(b, args ? args : "", &port) != 0)
         return -1;
 
+    int wsa = sock_init();
+    if (wsa != 0) {
+        snprintf(b->errmsg, sizeof b->errmsg, "udp-opentrack: WSAStartup failed: %d", wsa);
+        return -1;
+    }
     b->fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (b->fd < 0) {
+    if (b->fd == SOCK_NONE) {
         snprintf(b->errmsg, sizeof b->errmsg,
-                 "udp-opentrack: socket() failed: %s", strerror(errno));
+                 "udp-opentrack: socket() failed: %s", sock_strerror(ebuf, sizeof ebuf));
         return -1;
     }
 
@@ -216,15 +276,22 @@ static int udp_open(xrd_pose_source *src, const char *args)
     addr.sin_port = htons((uint16_t)port);
     if (bind(b->fd, (struct sockaddr *)&addr, sizeof addr) != 0) {
         snprintf(b->errmsg, sizeof b->errmsg,
-                 "udp-opentrack: cannot bind 127.0.0.1:%d: %s", port, strerror(errno));
+                 "udp-opentrack: cannot bind 127.0.0.1:%d: %s", port,
+                 sock_strerror(ebuf, sizeof ebuf));
         goto fail;
     }
 
-    /* Lets close() join the thread promptly. */
+    /* Lets close() join the thread promptly. Winsock takes a DWORD of ms. */
+#ifdef _WIN32
+    DWORD tv = 100;
+    int so = setsockopt(b->fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
+#else
     struct timeval tv = { .tv_sec = 0, .tv_usec = 100000 };
-    if (setsockopt(b->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) != 0) {
+    int so = setsockopt(b->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+#endif
+    if (so != 0) {
         snprintf(b->errmsg, sizeof b->errmsg,
-                 "udp-opentrack: SO_RCVTIMEO failed: %s", strerror(errno));
+                 "udp-opentrack: SO_RCVTIMEO failed: %s", sock_strerror(ebuf, sizeof ebuf));
         goto fail;
     }
 
@@ -238,8 +305,8 @@ static int udp_open(xrd_pose_source *src, const char *args)
     return 0;
 
 fail:
-    close(b->fd);
-    b->fd = -1;
+    sock_close(b->fd);
+    b->fd = SOCK_NONE;
     return -1;
 }
 
@@ -251,9 +318,9 @@ static void udp_close(xrd_pose_source *src)
         pthread_join(b->thread, NULL);
         b->thread_started = false;
     }
-    if (b->fd >= 0) {
-        close(b->fd);
-        b->fd = -1;
+    if (b->fd != SOCK_NONE) {
+        sock_close(b->fd);
+        b->fd = SOCK_NONE;
     }
 }
 
@@ -266,7 +333,7 @@ xrd_pose_source *xrd_pose_udp_alloc(void)
     b->base.open = udp_open;
     b->base.latest = udp_latest;
     b->base.close = udp_close;
-    b->fd = -1;
+    b->fd = SOCK_NONE;
     b->sign[0] = b->sign[1] = b->sign[2] = 1.0f;
     return &b->base;
 }

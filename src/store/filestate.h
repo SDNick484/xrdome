@@ -45,7 +45,9 @@ uint64_t xrd_fnv1a64(uint64_t h, const void *data, size_t len);
  * (after following symlinks) or key does not fit. */
 int xrd_filestate_key(const char *path, char *key, size_t keylen);
 
-/* ".../xrdome/files" per Global Constraints; -1 if neither variable is usable. */
+/* ".../xrdome/files" per Global Constraints ($XDG_STATE_HOME, else
+ * $HOME/.local/state; Windows: %LOCALAPPDATA%; xrd_platform_user_path);
+ * -1 if none is usable. */
 int xrd_filestate_dir(char *buf, size_t len);
 
 #define XRD_FILESTATE_VERSION 1

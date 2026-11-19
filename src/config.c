@@ -5,6 +5,7 @@
 #include "config.h"
 #include "platform/exepath.h"
 #include "platform/platform.h"
+#include "util/printf_attr.h"
 #include "values.h"
 #include "video/player_mpv.h"
 
@@ -27,7 +28,7 @@ static const struct { const char *name; float fov_diag; } builtin_devices[] = {
 };
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...)
-    __attribute__((format(printf, 3, 4)));
+    XRD_PRINTF(3, 4);
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...)
 {
@@ -245,16 +246,7 @@ void xrd_config_defaults(xrd_config *c)
 
 int xrd_config_default_path(char *buf, size_t len)
 {
-    const char *xdg = getenv("XDG_CONFIG_HOME");
-    const char *home = getenv("HOME");
-    int n;
-    if (xdg && xdg[0] == '/')
-        n = snprintf(buf, len, "%s/xrdome/config.ini", xdg);
-    else if (home && home[0] != '\0')
-        n = snprintf(buf, len, "%s/.config/xrdome/config.ini", home);
-    else
-        return -1;
-    return (n < 0 || (size_t)n >= len) ? -1 : 0;
+    return xrd_user_path(XRD_USER_CONFIG, buf, len);
 }
 
 static char *trim(char *s)

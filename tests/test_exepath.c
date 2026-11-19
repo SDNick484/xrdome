@@ -10,6 +10,8 @@
 #include <unistd.h>
 #include <cmocka.h>
 
+#include "test_compat.h"
+
 #include "platform/exepath.h"
 
 /* The directory the pick tests pretend holds ffprobe. */
@@ -120,7 +122,9 @@ static void is_exec_checks_the_file(void **state)
     fclose(fp);
     assert_int_equal(chmod(f, 0644), 0);
     assert_int_equal(chmod(x, 0755), 0);
+#ifndef _WIN32 /* Windows has no execute bit: any regular file is a program there */
     assert_false(xrd_exepath_is_exec(f));
+#endif
     assert_true(xrd_exepath_is_exec(x));
     assert_false(xrd_exepath_is_exec(dir)); /* a directory is searchable, not a program */
     assert_false(xrd_exepath_is_exec("/nonexistent/ffprobe"));

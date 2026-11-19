@@ -11,6 +11,8 @@
 #include <unistd.h>
 #include <cmocka.h>
 
+#include "test_compat.h"
+
 #include "driver/xrdriver.h"
 
 #define NOW 1794669614LL
@@ -172,6 +174,7 @@ static void request_writes_file(void **s)
     assert_string_equal(got, "sbs_mode=disable\n");
     unlink(path);
 
+#ifndef _WIN32 /* symlinks need a privilege on Windows */
     /* Never through a symlink: the target is left alone. */
     char target[128];
     snprintf(target, sizeof target, "%s/target", dir);
@@ -184,6 +187,7 @@ static void request_writes_file(void **s)
     assert_string_equal(got, "keep\n");
     unlink(path);
     unlink(target);
+#endif
 
     /* No such directory (no driver ever ran). */
     char missing[160];

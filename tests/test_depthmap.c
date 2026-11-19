@@ -9,7 +9,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <process.h>
+#endif
 #include <cmocka.h>
+
+#include "test_compat.h"
 
 #include "render/depthmap.h"
 
@@ -26,9 +31,7 @@ static int setup(void **state)
 static int teardown(void **state)
 {
     (void)state;
-    char cmd[128];
-    snprintf(cmd, sizeof cmd, "rm -rf '%s'", g_dir);
-    return system(cmd) == 0 ? 0 : -1;
+    return xrd_test_rmtree(g_dir);
 }
 
 static void write_file(const char *path, const void *data, size_t len)
@@ -183,6 +186,23 @@ static void python_writer_cross_check(void **state)
     for (size_t i = 0; i < sizeof bytes; i++)
         bytes[i] = (unsigned char)(i * 7 + 3);
     write_file(photo, bytes, sizeof bytes);
+#ifdef _WIN32
+    /* No sh to quote for: the script in a file, Python run without a shell
+     * (the paths hold no spaces). */
+    char script[160];
+    snprintf(script, sizeof script, "%s/writer.py", g_dir);
+    static const char code[] =
+        "import sys; sys.path.insert(0, sys.argv[1]); from xrdome_depth import "
+        "cache; p = sys.argv[2]; d = sys.argv[3]; "
+        "vals = [0, 1, 256, 258, 4660, 65534, 65535, 32768]; "
+        "cache.write_pgm(cache.cache_path(d, cache.cache_key(p)), 4, 2, "
+        "b\"\".join(v.to_bytes(2, \"big\") for v in vals))\n";
+    write_file(script, code, sizeof code - 1);
+    (void)cmd;
+    assert_int_equal(_spawnl(_P_WAIT, XRD_PYTHON, XRD_PYTHON, "-I", script, XRD_TOOLS_DIR, photo,
+                             cache, NULL),
+                     0);
+#else
     snprintf(cmd, sizeof cmd,
              "'%s' -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from xrdome_depth import "
              "cache; p = sys.argv[2]; d = sys.argv[3]; "
@@ -191,6 +211,7 @@ static void python_writer_cross_check(void **state)
              "b\"\".join(v.to_bytes(2, \"big\") for v in vals))' '%s' '%s' '%s'",
              XRD_PYTHON, XRD_TOOLS_DIR, photo, cache);
     assert_int_equal(system(cmd), 0);
+#endif
     char key[XRD_DEPTH_KEY_LEN + 1], path[256], err[128] = "";
     assert_int_equal(xrd_depth_key(photo, key), 0);
     assert_int_equal(xrd_depth_cache_path(cache, key, path, sizeof path), 0);

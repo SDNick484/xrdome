@@ -9,11 +9,29 @@
 #include <string.h>
 #include <time.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+#endif
+
 uint64_t xrd_now_ns(void)
 {
+#ifdef _WIN32
+    /* QueryPerformanceCounter: monotonic, sub-microsecond on Windows 10+. */
+    static LARGE_INTEGER freq;
+    LARGE_INTEGER c;
+    if (freq.QuadPart == 0)
+        QueryPerformanceFrequency(&freq); /* fixed at boot; a race writes the same value */
+    QueryPerformanceCounter(&c);
+    uint64_t f = (uint64_t)freq.QuadPart, t = (uint64_t)c.QuadPart;
+    return t / f * 1000000000ull + t % f * 1000000000ull / f;
+#else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+#endif
 }
 
 struct xrd_timing {
@@ -146,6 +164,21 @@ void xrd_sleep_ns(uint64_t ns)
 {
     if (ns == 0)
         return;
+#ifdef _WIN32
+    /* Sleep() rounds up to the scheduler tick (often 15.6 ms); a
+     * high-resolution waitable timer (Windows 10 1803+) wakes within about a
+     * millisecond. One per thread, kept for the thread's life. */
+    static _Thread_local HANDLE timer;
+    if (!timer)
+        timer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                       TIMER_ALL_ACCESS);
+    LARGE_INTEGER due;
+    due.QuadPart = -(LONGLONG)((ns + 99) / 100); /* relative, in 100 ns units */
+    if (timer && SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE))
+        WaitForSingleObject(timer, INFINITE);
+    else
+        Sleep((DWORD)((ns + 999999) / 1000000));
+#else
     struct timespec ts = {.tv_sec = (time_t)(ns / 1000000000ull),
                           .tv_nsec = (long)(ns % 1000000000ull)};
 #if defined(__APPLE__)
@@ -157,4 +190,5 @@ void xrd_sleep_ns(uint64_t ns)
     while (clock_nanosleep(CLOCK_MONOTONIC, 0, &ts, &ts) == EINTR)
         ;
 #endif
+#endif /* !_WIN32 */
 }

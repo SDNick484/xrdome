@@ -1,6 +1,7 @@
 #include "video/player_mpv.h"
 
 #include "store/filestate.h"
+#include "util/printf_attr.h"
 
 #include <epoxy/gl.h>
 #include <mpv/client.h>
@@ -51,7 +52,7 @@ struct xrd_player {
 };
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...)
-    __attribute__((format(printf, 3, 4)));
+    XRD_PRINTF(3, 4);
 static void check_aspect(xrd_player *p);
 static void check_resume(xrd_player *p);
 static int render_frame(xrd_player *p);

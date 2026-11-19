@@ -3,6 +3,8 @@
 
 #include "store/filestate.h"
 
+#include "platform/platform.h"
+#include "util/printf_attr.h"
 #include "values.h"
 
 #include <ctype.h>
@@ -18,6 +20,9 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <io.h> /* _commit */
+#endif
 
 #define FNV1A64_PRIME 0x100000001b3ULL
 
@@ -75,16 +80,7 @@ int xrd_filestate_key(const char *path, char *key, size_t keylen)
 
 int xrd_filestate_dir(char *buf, size_t len)
 {
-    const char *xdg = getenv("XDG_STATE_HOME");
-    const char *home = getenv("HOME");
-    int w;
-    if (xdg && xdg[0] == '/')
-        w = snprintf(buf, len, "%s/xrdome/files", xdg);
-    else if (home && home[0])
-        w = snprintf(buf, len, "%s/.local/state/xrdome/files", home);
-    else
-        return -1;
-    return (w < 0 || (size_t)w >= len) ? -1 : 0;
+    return xrd_user_path(XRD_USER_STATE, buf, len);
 }
 
 /* ---- record parse and format ------------------------------------------ */
@@ -114,7 +110,7 @@ static const struct { const char *name; unsigned bit; } k_settings[] = {
 #define N_SETTINGS ((size_t)KEY_POSITION)
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...)
-    __attribute__((format(printf, 3, 4)));
+    XRD_PRINTF(3, 4);
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...)
 {
@@ -306,7 +302,7 @@ xrd_fs_status xrd_filestate_parse(const char *text, xrd_filestate *out, char *er
 /* Bounded appender: pos keeps counting past the end so overflow is detectable. */
 typedef struct { char *buf; size_t len, pos; } sink;
 
-static void put(sink *s, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+static void put(sink *s, const char *fmt, ...) XRD_PRINTF(2, 3);
 
 static void put(sink *s, const char *fmt, ...)
 {
@@ -429,7 +425,18 @@ xrd_fs_status xrd_filestate_load(const char *record_path, xrd_filestate *out,
     return xrd_filestate_parse(text, out, err, errlen);
 }
 
-/* mkdir -p, mode 0700. */
+/* A path separator: '/', and on Windows '\\' too. */
+static bool is_sep(char c)
+{
+#ifdef _WIN32
+    return c == '/' || c == '\\';
+#else
+    return c == '/';
+#endif
+}
+
+/* mkdir -p, mode 0700 (xrd_mkdir). A prefix that cannot be created but is a
+ * directory (Windows: "C:", a share's root) is fine. */
 static int make_dirs(const char *dir, char *err, size_t errlen)
 {
     char tmp[PATH_MAX];
@@ -439,18 +446,21 @@ static int make_dirs(const char *dir, char *err, size_t errlen)
         return -1;
     }
     memcpy(tmp, dir, n + 1);
+    struct stat sb;
     for (size_t i = 1; i <= n; i++) {
-        if (tmp[i] != '/' && tmp[i] != '\0')
+        if (!is_sep(tmp[i]) && tmp[i] != '\0')
             continue;
+        if (is_sep(tmp[i - 1]))
+            continue; /* "//", or a "\\\\server" prefix */
         char saved = tmp[i];
         tmp[i] = '\0';
-        if (mkdir(tmp, 0700) != 0 && errno != EEXIST) {
+        if (xrd_mkdir(tmp) != 0 && errno != EEXIST &&
+            !(stat(tmp, &sb) == 0 && S_ISDIR(sb.st_mode))) {
             set_err(err, errlen, "cannot create %s: %s", tmp, strerror(errno));
             return -1;
         }
         tmp[i] = saved;
     }
-    struct stat sb;
     if (stat(dir, &sb) != 0 || !S_ISDIR(sb.st_mode)) {
         set_err(err, errlen, "%s is not a directory", dir);
         return -1;
@@ -467,7 +477,7 @@ int xrd_filestate_save(const char *dir, const char *key, const xrd_filestate *st
         set_err(err, errlen, "invalid record key '%s'", key);
         return -1;
     }
-    if (video_path[0] == '/') {
+    if (xrd_platform_path_absolute(xrd_platform_current(), video_path)) {
         snprintf(label, sizeof label, "%s", video_path);
     } else {
         char cwd[PATH_MAX];
@@ -516,12 +526,16 @@ int xrd_filestate_save(const char *dir, const char *key, const xrd_filestate *st
         p += k;
         left -= (size_t)k;
     }
+#ifdef _WIN32
+    if (_commit(fd) != 0 || close(fd) != 0) {
+#else
     if (fsync(fd) != 0 || close(fd) != 0) {
+#endif
         set_err(err, errlen, "cannot write %s: %s", tmp, strerror(errno));
         unlink(tmp);
         return -1;
     }
-    if (rename(tmp, rec) != 0) {
+    if (xrd_replace_file(tmp, rec) != 0) {
         set_err(err, errlen, "cannot rename %s to %s: %s", tmp, rec, strerror(errno));
         unlink(tmp);
         return -1;

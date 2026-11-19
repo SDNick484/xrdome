@@ -10,6 +10,8 @@
 #include <unistd.h>
 #include <cmocka.h>
 
+#include "test_compat.h"
+
 #include "config.h"
 
 #define TOL 1e-4
@@ -1313,6 +1315,20 @@ static void default_path_falls_back_to_home(void **state)
 {
     (void)state;
     char buf[256];
+#ifdef _WIN32
+    /* Windows: %APPDATA% (the known folder), never HOME. Every platform's
+     * choice is tested in test_platform.c. */
+    setenv("HOME", "/home/nick", 1);
+    unsetenv("XDG_CONFIG_HOME");
+    assert_int_equal(xrd_config_default_path(buf, sizeof buf), 0);
+    assert_null(strstr(buf, "/home/nick"));
+    size_t n = strlen(buf), k = strlen("\\xrdome\\config.ini");
+    assert_true(n > k && strcmp(buf + n - k, "\\xrdome\\config.ini") == 0);
+    setenv("XDG_CONFIG_HOME", "rel/conf", 1);
+    assert_int_equal(xrd_config_default_path(buf, sizeof buf), 0);
+    assert_null(strstr(buf, "rel/conf"));
+    return;
+#endif
     setenv("HOME", "/home/nick", 1);
     unsetenv("XDG_CONFIG_HOME");
     assert_int_equal(xrd_config_default_path(buf, sizeof buf), 0);
@@ -1331,6 +1347,14 @@ static void default_path_fails_without_env_or_space(void **state)
 {
     (void)state;
     char buf[256];
+#ifdef _WIN32
+    /* The known folder is always there; only a short buffer fails. */
+    unsetenv("XDG_CONFIG_HOME");
+    char tiny[8];
+    assert_int_equal(xrd_config_default_path(tiny, sizeof tiny), -1);
+    (void)buf;
+    return;
+#endif
     unsetenv("XDG_CONFIG_HOME");
     unsetenv("HOME");
     assert_int_equal(xrd_config_default_path(buf, sizeof buf), -1);

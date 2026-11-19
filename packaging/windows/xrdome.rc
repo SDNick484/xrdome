@@ -1,0 +1,5 @@
+/* Windows resources for xrdome.exe: the application manifest
+ * (packaging/windows/xrdome.manifest). */
+#include <winuser.h>
+
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "xrdome.manifest"

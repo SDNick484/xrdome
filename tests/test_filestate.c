@@ -17,15 +17,14 @@
 #include <cmocka.h>
 
 #include "store/filestate.h"
+#include "test_compat.h"
 
 static char g_dir[64];
 static char *g_old_xdg, *g_old_home;
 
 static void rm_tree(void)
 {
-    char cmd[128];
-    snprintf(cmd, sizeof cmd, "rm -rf '%s'", g_dir);
-    if (system(cmd) != 0) { /* best effort */ }
+    if (xrd_test_rmtree(g_dir) != 0) { /* best effort */ }
 }
 
 static int setup(void **state)
@@ -169,6 +168,9 @@ static void key_follows_symlink(void **state)
 {
     (void)state;
     char p[128], l[128];
+#ifdef _WIN32
+    skip(); /* symlinks need a privilege on Windows */
+#endif
     make_pattern_file(p, sizeof p, "target", 200000);
     snprintf(l, sizeof l, "%s/link", g_dir);
     assert_int_equal(symlink(p, l), 0);
@@ -195,6 +197,16 @@ static void dir_selection(void **state)
 
     unsetenv("XDG_STATE_HOME");
     assert_int_equal(xrd_filestate_dir(d, sizeof d), 0);
+#ifdef _WIN32
+    /* %LOCALAPPDATA% (the known folder), never HOME; every platform's choice
+     * is tested in test_platform.c. */
+    assert_null(strstr(d, "/h/u"));
+    size_t n = strlen(d), k = strlen("\\xrdome\\files");
+    assert_true(n > k && strcmp(d + n - k, "\\xrdome\\files") == 0);
+    setenv("XDG_STATE_HOME", "/x/state", 1);
+    assert_int_equal(xrd_filestate_dir(d, 8), -1);
+    return;
+#endif
     assert_string_equal(d, "/h/u/.local/state/xrdome/files");
 
     setenv("XDG_STATE_HOME", "", 1);
@@ -533,7 +545,9 @@ static void save_load_delete(void **state)
     struct stat sb;
     assert_int_equal(stat(dir, &sb), 0);
     assert_true(S_ISDIR(sb.st_mode));
+#ifndef _WIN32 /* no POSIX modes there */
     assert_int_equal((int)(sb.st_mode & 07777), 0700);
+#endif
     assert_int_equal(count_entries(dir, first, sizeof first), 1);
     assert_string_equal(first, "abc-0123.ini");
 
@@ -595,8 +609,12 @@ static void save_fails_cleanly(void **state)
 static void save_fails_unwritable_dir(void **state)
 {
     (void)state;
+#ifdef _WIN32
+    skip(); /* Windows' chmod cannot make a directory read-only */
+#else
     if (geteuid() == 0)
         skip(); /* root ignores directory modes */
+#endif
     char parent[200], dir[260], err[128] = "";
     snprintf(parent, sizeof parent, "%s/ro", g_dir);
     assert_int_equal(mkdir(parent, 0700), 0);
