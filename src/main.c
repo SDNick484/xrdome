@@ -134,6 +134,9 @@ typedef struct {
     unsigned sink_n;         /* rings made in this run: the shm name's counter */
     bool video_failed;       /* the helper cannot take video: no more rings this run */
     uint64_t sink_ns, sink_max_ns, sink_steps; /* CPU time of the sink's steps */
+    uint16_t *vdepth;        /* the newest depth map read back from the ring (322x182) */
+    uint64_t vdepth_seen;    /* number of the newest map taken from the ring */
+    uint64_t vdepth_taken, vdepth_age_sum, vdepth_age_max; /* maps uploaded, their age in frames */
 } xrd_app;
 
 /* F of spec 5.3 for the frame now playing: the video texture's (coded) size
@@ -519,13 +522,22 @@ static void video_stop(xrd_app *a)
     uint64_t back = xrd_vring_depth_head(xrd_framesink_ring(a->sink));
     fprintf(stderr,
             "depth: video stopped: %llu frames out, %llu skipped (readbacks busy), %llu depth "
-            "maps back; CPU %.3f ms a frame on average, %.3f ms max\n",
+            "maps back; CPU %.3f ms a frame on average, %.3f ms max; %llu depth maps drawn, "
+            "%.1f frames old on average, %llu at most\n",
             (unsigned long long)st.sent, (unsigned long long)st.skipped,
             (unsigned long long)back,
             a->sink_steps ? (double)a->sink_ns / (double)a->sink_steps / 1e6 : 0.0,
-            (double)a->sink_max_ns / 1e6);
+            (double)a->sink_max_ns / 1e6, (unsigned long long)a->vdepth_taken,
+            a->vdepth_taken ? (double)a->vdepth_age_sum / (double)a->vdepth_taken : 0.0,
+            (unsigned long long)a->vdepth_age_max);
     xrd_framesink_free(a->sink);
     a->sink = NULL;
+    /* the film's depth belongs to the ring that made it: the next ring (3D
+     * on again) starts without, and the draw is 2D until its first map */
+    if (a->depth_w > 0 && a->vdepth_seen > 0) {
+        xrd_renderer_set_depth(a->r, NULL, 0, 0, NULL, 0);
+        a->depth_w = a->depth_h = 0;
+    }
 }
 
 /* The helper cannot take the film's frames: no more for this run. */
@@ -569,13 +581,50 @@ static void video_start(xrd_app *a)
         return;
     }
     a->sink_ns = a->sink_max_ns = a->sink_steps = 0;
+    a->vdepth_seen = a->vdepth_taken = a->vdepth_age_sum = a->vdepth_age_max = 0;
     fprintf(stderr, "depth: video frames to the depth helper (%dx%d through %s)\n", XRD_VRING_W,
             XRD_VRING_H, name);
 }
 
+/* The helper's newest depth map for the film, when there is one newer than
+ * the last: into the depth texture (spec 8), whatever the frame it was made
+ * from (1 or 2 frames old, counted for the stop line). Never waits: a map
+ * the helper is writing at that moment is taken next frame. */
+static void video_depth(xrd_app *a)
+{
+    void *ring = xrd_framesink_ring(a->sink);
+    uint64_t frame;
+    if (!a->vdepth) {
+        a->vdepth = malloc(XRD_VRING_DEPTH_BYTES);
+        if (!a->vdepth)
+            return;
+    }
+    if (!xrd_vring_depth_read(ring, &a->vdepth_seen, a->vdepth, &frame))
+        return;
+    char err[128] = "";
+    if (!xrd_renderer_set_depth(a->r, a->vdepth, XRD_VRING_W, XRD_VRING_H, err, sizeof err)) {
+        fprintf(stderr, "xrdome: warning: depth: %s; the film stays 2D\n", err);
+        video_failed(a);
+        return;
+    }
+    /* The frame sent is scaled over the whole picture whatever its aspect,
+     * so the depth lines up in picture coordinates: no aspect check. */
+    a->depth_w = XRD_VRING_W;
+    a->depth_h = XRD_VRING_H;
+    a->depth_checked = true;
+    a->depth_why = NULL;
+    uint64_t head = xrd_vring_frame_head(ring);
+    uint64_t age = head > frame ? head - frame : 0;
+    a->vdepth_taken++;
+    a->vdepth_age_sum += age;
+    if (age > a->vdepth_age_max)
+        a->vdepth_age_max = age;
+}
+
 /* Once per frame: frames go out only for a flat mono film with 3D on
  * (xrd_framesink_wanted); otherwise nothing is scaled or read back, and a
- * sink still running is stopped. Its CPU time goes in the timing log. */
+ * sink still running is stopped. Its CPU time (the depth upload included)
+ * goes in the timing log. */
 static void video_step(xrd_app *a, xrd_timing *timing, unsigned tex)
 {
     const xrd_controls *c = a->ctl;
@@ -590,6 +639,9 @@ static void video_step(xrd_app *a, xrd_timing *timing, unsigned tex)
     if (!a->sink)
         return;
     xrd_framesink_step(a->sink, tex, xrd_player_frame_serial(a->p), t0);
+    video_depth(a);
+    if (!a->sink) /* the upload failed: video_failed stopped it */
+        return;
     uint64_t dt = xrd_now_ns() - t0;
     xrd_timing_frames_out(timing, dt);
     a->sink_ns += dt;
@@ -1551,6 +1603,7 @@ out:
         fprintf(stderr, "pose: %u malformed UDP packets dropped\n",
                 (unsigned)xrd_pose_udp_dropped(pose));
     video_stop(&app);         /* needs the GL context current */
+    free(app.vdepth);
     xrd_timing_close(timing); /* prints the missed-vsync summary */
     xrd_player_free(p);       /* needs the GL context current */
     xrd_imagedir_free(&app.photos);

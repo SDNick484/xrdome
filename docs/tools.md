@@ -320,6 +320,7 @@ programs' output against these command lines (the tests use stand-ins).
     xrdome-tools depth photo FILE|DIR [--force]
     xrdome-tools depth serve [--socket PATH] [--idle-exit SECONDS]
     xrdome-tools depth bench-video [--seconds S] [--rate HZ]
+    xrdome-tools depth flicker DIR [--start N] [--count N] [--json]
 
 Writes the depth cache the player reads for 3D photos (depth-based 3D, spec section 5 of
 `docs/superpowers/specs/2026-11-19-depth-3d-design.md`). Needs `setup depth`; without it the
@@ -393,7 +394,12 @@ with `depth photo`'s code, writing the same cache files.
   was made from. It stops when xrdome marks the ring closed (3D off), sends another ring, or
   disconnects. Every 10 s it logs `video: 30.0 Hz (worst 1 s window 29.8 Hz), 300 depth maps,
   inference median 18.0 ms, p95 24.0 ms, newest frame 612`: the helper's rate with xrdome running.
-  The depth is normalised per frame as photos are; smoothing over time is not done yet.
+  The depth is normalised as photos are (1st and 99th percentiles to 0 and 65535) and smoothed over
+  time (spec section 8, second half): an exponential moving average of the normalised depth and of
+  the percentile range, `0.5` for the newest map, restarted at a scene cut. A cut is a mean luma
+  change over 32x18 sample points above 0.15 of full scale between two frames the helper takes (so
+  motion, a pan, noise and fades are not cuts, and a flash may be); the log line adds `, N scene
+  cuts so far`. Each film has its own smoothing state; the model stays loaded.
 - The ring (`src/video/framesink.h` documents it; `tools/xrdome_depth/video.py` mirrors it): a 4096
   byte header, then 4 frame slots of 322x182 RGBA8 and 3 depth slots of 322x182 16-bit samples
   (native byte order, 65535 nearest), rows top first. Each side writes a slot's number as 0, the
@@ -414,6 +420,32 @@ spike measured: `bench-video: 30.0 Hz (worst 1 s window 29.8 Hz), 900 depth maps
 a film to see what both cost together (xrdome's `--timing-log`, and `depth serve`'s own `video:`
 lines with 3D on). Needs `setup depth`; on a `--cpu` setup it warns and runs on the CPU. A missing
 model or no Vulkan GPU exits 2.
+
+### depth flicker
+
+    xrdome-tools depth flicker DIR [--start N] [--count N] [--json]
+
+How much the depth of a film flickers from frame to frame, in the metric of the depth spike that
+the design rests on (`tools/xrdome_depth/flicker.py`): each depth map is min-max normalised to
+[0, 1] on its own, and the flicker is the mean absolute per-pixel change between consecutive maps
+(for 30 maps, 29 deltas), reported as their mean and maximum. The spike measured 0.0111 (mean) at
+392x224 and 0.0150 at 322x182, on a near-static shot; the target for the helper's smoothed depth is
+0.011 or less. `DIR` holds consecutive frames of the film as images (`.png`, `.jpg`, `.bmp`,
+`.webp`; extract them with `ffmpeg -i film.mp4 -vf scale=640:-2 DIR/frame_%04d.png`), taken in name
+order from `--start` (default 0), `--count` of them (default 30). Use a near-static shot: motion
+is real depth change, not flicker. Needs `setup depth`. It runs the model once per frame, scaled to
+322x182 as the player sends it, and prints three lines: the raw model output (the spike's own
+number), the helper's depth without smoothing, and with it (what `depth serve` writes):
+
+    raw model (the spike's number): mean M max X over 29 deltas (0-1 scale)
+    helper, not smoothed: mean M max X over 29 deltas (0-1 scale)
+    helper, smoothed: mean M max X over 29 deltas (0-1 scale)
+    target at or below 0.011: met by the last line
+
+(Not measured on the real model yet: see docs/STATUS.md.) `--json` prints the deltas as
+well. Without the model, the script also measures depth maps already made:
+`python3 tools/xrdome_depth/flicker.py maps FILE.pgm...` (16-bit PGMs such as the cache's, in time
+order), standard library only.
 
 ## Output names and tags
 

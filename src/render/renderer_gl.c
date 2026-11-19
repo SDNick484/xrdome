@@ -15,6 +15,7 @@ struct xrd_renderer {
         u_eye_scale, u_eye_offset, u_filter, u_dither, u_mask, u_trilinear, u_max_level,
         u_depth, u_depth_on, u_depth_k, u_depth_plane, u_depth_n;
     GLuint depth_tex; /* depth 3D: the picture's depth, 0 when there is none */
+    int depth_w, depth_h; /* its size */
     /* Sharpening (sharpen.frag): its program, and the intermediate the eye
      * pass draws into while it is on, made on the first sharpened draw and
      * remade when the output size changes. */
@@ -193,9 +194,13 @@ void xrd_renderer_set_sharpen(xrd_renderer *r, float strength)
 bool xrd_renderer_set_depth(xrd_renderer *r, const uint16_t *px, int w, int h, char *err,
                             size_t errlen)
 {
-    if (r->depth_tex) {
+    /* A new map of the size the texture has (every frame of a film) is
+     * written into it, not made anew. */
+    bool reuse = px && r->depth_tex && w == r->depth_w && h == r->depth_h;
+    if (r->depth_tex && !reuse) {
         glDeleteTextures(1, &r->depth_tex);
         r->depth_tex = 0;
+        r->depth_w = r->depth_h = 0;
     }
     if (!px)
         return true;
@@ -232,15 +237,21 @@ bool xrd_renderer_set_depth(xrd_renderer *r, const uint16_t *px, int w, int h, c
     glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
     while (glGetError() != GL_NO_ERROR)
         ;
-    glGenTextures(1, &r->depth_tex);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, r->depth_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R16, w, h, 0, GL_RED, GL_UNSIGNED_SHORT, flip);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    if (reuse) {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, r->depth_tex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_UNSIGNED_SHORT, flip);
+    } else {
+        glGenTextures(1, &r->depth_tex);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, r->depth_tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R16, w, h, 0, GL_RED, GL_UNSIGNED_SHORT, flip);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    }
     GLenum e = glGetError();
     glActiveTexture(GL_TEXTURE0);
     glPixelStorei(GL_UNPACK_ALIGNMENT, align);
@@ -255,8 +266,11 @@ bool xrd_renderer_set_depth(xrd_renderer *r, const uint16_t *px, int w, int h, c
         set_err(err, errlen, what, "GL error on upload");
         glDeleteTextures(1, &r->depth_tex);
         r->depth_tex = 0;
+        r->depth_w = r->depth_h = 0;
         return false;
     }
+    r->depth_w = w;
+    r->depth_h = h;
     return true;
 }
 

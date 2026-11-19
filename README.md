@@ -523,23 +523,31 @@ xrdome-tools depth photo ~/Pictures/holiday/      # or all of it ahead of time
 
 ### Depth for films
 
-Work in progress (spec section 8 of `docs/superpowers/specs/2026-11-19-depth-3d-design.md`): a flat
-2D film is not drawn in 3D yet, but `D` already sends its frames to the depth helper, which makes
-their depth live. 3D is off at the start of a film. With it on, each new frame is scaled on the GPU
-to 322x182 and read back a frame later, never waiting, into a shared-memory ring that
-[`xrdome-tools depth serve`](docs/tools.md#depth-serve) reads (xrdome starts it as for photos):
+A flat 2D film is drawn in 3D live from its depth (spec section 8 of
+`docs/superpowers/specs/2026-11-19-depth-3d-design.md`), with the same stereo pass as a photo's, so
+`-` / `=` (strength) and `,` / `.` (screen plane) work on it too. 3D is off at the start of a film;
+`D` turns it on. Then each new frame is scaled on the GPU to 322x182 and read back a frame later,
+never waiting, into a shared-memory ring that [`xrdome-tools depth serve`](docs/tools.md#depth-serve)
+reads (xrdome starts it as for photos). The helper runs the 322x182 model at the film's rate up to
+30 times a second and writes the depth back with the number of the frame it was made from; each
+time a newer depth map is there, xrdome uploads it into the depth texture (the render loop never
+waits for the helper). The film is in 2D until the first map arrives, and its depth is one or two
+frames old, which is not noticeable in slow scenes. At 60 fps, every second frame has a new depth.
+The helper smooths the depth over time (an exponential moving average of the depth and of the
+range it is scaled with, weight 0.5 for the newest) and starts afresh at a scene cut, so the
+picture does not shimmer; `xrdome-tools depth flicker` measures it.
 
 ```
 depth: video frames to the depth helper (322x182 through /xrdome-4242-1)
 depth: the depth helper reads /xrdome-4242-1
 ...
-depth: video stopped: 900 frames out, 0 skipped (readbacks busy), 899 depth maps back; CPU 0.086 ms a frame on average, 4.425 ms max
+depth: video stopped: 900 frames out, 0 skipped (readbacks busy), 899 depth maps back; CPU 0.086 ms a frame on average, 4.425 ms max; 880 depth maps drawn, 1.4 frames old on average, 3 at most
 ```
 
-The last line comes when 3D goes off or xrdome exits. Only a flat mono film sends frames; a stereo
+The last line comes when 3D goes off or xrdome exits (the depth of the film goes with it). Only a flat mono film sends frames; a stereo
 film, VR180 and photos never read anything back. With `--depth-helper off`, `D` says the film has
-no depth source. The CPU time of each frame's sending is the `frames_out_us` column of
-`--timing-log`. A helper that cannot take the frames gives one `xrdome: note:` and the film plays on
+no depth source. The CPU time of each frame's sending and of uploading its depth is the
+`frames_out_us` column of `--timing-log`. A helper that cannot take the frames gives one `xrdome: note:` and the film plays on
 in 2D. `xrdome-tools depth bench-video` reports the rate the helper reaches.
 
 ## Format detection

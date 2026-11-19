@@ -3,7 +3,9 @@
 # no glasses, no model; spec 8 of the depth 3D design, first half): D on a
 # flat mono film starts tests/fake_depth_helper.py as its "xrdome-tools",
 # which maps the shared-memory ring, reads the 322x182 frames (top row
-# first) and writes depth back. With 3D off nothing is read back and no
+# first) and writes depth back, which the film is then drawn with in 3D
+# (spec 8: the eyes' shift measured on a dumped frame as in
+# smoke_depth.sh). With 3D off nothing is read back and no
 # helper starts; a helper that refuses video, --depth-helper off and a
 # stereo film each leave the film in 2D.
 # usage: smoke_depth_video.sh XRDOME FAKE_HELPER
@@ -135,5 +137,68 @@ play v6 "$helper" 30 --press d --layout sbs-lr "$work/film.mp4"
 status V6 $?
 grep -qx 'depth: photos and flat mono films only' "$work/v6.err"; check "V6 D refuses a stereo film" $?
 [ ! -e "$work/v6.log" ]; check "V6 no helper started" $?
+
+# 7. The helper's depth draws the film in 3D: a grey film with a red bar in
+# the far half and a white bar in the near half of a step depth, as in
+# smoke_depth.sh, with the dumped frame taken after the depth has come back.
+ffmpeg -v error -y -f lavfi -i "color=c=0x404040:s=640x360:r=30:d=8" -vf \
+    "drawbox=x=120:y=0:w=20:h=360:color=0xff0000:t=fill,drawbox=x=440:y=0:w=20:h=360:color=0xffffff:t=fill,format=yuv420p" \
+    -c:v libx264 -preset ultrafast -crf 10 "$work/bars.mp4" || { echo "FAIL: ffmpeg could not make the bars film"; exit 1; }
+
+# bars PPM: "<picture width> <red shift> <white shift> <eyes identical>" as
+# in smoke_depth.sh: for each bar the left eye's bar centre minus the right
+# eye's, from their picture's left edge, in pixels.
+bars() {
+python3 -I - "$1" <<'PY'
+import sys
+data = open(sys.argv[1], "rb").read()
+magic, size, maxval, px = data.split(b"\n", 3)
+w, h = map(int, size.split())
+assert magic == b"P6" and len(px) == w * h * 3, "bad PPM"
+eye, y = w // 2, h // 2
+row = [tuple(px[(y * w + x) * 3:(y * w + x) * 3 + 3]) for x in range(w)]
+def measure(x0):
+    lit = [x for x in range(x0, x0 + eye) if sum(row[x]) > 60]
+    left = lit[0]
+    def centre(test):
+        xs = [x for x in range(x0, x0 + eye) if test(row[x])]
+        return sum(xs) / len(xs) - left
+    red = centre(lambda c: c[0] > 150 and c[1] < 100 and c[2] < 100)
+    white = centre(lambda c: c[0] > 150 and c[1] > 150 and c[2] > 150)
+    return lit[-1] - left + 1, red, white
+bw, rl, wl = measure(0)
+_, rr, wr = measure(eye)
+same = all(px[(yy * w + x) * 3:(yy * w + x) * 3 + 3] == px[(yy * w + x + eye) * 3:(yy * w + x + eye) * 3 + 3]
+           for yy in range(0, h, 4) for x in range(eye))
+print(f"{bw} {rl - rr:.2f} {wl - wr:.2f} {'yes' if same else 'no'}")
+PY
+}
+near() { awk -v v="$1" -v w="$2" -v t="$3" 'BEGIN { d = v - w; if (d < 0) d = -d; exit !(d <= t) }'; }
+
+# D on, zoom 0.8 (the whole picture in view), no dithering (it differs
+# between the eyes): the default strength 2% and plane 0.5 move the far
+# (red) bar by -0.01 and the near (white) bar by +0.01 of the picture width.
+(FAKE_DEPTH_STEP=1; export FAKE_DEPTH_STEP
+ play v7 "$helper" 150 --press d --zoom 0.8 --dither off --dump-frame "$work/v7.ppm" "$work/bars.mp4")
+status V7 $?
+[ "$(xrd_lines v7 | wc -l)" -eq 0 ]; check "V7 no xrdome errors, warnings or notes" $?
+set -- $(bars "$work/v7.ppm")
+_want=$(awk -v w="$1" 'BEGIN { printf "%.2f", 0.02 * 0.5 * w }')
+_neg=$(awk -v x="$_want" 'BEGIN { printf "%.2f", -x }')
+near "$2" "$_neg" 1.5 && near "$3" "$_want" 1.5
+check "V7 red bar moved $2 px (want $_neg), white bar $3 px (want $_want), picture $1 px: the film is in 3D" $?
+drawn=$(sed -n 's/^depth: video stopped:.*; \([0-9]*\) depth maps drawn, .*/\1/p' "$work/v7.err")
+[ "${drawn:-0}" -ge 5 ]; check "V7 depth maps drawn ($drawn)" $?
+
+# 8. The same film with 3D off is the 2D picture: both eyes identical.
+play v8 "$helper" 60 --zoom 0.8 --dither off --dump-frame "$work/v8.ppm" "$work/bars.mp4"
+status V8 $?
+[ "$(bars "$work/v8.ppm" | cut -d' ' -f4)" = yes ]; check "V8 3D off: eyes identical" $?
+
+# 9. Stopping 3D drops the film's depth: D, then D again, dumped after.
+(FAKE_DEPTH_STEP=1; export FAKE_DEPTH_STEP
+ play v9 "$helper" 150 --press d,d --zoom 0.8 --dither off --dump-frame "$work/v9.ppm" "$work/bars.mp4")
+status V9 $?
+[ "$(bars "$work/v9.ppm" | cut -d' ' -f4)" = yes ]; check "V9 3D turned off again: eyes identical" $?
 
 exit $fail

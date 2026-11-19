@@ -2595,6 +2595,31 @@ static void depth_upload_limits(void **state)
     assert_int_equal(glGetError(), GL_NO_ERROR);
 }
 
+/* A film sends a map every few frames: one of the size the texture has is
+ * written into it (depth_rows_top_down draws through that path too), one of
+ * another size replaces it. */
+static void depth_rewrite_and_resize(void **state)
+{
+    (void)state;
+    char err[128] = "";
+    uint16_t px[16], rev[16];
+    for (int i = 0; i < 16; i++) {
+        px[i] = (uint16_t)(i * 4000);
+        rev[i] = (uint16_t)((15 - i) * 4000);
+    }
+    assert_true(xrd_renderer_set_depth(g_r, px, 4, 4, err, sizeof err));
+    for (int i = 0; i < 3; i++)
+        assert_true(xrd_renderer_set_depth(g_r, i & 1 ? px : rev, 4, 4, err, sizeof err));
+    assert_true(xrd_renderer_has_depth(g_r));
+    assert_true(xrd_renderer_set_depth(g_r, px, 2, 8, err, sizeof err)); /* same area, other shape */
+    assert_true(xrd_renderer_set_depth(g_r, rev, 2, 8, err, sizeof err));
+    assert_true(xrd_renderer_set_depth(g_r, px, 4, 4, err, sizeof err));
+    assert_true(xrd_renderer_has_depth(g_r));
+    assert_false(xrd_renderer_set_depth(g_r, px, 0, 4, err, sizeof err)); /* dropped on failure */
+    assert_false(xrd_renderer_has_depth(g_r));
+    assert_int_equal(glGetError(), GL_NO_ERROR);
+}
+
 int main(void)
 {
     const char *ext = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
@@ -2666,6 +2691,7 @@ int main(void)
         cmocka_unit_test_teardown(depth_off_is_exact_2d, reset_view),
         cmocka_unit_test_teardown(depth_rows_top_down, reset_view),
         cmocka_unit_test(depth_upload_limits),
+        cmocka_unit_test(depth_rewrite_and_resize),
         cmocka_unit_test(no_gl_error),
     };
     return cmocka_run_group_tests(tests, setup, teardown);

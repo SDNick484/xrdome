@@ -497,18 +497,18 @@ def main(argv: list[str] | None = None) -> int:
         dest = cache.cache_path(args.cache_dir, cache.cache_key(p))
         return dest if dest.is_file() else None
 
-    video_depth = None
+    video_warm = False
 
     def open_video(shm: str) -> video.VideoSession:
-        nonlocal video_depth
-        if video_depth is None:  # the 322x182 model, loaded and warmed on the first film
-            fn = video.make_depth_fn(backend)
+        nonlocal video_warm
+        fn = video.make_depth_fn(backend)  # its own smoothing state for each film
+        if not video_warm:  # the 322x182 model, loaded and warmed on the first film
             start = time.monotonic()
             video.warm(fn)
             log(f"model {video.WIDTH}x{video.HEIGHT} warm in {time.monotonic() - start:.2f} s")
-            video_depth = fn
+            video_warm = True
         ring, mm = video.open_shm(shm)
-        return video.VideoSession(ring, video_depth, mm=mm, log=log)
+        return video.VideoSession(ring, fn, mm=mm, log=log)
 
     server = Server(args.socket, process, cached, args.idle_exit, log=log, open_video=open_video)
     if not server.bind():

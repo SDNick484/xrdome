@@ -77,8 +77,10 @@ void xrd_renderer_set_sharpen(xrd_renderer *r, float strength);
 /* Depth 3D (spec 6 of the depth 3D design): the depth of the picture, w x h
  * samples, row 0 the top, 0 far and 65535 near (xrd_depthmap), uploaded into
  * a GL_R16 texture (GL_LINEAR, clamp to edge) oriented like the video
- * texture. px NULL drops it. false, with err, when it cannot be uploaded (it
- * is then dropped). Leaves the unit-1 2D texture binding changed. */
+ * texture. px NULL drops it. A map of the size the texture already has is
+ * written into it (a film's depth, up to every frame; the call copies px
+ * and never waits for the GPU). false, with err, when it cannot be
+ * uploaded (it is then dropped). Leaves the unit-1 2D texture binding changed. */
 bool xrd_renderer_set_depth(xrd_renderer *r, const uint16_t *px, int w, int h, char *err,
                             size_t errlen);
 bool xrd_renderer_has_depth(const xrd_renderer *r);
