@@ -785,7 +785,8 @@ int main(int argc, char **argv)
     }
     gl = SDL_GL_CreateContext(win);
     if (!gl) {
-        fail("cannot create a GL 3.3 core context%s: %s", use_x11 ? " on EGL" : "",
+        fail(use_x11 ? "cannot create a GL 3.3 core context on EGL: %s"
+                     : "cannot create a GL 3.3 core context: %s",
              SDL_GetError());
         goto out;
     }
