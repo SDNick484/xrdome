@@ -395,13 +395,23 @@ static void rate_cap_limits_packets(void **state)
     run r;
     start_run(&r, port, 0x1019);
     r.o.rate = 50;
+    uint64_t t0 = xrd_now_ns();
     launch(&r);
-    xrd_sleep_ns(600000000ull); /* 0.6 s: at most about 31 packets at 50 Hz, 300 uncapped */
+    xrd_sleep_ns(600000000ull); /* 0.6 s: about 31 packets at 50 Hz, 300 uncapped */
     finish(&r);
+    uint64_t elapsed_ns = xrd_now_ns() - t0;
     unsetenv("XRD_FAKE_VITURE_HZ");
     assert_int_equal(r.rc, 0);
     assert_true(r.sent >= 1);
-    assert_true(r.sent <= 40);
+    /* The cap is a schedule of one packet every 1/rate s, the first at once, so a run of T
+     * seconds sends at most T * rate + 1. T is measured here (launch to the end of finish, which
+     * contains every send) and not taken to be 0.6: a loaded CI runner can stretch the sleep, and
+     * a 0.9 s run honestly sends 46. One more packet is allowed for the clock read. An uncapped
+     * stream (500 Hz here) is about ten times over this bound. */
+    long most = (long)((double)elapsed_ns / 1e9 * r.o.rate) + 2;
+    if (r.sent > most)
+        fail_msg("%ld packets in %.3f s at a cap of %g Hz: at most %ld expected", r.sent,
+                 (double)elapsed_ns / 1e9, r.o.rate, most);
 }
 
 static void frequency_choice(void **state)
