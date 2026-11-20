@@ -1,0 +1,34 @@
+# Maintainer: Nick Andrade <SDNick484@users.noreply.github.com>
+pkgname=xrdome
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='VR180 and flat video player for XR glasses with head tracking'
+arch=('x86_64')
+url='https://github.com/SDNick484/xrdome'
+# GPL-2.0-or-later, plus AMD's MIT licence for the sharpen.frag shader.
+license=('GPL-2.0-or-later' 'MIT')
+# ffmpeg is here for ffprobe, which xrdome runs to detect the format; nothing is linked.
+depends=('mpv' 'sdl2' 'libepoxy' 'ffmpeg')
+# cmocka is also a makedepend: meson.build asks for it at configure time, even for --nocheck.
+makedepends=('meson' 'cmocka')
+# The smoke tests need Xvfb; diffutils and a font are what the Arch CI job installs for them.
+checkdepends=('cmocka' 'xorg-server-xvfb' 'xorg-xauth' 'xorg-xrandr' 'diffutils' 'ttf-dejavu')
+optdepends=('python: xrdome-tools (run from the source tree, not installed by this package)')
+source=("$pkgname-$pkgver.tar.xz::$url/releases/download/v$pkgver/$pkgname-$pkgver.tar.xz")
+# Filled in at release: the tarball's sha256 is in the release's .sha256sum file.
+sha256sums=('SKIP')
+
+build() {
+  arch-meson "$pkgname-$pkgver" build
+  meson compile -C build
+}
+
+check() {
+  # --timeout-multiplier 2: Arch's xvfb-run sleeps 3 s per start and the smoke test starts it
+  # about 80 times, which takes it past its 300 s limit (see .github/workflows/ci.yml).
+  meson test -C build --print-errorlogs --timeout-multiplier 2
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+}
