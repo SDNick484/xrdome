@@ -1,0 +1,5 @@
+# source: Radeon 860M (gfx1152), torch 2.9.1+rocm6.4, 2026-11-20
+True
+None
+6.4.43484-123eb5128
+gfx1152

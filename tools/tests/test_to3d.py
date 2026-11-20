@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from xrdome_tools import cli, config, formats, iw3env, models, to3d
+from xrdome_tools import cli, config, formats, hw, iw3env, models, to3d
 from xrdome_tools.formats import ProbeInfo
 from xrdome_tools.run import Runner
 
@@ -82,7 +82,7 @@ def env(monkeypatch, tmp_path):
     st = {"info": pinfo(), "compute": "cuda", "calls": [], "transcode": [], "installed": None}
     monkeypatch.setattr(to3d, "Runner", lambda dry_run=False, log=None: Rec(st["calls"], dry_run, log))
     monkeypatch.setattr(iw3env, "installed", lambda p: st["installed"])
-    monkeypatch.setattr(iw3env, "compute", lambda r, p: st["compute"])
+    monkeypatch.setattr(iw3env, "check", lambda r, p: st.get("check") or hw.TorchCheck(st["compute"], st["compute"], ""))
     monkeypatch.setattr(models, "require", lambda name, p: Path("/x") / name)
     monkeypatch.setattr(formats, "probe", lambda r, path: st["info"])
     monkeypatch.setattr(to3d.transcode, "_require_programs", lambda: None)
@@ -146,6 +146,24 @@ def test_refuse_without_compute(env, capsys):
     assert cli.main(["to3d", str(env["src"]), "--cpu"]) == 0
     assert opt(env["calls"][0], "--gpu") == "-1"
     assert opt(env["calls"][0], "--video-codec") == "libx264"
+
+
+def test_refuse_gpu_that_fails_its_test(env, capsys):
+    problem = hw.torch_problem("rocm", "gfx1152", "HIP error: invalid device function", "")
+    env["check"] = hw.TorchCheck("none", "rocm", "gfx1152", problem)
+    assert cli.main(["to3d", str(env["src"])]) == 2
+    err = capsys.readouterr().err
+    assert "no GPU code for gfx1152" in err and "HSA_OVERRIDE_GFX_VERSION=11.0.2" in err
+    assert env["calls"] == []
+    assert cli.main(["to3d", str(env["src"]), "--cpu"]) == 0
+    assert opt(env["calls"][0], "--gpu") == "-1"
+    assert "the rocm GPU failed PyTorch's test" in capsys.readouterr().out
+
+
+def test_rocm_arch_in_path_line(env, capsys):
+    env["check"] = hw.TorchCheck("rocm", "rocm", "gfx1152")
+    assert cli.main(["to3d", str(env["src"])]) == 0
+    assert "path: compute=rocm (PyTorch in the iw3 environment ran its GPU test on gfx1152)" in capsys.readouterr().out
 
 
 def test_refuse_before_setup(env, capsys):

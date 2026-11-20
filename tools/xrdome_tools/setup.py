@@ -78,13 +78,17 @@ def run_to3d(args: argparse.Namespace) -> int:
             return 0
         iw3env.write_marker(p, variant)
         if variant != "cpu":
-            seen = iw3env.compute(runner, p)
-            say_path("compute", seen, "torch.cuda.is_available() in the new environment")
-            if seen == "none":
+            tc = iw3env.check(runner, p)
+            say_path("compute", tc.compute, "a GPU test in the new environment"
+                     + (f" on {tc.arch}" if tc.arch else ""))
+            if tc.problem:
+                raise ToolError(f"{tc.problem} Setup itself is complete; to3d will refuse to run "
+                                "until this is solved or you add --cpu.", EXIT_SETUP)
+            if tc.compute == "none":
                 gpu = "ROCm" if variant == "rocm" else "CUDA"
                 raise ToolError(
                     f"PyTorch ({gpu}) is installed but cannot see the GPU. "
-                    + ("ROCm may not support this GPU yet (for example the Radeon 860M, gfx1152); "
+                    + ("ROCm may not support this GPU yet; "
                        "HSA_OVERRIDE_GFX_VERSION is not set for you. " if variant == "rocm" else
                        "Check the NVIDIA driver (nvidia-smi). ")
                     + "to3d will refuse to run unless you add --cpu.", EXIT_SETUP)

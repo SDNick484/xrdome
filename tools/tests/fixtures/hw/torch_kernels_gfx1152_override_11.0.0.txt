@@ -1,0 +1,2 @@
+# source: Radeon 860M (gfx1152), torch 2.9.1+rocm6.4, HSA_OVERRIDE_GFX_VERSION=11.0.0, 2026-11-20
+:0:rocdevice.cpp            :2994: 391605008102 us:  Callback: Queue 0x7f9cd6e00000 aborting with error : HSA_STATUS_ERROR_INVALID_ISA: The instruction set architecture is invalid. code: 0x100f

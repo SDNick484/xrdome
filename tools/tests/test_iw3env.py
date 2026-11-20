@@ -116,10 +116,20 @@ def test_setup_runs_steps_with_yes(setup_env, paths):
 
 def test_setup_rocm_gpu_unseen(setup_env, monkeypatch, paths, capsys):
     monkeypatch.setattr(setup_cmd.hw, "probe", lambda r, **kw: probe(["amd"]))
-    monkeypatch.setattr(iw3env, "compute", lambda r, p: "none")
+    monkeypatch.setattr(iw3env, "check", lambda r, p: hw.TorchCheck("none", "none", ""))
     assert cli.main(["setup", "to3d", "--yes"]) == 2
     err = capsys.readouterr().err
     assert "cannot see the GPU" in err and "--cpu" in err
+
+
+def test_setup_rocm_kernels_fail(setup_env, monkeypatch, paths, capsys):
+    monkeypatch.setattr(setup_cmd.hw, "probe", lambda r, **kw: probe(["amd"]))
+    problem = hw.torch_problem("rocm", "gfx1152", "HIP error: invalid device function", "")
+    monkeypatch.setattr(iw3env, "check", lambda r, p: hw.TorchCheck("none", "rocm", "gfx1152", problem))
+    assert cli.main(["setup", "to3d", "--yes"]) == 2
+    err = capsys.readouterr().err
+    assert "HSA_OVERRIDE_GFX_VERSION=11.0.2" in err and "--cpu" in err
+    assert iw3env.variant(paths) == "rocm"  # setup itself finished; to3d --cpu still works
 
 
 def test_setup_no_gpu_refused(setup_env, monkeypatch, capsys):

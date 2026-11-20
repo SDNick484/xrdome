@@ -42,7 +42,8 @@ tried at `/usr/lib/wsl/lib/nvidia-smi`, on WSL2), the ffmpeg encoders built in, 
 256x256 test encode with each built-in hardware encoder (`hevc_nvenc`, `av1_nvenc`,
 `hevc_vaapi`, `av1_vaapi`), VA-API profiles from `vainfo`, Vulkan devices from
 `vulkaninfo --summary`, and compute (`cuda`, `rocm`, `none` or `not set up`) from the iw3
-environment. An encoder that ffmpeg lists but whose test encode fails is reported with its
+environment, found by running a few GPU kernels there (see `to3d`): a GPU PyTorch sees but
+cannot run on is `none`, with the reason and the fix in the `to3d` path line. An encoder that ffmpeg lists but whose test encode fails is reported with its
 error line and is not chosen.
 
 Encoder choice: NVENC if its test passed, else VA-API if its test passed, else software
@@ -160,9 +161,10 @@ overridden in the `[programs]` section of `tools.ini`. The steps, each printed b
 - A venv in `iw3/venv/` with PyTorch and nunif's `requirements.txt`. The PyTorch build follows
   the GPU found (a `path: torch=` line says which and why):
   - NVIDIA, native or under WSL2: the CUDA wheels nunif's `requirements-torch.txt` names.
-  - AMD: ROCm wheels from `https://download.pytorch.org/whl/rocm6.4`. If PyTorch then cannot
-    see the GPU (ROCm does not support every Radeon yet; the Radeon 860M, gfx1152, is not
-    verified), setup says so and exits 2. It never sets `HSA_OVERRIDE_GFX_VERSION` for you.
+  - AMD: ROCm wheels from `https://download.pytorch.org/whl/rocm6.4`. Setup then runs the
+    same GPU test as `to3d`; if PyTorch cannot see the GPU or cannot run on it, setup says why
+    and exits 2 (the environment is still installed, so `to3d --cpu` works). It never sets
+    `HSA_OVERRIDE_GFX_VERSION` for you; see `to3d` for the Radeon 860M.
   - Neither: refused unless `--cpu`, which installs the CPU wheels. With a GPU present,
     `--cpu` changes nothing.
 
@@ -228,8 +230,8 @@ depth model in place (see `models`).
 - `--divergence` (default 2.0), `--convergence` (default 0.5), `--foreground-scale` (default
   0, not passed to iw3): iw3's own options, defaults from the owner's sbs-test.
 - `--half`: half SBS instead of full SBS.
-- `--cpu`: run without CUDA or ROCm. Without it, `to3d` refuses (exit 2): on the CPU a few
-  minutes of video takes hours, against about 60 fps on an RTX 5070 Ti.
+- `--cpu`: run without CUDA or ROCm. Without it, `to3d` refuses (exit 2) when it has no GPU to
+  run on: on the CPU a few minutes of video takes hours, against about 60 fps on an RTX 5070 Ti.
 - `--quality`: the final encode, as for `transcode`.
 - `--tmp DIR`: where the intermediate file goes (default `~/.cache/xrdome-tools/`). It is
   deleted when the run ends, also on failure or Ctrl-C.
@@ -248,8 +250,26 @@ Enhance first, then convert: below 1080p or below 50 fps, `to3d` prints a hint t
 `enhance` first. Interpolating or upscaling before the conversion is half the work and keeps
 both eyes made from the same frames.
 
-Not yet verified on hardware: ROCm, conversion speed on AMD, and how iw3 fits a source that is
-not 16:9 into the 1920x1080 eye (letterbox expected, not checked).
+**The GPU test.** Before converting, `to3d` runs a few kernels of the kinds iw3 uses (fp16
+conversion, a convolution, attention) with PyTorch in the iw3 environment. Seeing the GPU is not
+enough: PyTorch's ROCm wheels only carry code for some Radeon chips, and on another one the first
+real operation fails with `HIP error: invalid device function` (or aborts with
+`HSA_STATUS_ERROR_INVALID_ISA` under an override for the wrong chip). `to3d` then refuses with
+the chip's name (from the kernel driver, so it is the real chip even under an override), the
+error, and the fix where one is known, and the `path: compute=` line names the chip when the
+test passes.
+
+**Radeon 860M (gfx1152).** The ROCm 6.4 wheels have no code for it. It works as a gfx1102:
+
+    HSA_OVERRIDE_GFX_VERSION=11.0.2 xrdome-tools to3d INPUT
+
+`11.0.0` and `11.0.1` abort with `HSA_STATUS_ERROR_INVALID_ISA`. Measured 2026-11-20 on a
+ThinkPad P14s (torch 2.9.1+rocm6.4, `Any_V2_S`, a 608x1080 60 fps source): about 2.4 frames per
+second, so ten minutes of 60 fps video takes about four hours; convert long videos on an NVIDIA
+machine.
+
+Not yet verified on hardware: ROCm on other Radeons, and how iw3 fits a source that is not 16:9
+into the 1920x1080 eye (letterbox expected, not checked).
 
 ## enhance
 

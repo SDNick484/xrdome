@@ -11,14 +11,13 @@ The pins and steps follow the owner's sbs-test `scripts/setup.sh`.
 """
 
 import configparser
-import subprocess
 from pathlib import Path
 
 from . import config
 from .config import Paths
 from .errors import EXIT_SETUP, ToolError
-from .hw import Probe
-from .run import ChildFailed, Runner
+from .hw import Probe, TorchCheck, check_torch
+from .run import Runner
 
 PINS = {
     "nunif": "0f8b86b952d3f3e294c8d887fbf615a679e7f4ca",
@@ -111,18 +110,9 @@ def setup_steps(paths: Paths, variant: str) -> list[list[str]]:
     return steps
 
 
-def compute(runner: Runner, paths: Paths) -> str:
-    """"cuda", "rocm" or "none", as PyTorch in the iw3 venv sees it."""
-    code = ("import torch;print(torch.cuda.is_available());"
-            "print(torch.version.cuda);print(torch.version.hip)")
-    try:
-        out = runner.run([str(python(paths)), "-c", code], capture=True, timeout=120).stdout
-    except (ChildFailed, OSError, subprocess.TimeoutExpired):
-        return "none"
-    words = out.split()
-    if len(words) < 3 or words[0] != "True":
-        return "none"
-    return "rocm" if words[2] != "None" else "cuda"
+def check(runner: Runner, paths: Paths) -> TorchCheck:
+    """Whether PyTorch in the iw3 venv can run on the GPU (it runs a few kernels to find out)."""
+    return check_torch(runner, python(paths))
 
 
 def write_marker(paths: Paths, variant: str) -> None:

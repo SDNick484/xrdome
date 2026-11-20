@@ -5,7 +5,12 @@ All notable changes to xrdome are listed here, in the format of
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+- `xrdome-tools to3d` on a Radeon PyTorch's ROCm build has no code for (the Radeon 860M,
+  gfx1152) no longer says `compute=rocm` and then crashes inside iw3 with `HIP error: invalid
+  device function`. `to3d`, `setup to3d` and `doctor` now run a few real GPU kernels, and on a
+  failure name the chip, the error and the fix: on the 860M,
+  `HSA_OVERRIDE_GFX_VERSION=11.0.2` (verified; about 2.4 frames per second) or `--cpu`.
 
 ## [0.1.0] - unreleased
 
