@@ -246,6 +246,12 @@ in software. The output name is `<name>_<AnyV2S|VDAS>_div<D>[_c<C>][_fs<F>]_FSBS
 `pan_AnyV2S_div2.0_FSBS.mkv` or `pan_VDAS_div3.0_c0.65_fs1.0_FSBS.mkv`. iw3's command and the
 decisions go to `<output>.log`, with the transcode's.
 
+**Progress.** iw3's progress bar (frames done, rate, time left) shows on the terminal while it
+runs; on the 8-CU Radeon 860M, expect a few frames per second. The log gets the decisions and
+iw3's command when the run starts, and iw3's output when it ends, with each progress bar
+reduced to its last state. The same holds for every child xrdome-tools runs without capturing
+its output (ffmpeg in `transcode` and `enhance`, the `setup` steps).
+
 Enhance first, then convert: below 1080p or below 50 fps, `to3d` prints a hint to run
 `enhance` first. Interpolating or upscaling before the conversion is half the work and keeps
 both eyes made from the same frames.
