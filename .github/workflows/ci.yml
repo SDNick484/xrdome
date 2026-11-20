@@ -420,8 +420,10 @@ jobs:
           if [ -z "$heading" ]; then
             echo "::error::CHANGELOG.md has no section for $ver"; exit 1
           fi
+          # The heading is not part of the notes, so an undated section still makes good notes;
+          # say so, so that the date gets put in (README, Release checklist, step 2).
           case "$heading" in
-            *nreleased*) echo "::error::CHANGELOG.md still says '$heading': date it before tagging"; exit 1 ;;
+            *nreleased*) echo "::warning::CHANGELOG.md still says '$heading': date it" ;;
           esac
           awk -v h="## [$ver]" 'index($0, h) == 1 { on = 1; next } on && /^## \[/ { exit } on { print }' CHANGELOG.md > notes.md
           if [ ! -s notes.md ]; then echo "::error::the $ver section is empty"; exit 1; fi

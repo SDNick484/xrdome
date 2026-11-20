@@ -1219,8 +1219,8 @@ flicker` on a near-static shot, `--timing-log` with 3D on against off.
   present; no build output, libraries, VITURE SDK headers or FFmpeg/mpv), then the tarball is
   unpacked elsewhere and built and tested with the seven smoke tests required to pass; uploads
   `xrdome-dist` (`.tar.xz` and `.sha256sum`). CI `release` (only for a pushed `v*` tag, the only
-  job with `contents: write`): checks the tag against `meson.build` and that CHANGELOG's section for
-  it is dated, then `gh release create --draft` with that section as the notes. Draft only.
+  job with `contents: write`): checks the tag against `meson.build` and that CHANGELOG has a section for
+  it (a warning if it is still undated), then `gh release create --draft` with that section as the notes. Draft only.
 - Packaging: `packaging/gentoo/media-video/xrdome/xrdome-0.1.0.ebuild` (`~amd64`, no checksum; the
   `Manifest` is generated from the published tarball) and `packaging/arch/PKGBUILD`
   (`sha256sums=('SKIP')` until release). The Arch CI job only checks the PKGBUILD's syntax and that
