@@ -1,9 +1,11 @@
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from xrdome_tools import hw
 from xrdome_tools.errors import ToolError
+from xrdome_tools.run import ChildFailed
 
 FIX = Path(__file__).parent / "fixtures" / "hw"
 
@@ -103,3 +105,76 @@ def test_test_encode_argv():
     nv = " ".join(hw.encode_test_argv("ffmpeg", "hevc_nvenc"))
     assert "-vaapi_device" not in nv and "hwupload" not in nv and nv.endswith("-f null -")
     assert "testsrc2=s=256x256:d=1" in nv
+
+
+def body(name: str) -> str:
+    return fx(name).split("\n", 1)[1]
+
+
+def test_parse_torch_sees():
+    assert hw.parse_torch_sees(body("torch_sees_gfx1152.txt")) == ("rocm", "gfx1152")
+    assert hw.parse_torch_sees("True\n12.8\nNone\n-\n") == ("cuda", "")
+    assert hw.parse_torch_sees("True\nNone\n6.4\ngfx90a:sramecc+:xnack-\n") == ("rocm", "gfx90a")
+    assert hw.parse_torch_sees("False\nNone\n6.4\n-\n") == ("none", "")
+    assert hw.parse_torch_sees("") == ("none", "")
+
+
+def test_parse_kfd_target():
+    assert hw.parse_kfd_target("cpu_cores_count 8\ngfx_target_version 110502\nsimd_count 16\n") == "gfx1152"
+    assert hw.parse_kfd_target("gfx_target_version 90010\n") == "gfx90a"
+    assert hw.parse_kfd_target("gfx_target_version 0\n") == ""
+    assert hw.parse_kfd_target("") == ""
+
+
+def test_torch_error_line():
+    tail = body("torch_kernels_gfx1152_no_override.txt").splitlines()
+    assert hw.torch_error_line(tail, 1) == "torch.AcceleratorError: HIP error: invalid device function"
+    tail = body("torch_kernels_gfx1152_override_11.0.0.txt").splitlines()
+    assert hw.torch_error_line(tail, -6).startswith("HSA_STATUS_ERROR_INVALID_ISA: The instruction")
+    assert hw.torch_error_line([], -6) == "exited with status -6"
+
+
+def test_torch_problem_names_the_fix():
+    no = hw.torch_problem("rocm", "gfx1152", "invalid device function", "")
+    assert "no GPU code for gfx1152" in no and "HSA_OVERRIDE_GFX_VERSION=11.0.2" in no and "--cpu" in no
+    wrong = hw.torch_problem("rocm", "gfx1152", "INVALID_ISA", "11.0.0")
+    assert "with HSA_OVERRIDE_GFX_VERSION=11.0.0" in wrong and "works with HSA_OVERRIDE_GFX_VERSION=11.0.2" in wrong
+    right = hw.torch_problem("rocm", "gfx1152", "out of memory", "11.0.2")
+    assert "works with" not in right and "--cpu" in right
+    other = hw.torch_problem("rocm", "gfx1036", "invalid device function", "")
+    assert "gfx1036" in other and "same family" in other
+    assert "nvidia-smi" in hw.torch_problem("cuda", "", "no kernel image", "")
+
+
+class TorchRunner(hw.Runner):
+    def __init__(self, sees: str, fail: list[str] | None):
+        super().__init__()
+        self.sees, self.fail = sees, fail
+
+    def run(self, argv, **kw):
+        if argv[-1] == hw.TORCH_SEES:
+            return subprocess.CompletedProcess(argv, 0, self.sees, "")
+        if self.fail is not None:
+            raise ChildFailed(argv, -6, self.fail)
+        return subprocess.CompletedProcess(argv, 0, "ok 0.0\n", "")
+
+
+def test_check_torch(monkeypatch):
+    monkeypatch.delenv("HSA_OVERRIDE_GFX_VERSION", raising=False)
+    monkeypatch.setattr(hw, "_kfd_arch", lambda: "")
+    sees = body("torch_sees_gfx1152.txt")
+    ok = hw.check_torch(TorchRunner(sees, None), Path("/py"))
+    assert ok == hw.TorchCheck("rocm", "rocm", "gfx1152")
+    tail = body("torch_kernels_gfx1152_no_override.txt").splitlines()
+    bad = hw.check_torch(TorchRunner(sees, tail), Path("/py"))
+    assert bad.compute == "none" and bad.seen == "rocm" and "HSA_OVERRIDE_GFX_VERSION=11.0.2" in bad.problem
+    monkeypatch.setenv("HSA_OVERRIDE_GFX_VERSION", "11.0.0")
+    tail = body("torch_kernels_gfx1152_override_11.0.0.txt").splitlines()
+    bad = hw.check_torch(TorchRunner(sees, tail), Path("/py"))
+    assert "INVALID_ISA" in bad.problem and "with HSA_OVERRIDE_GFX_VERSION=11.0.0" in bad.problem
+    # Under an override PyTorch names the overridden chip; the kernel still names the real one.
+    monkeypatch.setattr(hw, "_kfd_arch", lambda: "gfx1152")
+    bad = hw.check_torch(TorchRunner("True\nNone\n6.4\ngfx1100\n", tail), Path("/py"))
+    assert bad.arch == "gfx1152" and "works with HSA_OVERRIDE_GFX_VERSION=11.0.2" in bad.problem
+    none = hw.check_torch(TorchRunner("False\nNone\nNone\n-\n", None), Path("/py"))
+    assert none == hw.TorchCheck("none", "none", "")

@@ -39,3 +39,11 @@ def test_doctor_nothing_found(monkeypatch, capsys):
     assert "path: encode=none" in capsys.readouterr().out
     assert cli.main(["doctor", "--json"]) == 0
 
+
+
+def test_doctor_gpu_that_fails_its_test(monkeypatch, capsys):
+    problem = hw.torch_problem("rocm", "gfx1152", "invalid device function", "")
+    monkeypatch.setattr(hw, "probe", lambda runner, **kw: fixed(compute="none", compute_problem=problem))
+    assert cli.main(["doctor", "--json"]) == 0
+    to3d = json.loads(capsys.readouterr().out)["paths"]["to3d"]
+    assert to3d["value"] == "compute=none" and "HSA_OVERRIDE_GFX_VERSION=11.0.2" in to3d["reason"]

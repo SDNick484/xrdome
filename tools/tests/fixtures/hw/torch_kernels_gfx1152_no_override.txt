@@ -1,0 +1,11 @@
+# source: Radeon 860M (gfx1152), torch 2.9.1+rocm6.4, no HSA_OVERRIDE_GFX_VERSION, 2026-11-20
+Traceback (most recent call last):
+  File "<string>", line 4, in <module>
+    x = torch.randn(1, 3, 64, 64, device=d).half()
+        ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+torch.AcceleratorError: HIP error: invalid device function
+Search for `hipErrorInvalidDeviceFunction' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__HIPRT__TYPES.html for more information.
+HIP kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing AMD_SERIALIZE_KERNEL=3
+Compile with `TORCH_USE_HIP_DSA` to enable device-side assertions.
+

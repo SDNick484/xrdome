@@ -62,7 +62,9 @@ def decisions(p: hw.Probe) -> dict[str, dict[str, str]]:
         out["transcode"] = {"value": f"encode={c.name}", "reason": c.reason}
     except ToolError as e:
         out["transcode"] = {"value": "encode=none", "reason": str(e)}
-    if p.compute in ("cuda", "rocm"):
+    if p.compute_problem:
+        out["to3d"] = {"value": "compute=none", "reason": p.compute_problem}
+    elif p.compute in ("cuda", "rocm"):
         out["to3d"] = {"value": f"compute={p.compute}", "reason": "found in the iw3 environment"}
     elif p.compute == "not set up":
         out["to3d"] = {"value": "compute=none", "reason": "iw3 is not set up; run `xrdome-tools setup to3d`"}

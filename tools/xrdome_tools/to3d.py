@@ -101,13 +101,17 @@ def run(args: argparse.Namespace) -> int:
     why = iw3env.installed(p)
     if why:
         raise ToolError(f"{why}; run `xrdome-tools setup to3d` first", EXIT_SETUP)
-    compute = iw3env.compute(Runner(), p)
+    tc = iw3env.check(Runner(), p)
+    compute = tc.compute
     if compute == "none":
         if not args.cpu:
-            raise ToolError(iw3env.NO_COMPUTE, EXIT_SETUP)
-        say("compute", "cpu", "--cpu given; no CUDA or ROCm in the iw3 environment, this is slow")
+            raise ToolError(tc.problem or iw3env.NO_COMPUTE, EXIT_SETUP)
+        why = (f"the {tc.seen} GPU failed PyTorch's test" if tc.problem
+               else "no CUDA or ROCm in the iw3 environment")
+        say("compute", "cpu", f"--cpu given; {why}, this is slow")
     else:
-        say("compute", compute, "PyTorch in the iw3 environment sees the GPU")
+        say("compute", compute, "PyTorch in the iw3 environment ran its GPU test"
+            + (f" on {tc.arch}" if tc.arch else ""))
     models.require(args.model, p)
     transcode._require_programs()
 
