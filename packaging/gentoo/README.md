@@ -39,17 +39,18 @@ The binary is installed as `/usr/bin/xrdome`; `emerge --deselect` and `emerge -c
 ## The versioned ebuild and its Manifest
 
 `xrdome-0.1.0.ebuild` fetches `https://github.com/SDNick484/xrdome/releases/download/v0.1.0/xrdome-0.1.0.tar.xz`.
-No checksum is stored in this repository: the `DIST` line of the `Manifest` is generated from the
-real tarball, after the release has been published. In the overlay copy of the directory:
+`media-video/xrdome/Manifest` holds its `DIST` line (size, BLAKE2B and SHA512), computed from the
+published tarball, whose SHA256 is `b895efed...d658e` (the release's `.sha256sum` file and GitHub's
+asset digest agree). The `cp` above copies the `Manifest` with the ebuilds. To check it or to
+regenerate it after a new release, in the overlay copy of the directory:
 
 ```
 cd /var/db/repos/local/media-video/xrdome
-ebuild xrdome-0.1.0.ebuild manifest      # downloads the tarball, writes Manifest
+ebuild xrdome-0.1.0.ebuild manifest      # downloads the tarball, rewrites Manifest
 echo 'media-video/xrdome ~amd64' >> /etc/portage/package.accept_keywords/xrdome   # instead of **
 emerge --ask =media-video/xrdome-0.1.0
 ```
 
-The CI `dist` job writes `xrdome-0.1.0.tar.xz.sha256sum` next to the tarball; compare it with the
-`SHA256` the Manifest line holds (`ebuild ... manifest` prints the BLAKE2B and SHA512 digests
-portage uses, so run `sha256sum` on the downloaded file as well). The ebuild has not been built
-with `emerge`: that needs the published tarball.
+The `Manifest` line was written by a script from the downloaded file, not by `ebuild ... manifest`,
+and the ebuild has not been built with `emerge`: if `ebuild manifest` prints a different line,
+trust it and fix this one.
