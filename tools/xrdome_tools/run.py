@@ -1,23 +1,35 @@
 """Run child programs: argv lists only, never a shell."""
 
+import codecs
 import os
 import shlex
 import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
-from collections import deque
 from pathlib import Path
 from typing import TextIO
 
 
 class ChildFailed(Exception):
-    def __init__(self, argv: list[str], returncode: int, stderr_tail: list[str]):
+    def __init__(self, argv: list[str], returncode: int, stderr_tail: list[str], shown: bool = False):
         super().__init__(f"{shlex.join(argv)} exited with status {returncode}")
         self.argv = argv
         self.returncode = returncode
         self.stderr_tail = stderr_tail
+        self.shown = shown  # the tail is already on the terminal (stderr was streamed)
+
+
+def _lines(text: str) -> list[str]:
+    """Lines as a terminal shows them: of each line's carriage-return rewrites, only the last."""
+    out = []
+    for raw in text.split("\n"):
+        parts = [part for part in raw.split("\r") if part.strip()]
+        if parts:
+            out.append(parts[-1])
+    return out
 
 
 def safe_arg(p: Path) -> str:
@@ -70,41 +82,67 @@ class Runner:
             print(line)
             return subprocess.CompletedProcess(argv, 0, "", "")
         start = time.monotonic()
+        if self.log is not None:
+            self.log.write(f"$ {line}\n")
+            self.log.flush()
         # The child gets its own process group so an interrupt can take its
         # helpers down with it. stderr is always piped: its tail is the error.
+        # Without capture it is also copied to our stderr as it arrives, so a
+        # long child's progress bar shows while it runs.
+        stream = not capture
         proc = subprocess.Popen(
             argv,
             stdout=subprocess.PIPE if capture else None,
             stderr=subprocess.PIPE,
-            text=True,
-            errors="replace",
+            text=not stream,
+            errors=None if stream else "replace",
             start_new_session=True,
         )
-        tail: deque[str] = deque(maxlen=20)
+        chunks: list[str] = []
+        reader = threading.Thread(target=_copy_stderr, args=(proc.stderr, chunks), daemon=True) \
+            if stream else None
         try:
-            out, err = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
+            if reader is not None:
+                reader.start()
+                proc.wait(timeout=timeout)
+                reader.join()
+                out, err = None, "".join(chunks)
+            else:
+                out, err = proc.communicate(timeout=timeout)
+        except BaseException:  # timeout, KeyboardInterrupt and anything else
             _kill_group(proc)
-            for p in cleanup:
-                _remove(p)
-            raise
-        except BaseException:  # KeyboardInterrupt and anything else
-            _kill_group(proc)
+            if reader is not None:
+                reader.join(timeout=5)
             for p in cleanup:
                 _remove(p)
             raise
         elapsed = time.monotonic() - start
         if self.log is not None:
-            self.log.write(f"$ {line}\n")
-            if err:
-                self.log.write(err if err.endswith("\n") else err + "\n")
+            for ln in _lines(err or ""):
+                self.log.write(ln + "\n")
             self.log.write(f"# exit {proc.returncode} after {elapsed:.2f} s\n")
             self.log.flush()
         if proc.returncode != 0:
-            tail.extend(err.splitlines())
+            tail = _lines(err or "")[-20:]
             for p in cleanup:
                 _remove(p)
-            raise ChildFailed(argv, proc.returncode, list(tail))
-        if err and not capture:
-            sys.stderr.write(err)
+            raise ChildFailed(argv, proc.returncode, tail, shown=stream)
         return subprocess.CompletedProcess(argv, 0, out or "", err or "")
+
+
+def _copy_stderr(pipe, chunks: list[str]) -> None:
+    """Copy a child's stderr to ours as it arrives, keeping the text."""
+    dec = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    while True:
+        data = pipe.read1(65536)
+        text = dec.decode(data, final=not data)
+        if text:
+            chunks.append(text)
+            try:
+                sys.stderr.write(text)
+                sys.stderr.flush()
+            except (OSError, ValueError):
+                pass
+        if not data:
+            break
+    pipe.close()

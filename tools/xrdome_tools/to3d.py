@@ -142,6 +142,7 @@ def run(args: argparse.Namespace) -> int:
         tmp.mkdir(parents=True, exist_ok=True)
         log = open(f"{dst}.log", "w", encoding="utf-8")
         log.writelines(said)
+        log.flush()
     try:
         runner = Runner(dry_run=args.dry_run, log=log)
         runner.run(iw3_argv(p, args.input, inter, model=args.model, divergence=args.divergence,

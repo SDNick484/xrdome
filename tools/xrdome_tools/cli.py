@@ -46,8 +46,9 @@ def main(argv: list[str] | None = None) -> int:
         return e.code
     except ChildFailed as e:
         print(f"xrdome-tools: {e}", file=sys.stderr)
-        for line in e.stderr_tail:
-            print(line, file=sys.stderr)
+        if not e.shown:
+            for line in e.stderr_tail:
+                print(line, file=sys.stderr)
         return e.returncode
     except KeyboardInterrupt:
         print("xrdome-tools: interrupted", file=sys.stderr)
