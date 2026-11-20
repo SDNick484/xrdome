@@ -10,6 +10,8 @@ on:
   pull_request:
   push:
     branches: [main]
+    # A pushed version tag also makes the draft release (the `release` job).
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -96,6 +98,22 @@ jobs:
           gcc --version | head -n 1
           mpv --version | head -n 2
           pkg-config --modversion mpv sdl2
+
+      # makepkg refuses to run as root, which this container is, so the Arch packaging is
+      # only checked for syntax and for agreeing with meson.build on the version; nothing
+      # builds it here (docs/STATUS.md says so too).
+      - name: Check the packaging files
+        run: |
+          set -eu
+          have=$(sed -n "s/^[[:space:]]*version[[:space:]]*:[[:space:]]*'\([^']*\)'.*/\1/p" meson.build | head -n 1)
+          bash -n packaging/arch/PKGBUILD
+          pkgver=$(bash -c 'source packaging/arch/PKGBUILD; echo "$pkgver"')
+          if [ "$pkgver" != "$have" ]; then
+            echo "::error::PKGBUILD says $pkgver, meson.build says $have"; exit 1
+          fi
+          if [ ! -f "packaging/gentoo/media-video/xrdome/xrdome-$have.ebuild" ]; then
+            echo "::error::no xrdome-$have.ebuild for meson.build's version"; exit 1
+          fi
 
       - name: Configure
         run: meson setup build -Dwerror=true -Dviture_sdk_include=helpers/xrdome-pose-viture/tests/fake_include
@@ -267,6 +285,157 @@ jobs:
 
       - name: Test
         run: python3 -m pytest tools/tests -q
+
+  # The source release: `meson dist` makes xrdome-<version>.tar.xz, then the tarball is
+  # unpacked somewhere else and built and tested from there, so a file the build needs
+  # but git does not track, or one the tarball leaves out, fails here and not for a user.
+  # This job only reads the repository; the draft release is made by `release` below.
+  dist:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc meson ninja-build pkg-config python3 \
+            libmpv-dev libsdl2-dev libepoxy-dev libegl-dev libcmocka-dev \
+            libegl-mesa0 libgl1-mesa-dri libglx-mesa0 \
+            ffmpeg xvfb xauth x11-xserver-utils xz-utils
+
+      # On a pushed tag, vX.Y.Z must be the version meson.build says: the tarball's
+      # name comes from meson.build, and the release is made from the tag's name.
+      - name: Check the tag against meson.build
+        if: github.ref_type == 'tag'
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          have=$(sed -n "s/^[[:space:]]*version[[:space:]]*:[[:space:]]*'\([^']*\)'.*/\1/p" meson.build | head -n 1)
+          if [ "$want" != "$have" ]; then
+            echo "::error::tag $GITHUB_REF_NAME but meson.build says version $have"
+            exit 1
+          fi
+
+      # --no-tests: meson's own test build of the tarball would run without the
+      # fake Viture headers and the Xvfb checks; the steps below do it properly.
+      - name: Make the tarball
+        run: |
+          meson setup build-dist
+          meson dist -C build-dist --no-tests
+          ls -l build-dist/meson-dist/
+
+      - name: Check the tarball's contents
+        run: |
+          set -eu
+          cd build-dist/meson-dist
+          tarball=$(ls xrdome-*.tar.xz)
+          (cd "$(dirname "$tarball")" && sha256sum -c "$tarball.sha256sum")
+          tar -tf "$tarball" > "$RUNNER_TEMP/files.txt"
+          wc -l < "$RUNNER_TEMP/files.txt"
+          # What a build or the tests read at run time.
+          for f in meson.build meson.options LICENSE README.md CHANGELOG.md \
+                   tools/embed_shaders.py src/render/shaders/vr180.frag \
+                   src/render/shaders/sharpen.frag tests/smoke_player.sh \
+                   tools/xrdome-tools tools/tests helpers/xrdome-pose-viture/tests/fake_include; do
+            if ! grep -q -E "^[^/]+/$f(/|$)" "$RUNNER_TEMP/files.txt"; then
+              echo "::error::$f is missing from the tarball"; exit 1
+            fi
+          done
+          # What must never be in it: a build tree, the git directory, an SDK library, or
+          # VITURE's own headers (only the stand-ins under tests/fake_include are ours).
+          if grep -E '(^|/)(\.git|build[^/]*|meson-[a-z]+)/|\.(o|a|so|dylib|dll|exe)$|libglasses' "$RUNNER_TEMP/files.txt"; then
+            echo "::error::the tarball holds build output or a library"; exit 1
+          fi
+          if grep -E '(^|/)viture_[a-z_]+\.h$' "$RUNNER_TEMP/files.txt" \
+               | grep -v -e '/tests/fake_include/' -e '/helpers/xrdome-pose-viture/viture_loader\.h$'; then
+            echo "::error::the tarball holds a VITURE SDK header"; exit 1
+          fi
+          # Nothing from an FFmpeg or mpv build or source (the owner's FFmpeg is non-free).
+          # tests/fixtures/ffprobe/ holds text captured from ffprobe, which is fine.
+          if grep -i -E '(^|/)(ffmpeg|ffprobe|mpv)$|(^|/)(libav[a-z]*|libsw[a-z]*|libmpv)(/|\.)' "$RUNNER_TEMP/files.txt"; then
+            echo "::error::the tarball holds FFmpeg or mpv"; exit 1
+          fi
+
+      - name: Unpack, build and test the tarball
+        run: |
+          set -eu
+          mkdir "$RUNNER_TEMP/unpacked"
+          tar -xf build-dist/meson-dist/xrdome-*.tar.xz -C "$RUNNER_TEMP/unpacked"
+          cd "$RUNNER_TEMP/unpacked"/xrdome-*/
+          meson setup build -Dwerror=true -Dviture_sdk_include=helpers/xrdome-pose-viture/tests/fake_include
+          meson compile -C build
+          meson test -C build --print-errorlogs
+          python3 - <<'PY'
+          import json, sys
+          want = {"smoke", "smoke_tracking", "smoke_sbs", "smoke_photos", "smoke_depth", "smoke_depth_serve", "smoke_depth_video"}
+          seen = {}
+          with open("build/meson-logs/testlog.json") as f:
+              for line in f:
+                  line = line.strip()
+                  if line:
+                      t = json.loads(line)
+                      seen[t["name"].split(":")[-1]] = t["result"]
+          bad = {n: seen.get(n, "MISSING") for n in sorted(want) if seen.get(n) != "OK"}
+          for n, r in bad.items():
+              print(f"::error::{n}: {r} (expected OK)")
+          sys.exit(1 if bad else 0)
+          PY
+          ./build/xrdome --version
+
+      - name: Upload the tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: xrdome-dist
+          path: |
+            build-dist/meson-dist/xrdome-*.tar.xz
+            build-dist/meson-dist/xrdome-*.tar.xz.sha256sum
+          if-no-files-found: error
+          compression-level: 0
+
+  # A draft GitHub release for a pushed vX.Y.Z tag: the tarball and its checksum from
+  # `dist`, and the version's CHANGELOG section as the notes. Draft only; the maintainer
+  # publishes it. It is its own job so that contents: write goes to a job that builds
+  # and runs nothing from the repository: it downloads two files and calls gh.
+  release:
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    needs: [dist]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: xrdome-dist
+          path: release-files
+
+      - name: Notes from CHANGELOG.md
+        run: |
+          set -eu
+          ver="${GITHUB_REF_NAME#v}"
+          heading=$(grep -F "## [$ver]" CHANGELOG.md | head -n 1 || true)
+          if [ -z "$heading" ]; then
+            echo "::error::CHANGELOG.md has no section for $ver"; exit 1
+          fi
+          case "$heading" in
+            *nreleased*) echo "::error::CHANGELOG.md still says '$heading': date it before tagging"; exit 1 ;;
+          esac
+          awk -v h="## [$ver]" 'index($0, h) == 1 { on = 1; next } on && /^## \[/ { exit } on { print }' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "::error::the $ver section is empty"; exit 1; fi
+          cat notes.md
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          ls -l release-files
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "xrdome ${GITHUB_REF_NAME#v}" --notes-file notes.md \
+            release-files/xrdome-*.tar.xz release-files/xrdome-*.tar.xz.sha256sum
 
   # Windows 11 (experimental): MSYS2 UCRT64 (MinGW-w64 gcc), build and unit
   # tests only. The smoke tests need xvfb-run and skip (77) here; playback on

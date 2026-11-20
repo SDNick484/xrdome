@@ -3,6 +3,8 @@
 A Linux player for VR180 video and ordinary flat video on XR glasses (Viture Pro XR, XREAL Air 2
 Pro) with head tracking.
 
+Version 0.1.0 (prepared, not yet tagged; see [Releases](#releases) and [CHANGELOG.md](CHANGELOG.md)).
+
 Status: plays a side-by-side VR180 file on the glasses with head tracking from
 XRLinuxDriver (OpenTrack UDP), keyboard controls, a frame-timing log and per-file settings
 memory. On the Viture Pro XR, with the default mpv profile, bicubic sampling and a 10-bit
@@ -524,6 +526,9 @@ xrdome-tools depth photo ~/Pictures/holiday/      # or all of it ahead of time
   (EXIF that mpv does not apply, outside JPEG) is dropped with a warning.
 
 ### Depth for films
+
+Experimental, and not part of release 0.1.0: it is built and tested against a fake helper, but the
+glasses run (the real model's rate, flicker and cost) has not been done.
 
 A flat 2D film is drawn in 3D live from its depth (spec section 8 of
 `docs/superpowers/specs/2026-11-19-depth-3d-design.md`), with the same stereo pass as a photo's, so
@@ -1066,7 +1071,10 @@ not meant for normal playback. `swap_us` in the log is the time spent in the swa
 ## Install on Gentoo
 
 `packaging/gentoo/` holds a live ebuild, `media-video/xrdome-9999`, that builds `main` from GitHub
-with meson and installs `/usr/bin/xrdome`. It is not in any overlay yet; add it to a local one:
+with meson and installs `/usr/bin/xrdome`, and a versioned one, `xrdome-0.1.0.ebuild`, that builds
+the release tarball once it is published (see [Releases](#releases)). Neither is in an overlay yet;
+add them to a local one (the versioned one needs a `Manifest` first, see
+`packaging/gentoo/README.md`):
 
 ```
 # as root
@@ -1079,8 +1087,8 @@ emerge --ask media-video/xrdome
 
 `media-video/mpv` needs `libmpv`, `media-libs/libsdl2` needs `X` and `opengl`. Re-run `emerge` to
 rebuild from the newest `main`. `packaging/gentoo/README.md` has the details and the test flag.
-The ebuild was parsed and its dependencies resolved with `emerge --pretend`; it has not been
-built with `emerge` yet.
+The live ebuild was parsed and its dependencies resolved with `emerge --pretend`; neither ebuild
+has been built with `emerge` yet (the 0.1.0 one cannot be before the tarball exists).
 
 ## System setup
 
@@ -1332,6 +1340,29 @@ Known limits:
   [Tracking notes](#tracking-notes) for the XREAL's calibration.
 - A 4K VR180 file has about 11 source pixels per degree against the glasses' 51, so it looks soft
   however it is scaled; see [Viewing comfort and sharpness](#viewing-comfort-and-sharpness).
+
+## Releases
+
+A release is a source tarball, `xrdome-X.Y.Z.tar.xz`, made with `meson dist` by the `dist` job in
+CI, with its `.sha256sum`. It holds the sources, tests, docs and `xrdome-tools`; it ships no mpv
+or FFmpeg. Build it as in [Build and run](#build-and-run). Release 0.1.0 is Linux only; what is in
+it, what is experimental (macOS, Windows, depth for films, the VITURE pose helper) and the known
+limits are in [CHANGELOG.md](CHANGELOG.md). The macOS and Windows zips CI makes are test builds,
+not releases.
+
+On a pushed `v*` tag CI builds the tarball again and attaches it to a **draft** GitHub release,
+with the matching CHANGELOG section as its notes; the maintainer publishes it by hand.
+
+### Release checklist (maintainer)
+
+1. Bump `version` in `meson.build`.
+2. In `CHANGELOG.md`, move `[Unreleased]` into the new version's section and give it the date.
+3. Merge to `main` through a pull request with CI green, including `dist`.
+4. Tag and push: `git tag -a vX.Y.Z -m "xrdome vX.Y.Z"` (or `-s` with a signing key), then
+   `git push origin vX.Y.Z`.
+5. Wait for CI to finish the draft release, check its notes and the two attached files, publish it.
+6. Generate the Gentoo `Manifest` (`ebuild xrdome-X.Y.Z.ebuild manifest`) and put the tarball's
+   sha256 in `packaging/arch/PKGBUILD` in a follow-up pull request.
 
 ## Licence
 
