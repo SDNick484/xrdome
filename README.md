@@ -3,7 +3,7 @@
 A Linux player for VR180 video and ordinary flat video on XR glasses (Viture Pro XR, XREAL Air 2
 Pro) with head tracking.
 
-Version 0.1.0 (prepared, not yet tagged; see [Releases](#releases) and [CHANGELOG.md](CHANGELOG.md)).
+Version 0.1.0 (tagged `v0.1.0`; see [Releases](#releases) and [CHANGELOG.md](CHANGELOG.md)).
 
 Status: plays a side-by-side VR180 file on the glasses with head tracking from
 XRLinuxDriver (OpenTrack UDP), keyboard controls, a frame-timing log and per-file settings

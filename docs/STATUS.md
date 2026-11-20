@@ -1212,22 +1212,22 @@ flicker` on a near-static shot, `--timing-log` with 3D on against off.
   from the SDK documentation's text).
 
 ## Releases (2026-11-19)
-- v0.1.0, Linux only: prepared on branch `claude/release-v0.1.0`, pending merge and tag. `meson.build`
-  already says 0.1.0. `CHANGELOG.md` holds the release notes (its 0.1.0 section says `unreleased`
-  until the merge date is put in); the README has a Releases section and the maintainer checklist.
+- v0.1.0, Linux only: merged in PR #91 (`6f7740d`) and tagged `v0.1.0` on that commit; the tag's CI run
+  made the draft release (tarball and `.sha256sum`). `CHANGELOG.md` holds the release notes (its 0.1.0
+  heading still says `unreleased`); the README has a Releases section and the maintainer checklist.
 - CI `dist` (ubuntu-24.04): `meson dist --no-tests`, checks of the tarball's contents (build files
   present; no build output, libraries, VITURE SDK headers or FFmpeg/mpv), then the tarball is
   unpacked elsewhere and built and tested with the seven smoke tests required to pass; uploads
   `xrdome-dist` (`.tar.xz` and `.sha256sum`). CI `release` (only for a pushed `v*` tag, the only
   job with `contents: write`): checks the tag against `meson.build` and that CHANGELOG has a section for
   it (a warning if it is still undated), then `gh release create --draft` with that section as the notes. Draft only.
-- Packaging: `packaging/gentoo/media-video/xrdome/xrdome-0.1.0.ebuild` (`~amd64`, no checksum; the
-  `Manifest` is generated from the published tarball) and `packaging/arch/PKGBUILD`
-  (`sha256sums=('SKIP')` until release). The Arch CI job only checks the PKGBUILD's syntax and that
-  its version and the ebuild's name match `meson.build`.
-- Not verified: the ebuild has not been built with `emerge`, the PKGBUILD not with `makepkg` on a
-  real Arch box, and the `dist` and `release` jobs have run only after this change merges (the
-  release job only on a tag).
+- Packaging: `packaging/gentoo/media-video/xrdome/xrdome-0.1.0.ebuild` (`~amd64`) with a `Manifest`
+  and `packaging/arch/PKGBUILD` with the tarball's sha256 (`b895efed...d658e`, 500220 bytes), both
+  from the release tarball. The Arch CI job only checks the PKGBUILD's syntax and that its version
+  and the ebuild's name match `meson.build`.
+- Not verified: the ebuild has not been built with `emerge` and its `Manifest` line was computed by
+  a script, not `ebuild manifest`; the PKGBUILD has not been built with `makepkg` on a real Arch box.
+  The tag first pointed at `897d254` (before #91) and was moved to `6f7740d` before the release was made.
 - Not in the release: the macOS and Windows builds, depth 3D for films (issue #74, the glasses run),
   the VITURE pose helper (its hardware checklist), and depth 3D Task 6 (issue #71).
 

@@ -15,8 +15,8 @@ makedepends=('meson' 'cmocka')
 checkdepends=('cmocka' 'xorg-server-xvfb' 'xorg-xauth' 'xorg-xrandr' 'diffutils' 'ttf-dejavu')
 optdepends=('python: xrdome-tools (run from the source tree, not installed by this package)')
 source=("$pkgname-$pkgver.tar.xz::$url/releases/download/v$pkgver/$pkgname-$pkgver.tar.xz")
-# Filled in at release: the tarball's sha256 is in the release's .sha256sum file.
-sha256sums=('SKIP')
+# The release tarball's sha256, from the release's .sha256sum file (v0.1.0).
+sha256sums=('b895efed5d1403d92971f2142246a6d4fd4a0885167ff5504dec5038619d658e')
 
 build() {
   arch-meson "$pkgname-$pkgver" build
