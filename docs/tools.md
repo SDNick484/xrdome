@@ -217,7 +217,7 @@ models appear in `models` as `dav2s-ncnn-*` (and the source as `Any_V2_S_hf`) wi
 ## to3d
 
     xrdome-tools to3d INPUT [--model Any_V2_S|VDA_S] [--divergence D] [--convergence C]
-        [--foreground-scale F] [--half] [--cpu] [--quality high|normal|small] [--tmp DIR]
+        [--foreground-scale F] [--depth-resolution N] [--half] [--cpu] [--quality high|normal|small] [--tmp DIR]
         [-o PATH | --outdir DIR] [--force] [--dry-run]
 
 Converts 2D video to side-by-side 3D with iw3, then finishes it through `transcode`, so the
@@ -229,6 +229,10 @@ depth model in place (see `models`).
   non-commercial Base and Large models, is refused as "not an allowed model".
 - `--divergence` (default 2.0), `--convergence` (default 0.5), `--foreground-scale` (default
   0, not passed to iw3): iw3's own options, defaults from the owner's sbs-test.
+- `--depth-resolution N`: the depth model's input size (short side), passed to iw3 as
+  `--resolution`. iw3's default is 392; at least 224. The depth model is most of the time per
+  frame, so smaller is much faster, at the cost of softer depth edges (hair, fingers). Judge it on
+  the glasses before using it for a whole video.
 - `--half`: half SBS instead of full SBS.
 - `--cpu`: run without CUDA or ROCm. Without it, `to3d` refuses (exit 2) when it has no GPU to
   run on: on the CPU a few minutes of video takes hours, against about 60 fps on an RTX 5070 Ti.
@@ -241,8 +245,8 @@ depth model in place (see `models`).
 The frame rate is kept: iw3's `--max-fps` is set to the source rate rounded up (120 for
 119.88). On NVIDIA, iw3 encodes HEVC with NVENC itself and `transcode` only remuxes and tags
 it; elsewhere iw3 writes a libx264 CRF 12 intermediate that `transcode` encodes with VA-API or
-in software. The output name is `<name>_<AnyV2S|VDAS>_div<D>[_c<C>][_fs<F>]_FSBS.mkv`
-(`_HSBS` with `--half`), with `_c` and `_fs` only when not the default, for example
+in software. The output name is `<name>_<AnyV2S|VDAS>_div<D>[_c<C>][_fs<F>][_dr<N>]_FSBS.mkv`
+(`_HSBS` with `--half`), with `_c`, `_fs` and `_dr` only when not the default, for example
 `pan_AnyV2S_div2.0_FSBS.mkv` or `pan_VDAS_div3.0_c0.65_fs1.0_FSBS.mkv`. iw3's command and the
 decisions go to `<output>.log`, with the transcode's.
 
@@ -269,10 +273,28 @@ test passes.
 
     HSA_OVERRIDE_GFX_VERSION=11.0.2 xrdome-tools to3d INPUT
 
-`11.0.0` and `11.0.1` abort with `HSA_STATUS_ERROR_INVALID_ISA`. Measured 2026-11-20 on a
-ThinkPad P14s (torch 2.9.1+rocm6.4, `Any_V2_S`, a 608x1080 60 fps source): about 2.4 frames per
-second, so ten minutes of 60 fps video takes about four hours; convert long videos on an NVIDIA
-machine.
+`11.0.0` and `11.0.1` abort with `HSA_STATUS_ERROR_INVALID_ISA`. AMD's own gfx1152 build of
+PyTorch (ROCm 10.2) needs no override but measured no faster.
+
+**Fast attention on Radeon.** iw3's depth models are vision transformers, and PyTorch keeps its
+fast attention kernels (AOTriton) off on Radeon GPUs as "experimental"; without them every
+attention layer takes the slow path. On ROCm, `to3d` sets
+`TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1` before its GPU test and iw3 (`path:
+attention=aotriton`). A value already in the environment wins: `=0` turns it off. It does
+nothing on CUDA or the CPU.
+
+Measured 2026-11-20 on a ThinkPad P14s (Radeon 860M, torch 2.9.1+rocm6.4 under the override,
+`Any_V2_S`, a 608x1080 60 fps AV1 source, 3 s clip):
+
+| Setting | Frames/s | 10 min of 60 fps |
+|---|---|---|
+| default attention, depth 392 | 2.5 | about 4 h |
+| fast attention, depth 392 | 5.3 | about 1.9 h |
+| fast attention, `--depth-resolution 280` | 9.9 | about 1 h |
+
+The fast path's output against the default path's: PSNR 48.7 dB, SSIM 0.994 (the same picture,
+with rounding differences). Larger iw3 batches were slower on this iGPU, and the stereo network
+is under a tenth of the time. Long videos are still faster on an NVIDIA machine.
 
 Not yet verified on hardware: ROCm on other Radeons, and how iw3 fits a source that is not 16:9
 into the 1920x1080 eye (letterbox expected, not checked).

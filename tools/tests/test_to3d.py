@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 
@@ -52,7 +53,13 @@ def test_iw3_argv_leading_dash():
     assert opt(a, "-i") == "./-x.mp4"
 
 
+def test_iw3_argv_depth_resolution():
+    assert "--resolution" not in argv()
+    assert opt(argv(depth_resolution=280), "--resolution") == "280"
+
+
 def test_output_stem():
+    assert to3d.output_stem("pan", "Any_V2_S", 2.0, 0.5, 0.0, 280) == "pan_AnyV2S_div2.0_dr280"
     assert to3d.output_stem("pan", "Any_V2_S", 2.0, 0.5, 0.0) == "pan_AnyV2S_div2.0"
     assert to3d.output_stem("pan", "VDA_S", 3.0, 0.65, 1.0) == "pan_VDAS_div3.0_c0.65_fs1.0"
     assert to3d.output_stem("pan", "Any_V2_S", 2, 0.5, 0.5) == "pan_AnyV2S_div2.0_fs0.5"
@@ -76,6 +83,8 @@ class Rec(Runner):
 def env(monkeypatch, tmp_path):
     for var in ("XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"):
         monkeypatch.setenv(var, str(tmp_path / var.lower()))
+    monkeypatch.setenv(to3d.AOTRITON_VAR, "")  # recorded, so the test's own change is undone
+    monkeypatch.delenv(to3d.AOTRITON_VAR)
     p = config.paths()
     src = tmp_path / "pan.mp4"
     src.write_bytes(b"x")
@@ -203,3 +212,45 @@ def test_dry_run_runs_nothing(env, capsys):
     assert env["transcode"] == []
     assert not (env["src"].parent / "pan_AnyV2S_div2.0_FSBS.mkv.log").exists()
     assert "then: xrdome-tools transcode" in capsys.readouterr().out
+
+
+def test_rocm_attention_on_by_default(env, capsys, monkeypatch):
+    seen = {}
+
+    def check(r, p):
+        seen["at_check"] = os.environ.get(to3d.AOTRITON_VAR)
+        return hw.TorchCheck("rocm", "rocm", "gfx1152")
+
+    monkeypatch.setattr(iw3env, "check", check)
+    assert cli.main(["to3d", str(env["src"])]) == 0
+    assert seen["at_check"] == "1"  # the GPU test runs the attention iw3 will use
+    assert os.environ[to3d.AOTRITON_VAR] == "1"  # and iw3 inherits it
+    assert "path: attention=aotriton" in capsys.readouterr().out
+
+
+def test_rocm_attention_explicit_value_wins(env, capsys, monkeypatch):
+    monkeypatch.setenv(to3d.AOTRITON_VAR, "0")
+    env["compute"] = "rocm"
+    assert cli.main(["to3d", str(env["src"])]) == 0
+    assert os.environ[to3d.AOTRITON_VAR] == "0"
+    assert f"path: attention=default ({to3d.AOTRITON_VAR}=0 from the environment)" in capsys.readouterr().out
+
+
+def test_no_attention_line_on_cuda(env, capsys):
+    assert cli.main(["to3d", str(env["src"])]) == 0
+    assert "path: attention=" not in capsys.readouterr().out
+
+
+def test_depth_resolution(env, capsys):
+    assert cli.main(["to3d", str(env["src"]), "--depth-resolution", "280"]) == 0
+    (iw3,) = env["calls"]
+    assert opt(iw3, "--resolution") == "280"
+    (_, dst, _, _), = env["transcode"]
+    assert dst.name == "pan_AnyV2S_div2.0_dr280_FSBS.mkv"
+    assert "depth input 280" in capsys.readouterr().out
+
+
+def test_depth_resolution_too_small(env, capsys):
+    assert cli.main(["to3d", str(env["src"]), "--depth-resolution", "100"]) == 2
+    assert "at least 224" in capsys.readouterr().err
+    assert env["calls"] == []
