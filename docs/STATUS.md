@@ -10,7 +10,7 @@ Plan: `docs/superpowers/plans/2026-11-11-xrdome.md` (Tasks 0-10 done; Task 10's 
 - Playback through libmpv (VA-API decode) into a per-eye OpenGL 3.3 pass, 3840x1080@60 SBS output.
 - Head tracking from XRLinuxDriver over OpenTrack UDP (port 4242); recenter keys; seek; audio.
 - Frame timing: 0.6% late frames with defaults (mpv profile `fast`, bicubic, 10-bit FBO + dither).
-- Options and keys: see README.
+- Options and keys: see `docs/usage.md`.
 - CI (GitHub Actions) builds with `-Dwerror=true` and runs the whole suite, failing if any of the seven
   Xvfb smoke tests (`smoke`, `smoke_tracking`, `smoke_sbs`, `smoke_photos`, `smoke_depth`,
   `smoke_depth_serve`, `smoke_depth_video`) skips, in two jobs: Ubuntu 24.04 (mpv 0.37)
@@ -18,6 +18,38 @@ Plan: `docs/superpowers/plans/2026-11-11-xrdome.md` (Tasks 0-10 done; Task 10's 
   SDL3, Mesa 26.2 on 2026-11-14). Arch's SDL adds `-D_GNU_SOURCE=1` to the cflags, and its
   `xvfb-run` (T2 SDE's copy of an old Debian script) sleeps 3 s per start, so `smoke` takes about 315 s there; that job
   runs with `--timeout-multiplier 2`.
+
+## Summary of the hardware runs (moved from the README, 2026-11-21)
+
+Status: plays a side-by-side VR180 file on the glasses with head tracking from
+XRLinuxDriver (OpenTrack UDP), keyboard controls, a frame-timing log and per-file settings
+memory. On the Viture Pro XR, with the default mpv profile, bicubic sampling and a 10-bit
+texture, 0.6% of swap intervals were late (see [Performance notes](measurements.md#performance-notes)). Per-file
+settings memory was run on the Viture Pro XR on 2026-11-13: saving a zoom change, restoring it,
+and keeping it across a rename were seen to work; the other remembered settings and `--forget`
+have only passed the unit and Xvfb smoke tests. On the XREAL Air 2 Pro (2026-11-14) VR180 and flat
+files played with head tracking much as on the Viture, with and without `--device xreal-air2pro`. See the sections below, `docs/superpowers/specs/2026-11-11-xrdome-design.md` and
+`docs/superpowers/plans/2026-11-11-xrdome.md`.
+
+Flat video and format detection (an ordinary film opens as a flat screen fixed in the room, a
+VR180 file opens as before, both without flags; see [Flat video](flat-video.md#flat-video) and
+[Format detection](detection.md#format-detection)) were run on the Viture Pro XR on 2026-11-14: flat 1080p
+and 4K films opened flat at 1.5 by frame shape, and the owner's VR180 files as VR180; the screen
+stayed put when the head turned, `[` `]` `Z` `L` `R` `?` `I` and Up/Down worked; half SBS (a test
+clip) showed the right depth and `S` inverted it; flat and VR180 records restored; mipmaps cost no
+more than 0.14 percentage points of missed vsyncs. Not seen on the glasses: whether mipmaps reduce
+shimmer, a real half-SBS film, subtitles, top-bottom and full SBS. The sections below have the
+details.
+
+A second run on both pairs of glasses (2026-11-14, afternoon and evening) covered the newer
+features. The automatic switch to SBS works on the XREAL Air 2 Pro (about 2.5 s, and back at exit);
+on the Viture Pro XR it worked once, then XRLinuxDriver 2.11.9 hung on the switch request (see
+[Switching to SBS](setup.md#switching-to-sbs)). Resume worked on an 81-minute film and an 8K file;
+debanding costs little on a 4K film but saturates the GPU at 8K; mpv's scalers cost almost nothing
+and look slightly better at most; the curved screen was liked, at R = 1; a full side-by-side 3D
+film played in 3D without flags. Tracking: the Viture drifted 0.02 degrees in 5 minutes; the XREAL
+must lie still while the driver calibrates it (see [Tracking notes](measurements.md#tracking-notes)). Still not
+seen on the glasses: subtitles, shimmer, a real half-SBS film. The sections below have the numbers.
 
 ## Per-file settings memory (merged in PR #1, `main` at `3358de5`)
 
@@ -384,7 +416,7 @@ side-by-side, waits for the output and plays; at exit it switches them back. `--
 auto|off`, ini `[general] sbs_switch`, default `auto`. Code: `src/driver/xrdriver.c` (the driver's
 files: state parsing, request writing; nothing SBS-specific beyond the request text, so other
 requests can reuse it), `src/display/sbs.c` (the decision, the wait, switching back), wired in
-`src/main.c` before the window opens. README: Flags, Config file, Switching to SBS.
+`src/main.c` before the window opens. `docs/usage.md`: Flags, Config file; `docs/setup.md`: Switching to SBS.
 
 Request format, from XRLinuxDriver's source at `da303d2` (2026-11-05), read, not copied:
 `sbs_mode=enable` or `sbs_mode=disable`, one `key=value` line, written to
@@ -545,7 +577,7 @@ Decisions:
   shader arithmetic). `bicubic-ar` looks strictly better in the sandbox (same steepness, no halo)
   for 4 more reads, but it has not been seen or timed on the glasses, so the evidence is not
   enough to change the default.
-- No ini key: `filter` has not been one (README Flags; `ini_new_flags_are_not_keys` checks it).
+- No ini key: `filter` has not been one (`docs/usage.md`, Flags; `ini_new_flags_are_not_keys` checks it).
   The issue assumed an ini key existed; adding one is a separate decision.
 - All filters share one clamp: every tap goes through `tap()`, so no read reaches the other eye's
   pixels or the shared middle texel of an odd split, for the new 4 reads as for the 9.
@@ -828,7 +860,7 @@ layout=sbs-lr (file name "SBS") packing=full (auto)`. Depth right, each eye its 
 - EDID and `xrandr --props` for both glasses in both modes: `docs/hardware/`. Viture: `CVT`,
   `VITURE`; 1080p mode 60, 90 and 120 Hz, SBS mode 3840x1080 at 60 Hz only. XREAL: `MRG`,
   `Air 2 Pro`; the same modes. Both report the placeholder serial 0x88888800.
-- The README's XREAL udev rule is what gives the driver access: the XREAL's hidraw and USB nodes
+- The XREAL udev rule (now in `docs/setup.md`) is what gives the driver access: the XREAL's hidraw and USB nodes
   are `root:plugdev 0660` and no other rule names its vendor ID 3318 (inferred; the rule was not
   removed to show it).
 - After a replug the glasses' output name changed (`DisplayPort-1` to `DisplayPort-0`); xrdome
@@ -896,7 +928,7 @@ convergence on the XREAL.
 
 Spec `docs/superpowers/specs/2026-11-19-depth-3d-design.md` section 7 (first half), plan
 `docs/superpowers/plans/2026-11-19-depth-3d.md` Task 3. No depth yet: an image or a directory opens
-as a flat mono screen. README, Photos.
+as a flat mono screen. `docs/photos.md`.
 - Detection: `ffprobe` now also runs with `-show_format`; `format_name` of `image2`, `image2pipe`
   or `*_pipe` makes `xrd_probe.image` and `xrd_detect.image`. An image is flat mono (source
   `image file`) wherever a flag, the record, metadata or the file name leave it open. No probe
@@ -933,7 +965,7 @@ Orientation tags written, shown by xrdome (`--frames`, `--dump-frame`), compared
   behaviour this mpv has.
 
 Tests: `test_probe` (the format block, fixtures `image_*.txt`), `test_detect` (photo rows),
-`test_imagedir`, `test_config` (`--press`), `test_controls` (README key list), and the Xvfb smoke test
+`test_imagedir`, `test_config` (`--press`), `test_controls` (the key list in `docs/usage.md`), and the Xvfb smoke test
 `smoke_photos` (registered in `meson.build` and in the CI "Require the smoke tests to have run"
 lists): eight orientations, a directory of a landscape and a portrait JPEG with PageDown and PageUp
 and the ends, a single file, an empty directory, per-photo zoom records.
@@ -945,7 +977,7 @@ Limits: a photo mpv cannot decode ends the run, as a film does; HEIC is not open
 ## Depth 3D for photos (issue #69, Task 4 of the depth 3D plan, 2026-11-19)
 
 Spec `docs/superpowers/specs/2026-11-19-depth-3d-design.md` section 6 and the keys of section 7.
-A photo whose depth `xrdome-tools depth photo` has cached is drawn in 3D. README, Depth 3D for photos.
+A photo whose depth `xrdome-tools depth photo` has cached is drawn in 3D. `docs/photos.md`, Depth 3D for photos.
 - Cache (read side, `src/render/depthmap.c`): key = sha256 of the photo's bytes (own FIPS 180-4
   code), `$XDG_CACHE_HOME/xrdome-tools/depth/<key>-dav2s-v1.pgm`, PGM `P5`/65535/big-endian with an
   exact body length. `test_depthmap` runs `tools/xrdome_depth/cache.py` to write a file and reads it
@@ -974,7 +1006,7 @@ Not seen by eye on the glasses: default strength and plane, doubled edges (owner
 ## Depth helper service (issue #70, Task 5 of the depth 3D plan, 2026-11-19)
 
 Spec `docs/superpowers/specs/2026-11-19-depth-3d-design.md` section 7. A photo without cached depth
-opens in 2D and turns 3D when `xrdome-tools depth serve` has made its depth. README, Depth 3D for
+opens in 2D and turns 3D when `xrdome-tools depth serve` has made its depth. `docs/photos.md`, Depth 3D for
 photos; docs/tools.md, depth serve.
 - Helper (`tools/xrdome_depth/serve.py`, launcher `depth serve`): one thread, `selectors` loop,
   Unix socket mode 0600, JSON lines. Cached photos are answered at once; the queue gives the newest
@@ -1011,7 +1043,7 @@ the reply lands, as with a cached depth at PageDown; their cost on the glasses i
 
 Spec `docs/superpowers/specs/2026-11-19-depth-3d-design.md` section 8, first half. `D` on a flat mono
 film sends its frames to `depth serve`, which makes their depth live and writes it back; the film is
-still drawn in 2D (uploading that depth is Task 8). README, Depth for films; docs/tools.md, depth
+still drawn in 2D (uploading that depth is Task 8). `docs/photos.md`, Depth for films; docs/tools.md, depth
 serve and depth bench-video.
 - Player (`src/video/framesink.c`): only for a film, flat, mono, 3D on and a helper configured
   (`xrd_framesink_wanted`); otherwise no FBO, PBO or ring exists. Films start with 3D off (photos
@@ -1060,7 +1092,7 @@ helper's `video:` lines (or `depth bench-video` beside xrdome) on the laptop.
 
 Spec `docs/superpowers/specs/2026-11-19-depth-3d-design.md` section 8, second half. A flat mono film
 is now drawn in 3D from the helper's depth with section 6's pass unchanged (strength and plane keys
-included). README, Depth for films; docs/tools.md, depth serve and depth flicker.
+included). `docs/photos.md`, Depth for films; docs/tools.md, depth serve and depth flicker.
 - Player (`src/main.c`, `video_depth`): each loop iteration, after the frame sink's step, the newest
   depth map in the ring that is newer than the last taken (`xrd_vring_depth_read`, the seqlock: a map
   being overwritten is left for the next frame) goes into the depth texture through
@@ -1212,9 +1244,12 @@ flicker` on a near-static shot, `--timing-log` with 3D on against off.
   from the SDK documentation's text).
 
 ## Releases (2026-11-19)
+- Releases: v0.1.0 published 2026-11-21 (https://github.com/SDNick484/xrdome/releases/tag/v0.1.0),
+  from the draft the tag's CI run made; the tarball was checked, built and tested from its unpacked copy first.
 - v0.1.0, Linux only: merged in PR #91 (`6f7740d`) and tagged `v0.1.0` on that commit; the tag's CI run
   made the draft release (tarball and `.sha256sum`). `CHANGELOG.md` holds the release notes (its 0.1.0
-  heading still says `unreleased`); the README has a Releases section and the maintainer checklist.
+  heading said `unreleased` until 2026-11-21, when it was dated 2026-11-19); `docs/releasing.md` has the
+  Releases section and the maintainer checklist.
 - CI `dist` (ubuntu-24.04): `meson dist --no-tests`, checks of the tarball's contents (build files
   present; no build output, libraries, VITURE SDK headers or FFmpeg/mpv), then the tarball is
   unpacked elsewhere and built and tested with the seven smoke tests required to pass; uploads

@@ -286,6 +286,10 @@ jobs:
       - name: Test
         run: python3 -m pytest tools/tests -q
 
+      # Every relative link and #anchor in README.md and docs/*.md resolves.
+      - name: Check Markdown links
+        run: python3 tools/check_md_links.py
+
   # The source release: `meson dist` makes xrdome-<version>.tar.xz, then the tarball is
   # unpacked somewhere else and built and tested from there, so a file the build needs
   # but git does not track, or one the tarball leaves out, fails here and not for a user.
@@ -334,7 +338,7 @@ jobs:
           tar -tf "$tarball" > "$RUNNER_TEMP/files.txt"
           wc -l < "$RUNNER_TEMP/files.txt"
           # What a build or the tests read at run time.
-          for f in meson.build meson.options LICENSE README.md CHANGELOG.md \
+          for f in meson.build meson.options LICENSE README.md CHANGELOG.md docs/usage.md \
                    tools/embed_shaders.py src/render/shaders/vr180.frag \
                    src/render/shaders/sharpen.frag tests/smoke_player.sh \
                    tools/xrdome-tools tools/tests helpers/xrdome-pose-viture/tests/fake_include; do
@@ -421,7 +425,7 @@ jobs:
             echo "::error::CHANGELOG.md has no section for $ver"; exit 1
           fi
           # The heading is not part of the notes, so an undated section still makes good notes;
-          # say so, so that the date gets put in (README, Release checklist, step 2).
+          # say so, so that the date gets put in (docs/releasing.md, Release checklist, step 2).
           case "$heading" in
             *nreleased*) echo "::warning::CHANGELOG.md still says '$heading': date it" ;;
           esac

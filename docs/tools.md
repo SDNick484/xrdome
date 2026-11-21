@@ -413,7 +413,7 @@ model.
 ### depth serve
 
 The helper service xrdome asks for depth when it opens a photo with none cached (spec section 7).
-xrdome starts it by itself (README, Depth 3D for photos); running it by hand is for keeping it warm
+xrdome starts it by itself ([Depth 3D for photos](photos.md#depth-3d-for-photos)); running it by hand is for keeping it warm
 or seeing its output. The work is done by `tools/xrdome_depth/serve.py` in the depth venv: it loads
 the 518x392 model and runs it once before it opens the socket (a few seconds), then serves photos
 with `depth photo`'s code, writing the same cache files.
