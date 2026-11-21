@@ -4,9 +4,12 @@
 Default: yaw follows a sine between -40 and 40 degrees with a 4 s period,
 pitch and roll 0, at 100 Hz to 127.0.0.1:4242, until interrupted.
 
---yaw DEG sends a constant yaw instead (pitch and roll 0). --count N stops
-after N packets. --rate HZ sets the packet rate. Angles are the driver's NWU
-convention: positive yaw is a turn to the LEFT.
+--yaw DEG sends a constant yaw instead. --pitch-amplitude DEG adds a pitch
+sine (looking up and down) with its own --pitch-period (default 6 s, so with
+the 4 s yaw sweep the view wanders rather than tracing one line); --pitch DEG
+sends a constant pitch instead. Roll is always 0. --count N stops after N
+packets. --rate HZ sets the packet rate. Angles are the driver's NWU
+convention: positive yaw is a turn to the LEFT, positive pitch looks DOWN.
 
 Packet: little-endian <6dI, x y z yaw pitch roll (doubles), frame (uint32).
 """
@@ -28,10 +31,18 @@ def main():
                     help="sine sweep amplitude in degrees (default 40)")
     ap.add_argument("--period", type=float, default=4.0,
                     help="sine sweep period in seconds (default 4)")
+    ap.add_argument("--pitch", type=float, default=None,
+                    help="constant pitch in degrees (positive looks down)")
+    ap.add_argument("--pitch-amplitude", type=float, default=0.0,
+                    help="pitch sine amplitude in degrees (default 0: no pitch sweep)")
+    ap.add_argument("--pitch-period", type=float, default=6.0,
+                    help="pitch sine period in seconds (default 6)")
     ap.add_argument("--count", type=int, default=0, help="stop after N packets (0 = forever)")
     args = ap.parse_args()
     if args.rate <= 0:
         ap.error("--rate must be positive")
+    if args.period <= 0 or args.pitch_period <= 0:
+        ap.error("--period and --pitch-period must be positive")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     dest = (args.host, args.port)
@@ -46,7 +57,12 @@ def main():
                 yaw = args.yaw
             else:
                 yaw = args.amplitude * math.sin(2.0 * math.pi * (now - t0) / args.period)
-            pkt = struct.pack("<6dI", 0.0, 0.0, 0.0, yaw, 0.0, 0.0, frame & 0xFFFFFFFF)
+            if args.pitch is not None:
+                pitch = args.pitch
+            else:
+                pitch = args.pitch_amplitude * math.sin(
+                    2.0 * math.pi * (now - t0) / args.pitch_period)
+            pkt = struct.pack("<6dI", 0.0, 0.0, 0.0, yaw, pitch, 0.0, frame & 0xFFFFFFFF)
             try:
                 sock.sendto(pkt, dest)
             except OSError:

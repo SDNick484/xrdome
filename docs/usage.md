@@ -87,7 +87,7 @@ start gives a tilted picture, and `R` does not correct that. Hold your head leve
 `--device viture-pro|xreal-air2pro`, `--zoom F`, `--proj auto|hequirect|flat`,
 `--layout auto|sbs-lr|sbs-rl|tb-lr|tb-rl|mono`, `--packing auto|half|full`,
 `--zoom-mode screen|magnify`, `--screen fixed|locked`, `--screen-curve off|R`, `--mipmap on|off`,
-`--windowed`, `--sbs-switch auto|off`,
+`--windowed`, `--window-size WxH`, `--window-eye both|left|right`, `--sbs-switch auto|off`,
 `--hwdec NAME` (mpv's hwdec; default `vaapi` on Linux, `videotoolbox` on macOS, `d3d11va-copy`
 on Windows; for example
 `nvdec` or `auto-safe` on an NVIDIA machine), `--require-hwdec` (exit 1 unless mpv decodes
@@ -99,6 +99,15 @@ zero-copy: any decoder but `no` and the `-copy` ones), `--timing-log PATH`,
 `--depth-helper PROGRAM|off` (see [Depth 3D for photos](photos.md#depth-3d-for-photos)), `--no-memory`, `--forget`,
 `--resume`, `--no-resume` (the last four are described under
 [Per-file settings](per-file-settings.md#per-file-settings)).
+
+`--window-size WxH` sets the size of the `--windowed` desktop window in pixels (default
+1280x360; each value 16 to 8192) and `--window-eye left|right` fills the window with one eye
+instead of both side by side (default `both`); either one implies `--windowed`. With both eyes
+each gets half the width, so `--window-size 1920x540` gives 960x540 an eye; with one eye the
+window is that eye, so `--window-eye left --window-size 1920x1080` is the left eye as the glasses
+show it (without a size, one eye is 640x360). They are for demos, screenshots and screen
+recordings without glasses (see [Recording a demo clip](setup.md#recording-a-demo-clip)); the
+one-eye window is drawn through an offscreen target twice its width and has not been timed.
 
 `--proj auto|hequirect|flat` (default `auto`) chooses the projection: `hequirect` is VR180
 (half-equirectangular), `flat` an ordinary flat screen (see [Flat video](flat-video.md#flat-video)), `auto`

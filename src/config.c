@@ -210,6 +210,47 @@ static int parse_content_fov(const char *s, float *h, float *v, char *err, size_
     }
 }
 
+/* WxH, both whole numbers from XRD_WINDOW_MIN to XRD_WINDOW_MAX, nothing after. */
+static int parse_window_size(const char *s, int *w, int *h, char *err, size_t errlen)
+{
+    char *end;
+    long lw = strtol(s, &end, 10);
+    if (end == s || *end != 'x') {
+        set_err(err, errlen, "--window-size: '%s' is not WxH in pixels (e.g. 1920x540)", s);
+        return -1;
+    }
+    const char *hs = end + 1;
+    long lh = strtol(hs, &end, 10);
+    if (end == hs || *end != '\0') {
+        set_err(err, errlen, "--window-size: '%s' is not WxH in pixels (e.g. 1920x540)", s);
+        return -1;
+    }
+    if (lw < XRD_WINDOW_MIN || lw > XRD_WINDOW_MAX || lh < XRD_WINDOW_MIN ||
+        lh > XRD_WINDOW_MAX) {
+        set_err(err, errlen, "--window-size: %s is out of range (each value %d to %d)", s,
+                XRD_WINDOW_MIN, XRD_WINDOW_MAX);
+        return -1;
+    }
+    *w = (int)lw;
+    *h = (int)lh;
+    return 0;
+}
+
+static int parse_window_eye(const char *s, int *eye, char *err, size_t errlen)
+{
+    if (strcmp(s, "both") == 0)
+        *eye = XRD_WINDOW_EYE_BOTH;
+    else if (strcmp(s, "left") == 0)
+        *eye = XRD_WINDOW_EYE_LEFT;
+    else if (strcmp(s, "right") == 0)
+        *eye = XRD_WINDOW_EYE_RIGHT;
+    else {
+        set_err(err, errlen, "--window-eye: '%s' is not both, left or right", s);
+        return -1;
+    }
+    return 0;
+}
+
 void xrd_config_defaults(xrd_config *c)
 {
     memset(c, 0, sizeof *c);
@@ -391,7 +432,8 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
            OPT_MPV_PROFILE, OPT_MPV_OPT, OPT_MPV_LOG, OPT_CONVERGENCE, OPT_FILTER,
            OPT_FBO_FORMAT, OPT_DITHER, OPT_NO_MEMORY, OPT_FORGET, OPT_RESUME, OPT_NO_RESUME,
            OPT_PACKING, OPT_ZOOM_MODE, OPT_SCREEN, OPT_MIPMAP, OPT_DEBAND, OPT_SCREEN_CURVE,
-           OPT_SBS_SWITCH, OPT_MPV_SCALE, OPT_SHARPEN, OPT_HWDEC_NAME, OPT_DEPTH_HELPER };
+           OPT_SBS_SWITCH, OPT_MPV_SCALE, OPT_SHARPEN, OPT_HWDEC_NAME, OPT_DEPTH_HELPER,
+           OPT_WINDOW_SIZE, OPT_WINDOW_EYE };
     static const struct option longopts[] = {
         {"proj", required_argument, NULL, OPT_PROJ},
         {"layout", required_argument, NULL, OPT_LAYOUT},
@@ -403,6 +445,8 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
         {"require-hwdec", no_argument, NULL, OPT_HWDEC},
         {"hwdec", required_argument, NULL, OPT_HWDEC_NAME},
         {"windowed", no_argument, NULL, OPT_WINDOWED},
+        {"window-size", required_argument, NULL, OPT_WINDOW_SIZE},
+        {"window-eye", required_argument, NULL, OPT_WINDOW_EYE},
         {"timing-log", required_argument, NULL, OPT_TIMING},
         {"sync-after-swap", no_argument, NULL, OPT_SYNC},
         {"frames", required_argument, NULL, OPT_FRAMES},
@@ -504,6 +548,16 @@ int xrd_config_parse_args(xrd_config *c, int argc, char **argv, char *err, size_
             break;
         case OPT_WINDOWED:
             c->windowed = true;
+            break;
+        case OPT_WINDOW_SIZE:
+            rc = parse_window_size(optarg, &c->window_w, &c->window_h, err, errlen);
+            if (rc == 0)
+                c->windowed = true;
+            break;
+        case OPT_WINDOW_EYE:
+            rc = parse_window_eye(optarg, &c->window_eye, err, errlen);
+            if (rc == 0 && c->window_eye != XRD_WINDOW_EYE_BOTH)
+                c->windowed = true;
             break;
         case OPT_TIMING:
             rc = set_string("--timing-log", c->timing_log, sizeof c->timing_log, optarg, err, errlen);

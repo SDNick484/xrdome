@@ -53,7 +53,9 @@ With `--pose null` the orientation is fixed; drag with the left mouse button to 
 
 Desktop head-tracking test without glasses: `tools/ot_sweep.py` stands in for the driver and
 sends OpenTrack packets to `127.0.0.1:4242` (yaw sweeping -40 to 40 degrees every 4 s; `--yaw DEG`
-for a constant angle, `--rate HZ`, `--count N`, `--port N`):
+for a constant angle, `--amplitude DEG` and `--period SEC` for the sweep, `--rate HZ`, `--count N`,
+`--port N`). `--pitch-amplitude DEG` adds a sweep up and down with its own `--pitch-period SEC`
+(default 6 s; no pitch sweep unless asked), and `--pitch DEG` holds a constant pitch:
 
 ```sh
 ./build/xrdome --windowed pattern_sbs.mp4      # terminal 1 (default pose: udp-opentrack:port=4242)
@@ -62,6 +64,39 @@ python3 tools/ot_sweep.py                      # terminal 2
 
 The grid pans left and right. Stopping the sender prints `xrdome: pose stale` once and the view
 holds; restarting it prints `xrdome: pose resumed`.
+
+### Recording a demo clip
+
+One eye at full size in a desktop window, a slow scripted head sweep, and `ffmpeg`'s screen grab
+(needs `x11-apps/xwininfo`). The picture in the README was made this way (owner's laptop,
+2026-11-21, a VR180 file).
+
+```sh
+./build/xrdome --window-eye left --window-size 1920x1080 video.mp4 &
+python3 tools/ot_sweep.py --amplitude 22 --period 10 --pitch-amplitude 8 --pitch-period 15 &
+
+# click the xrdome window when the pointer becomes a cross
+eval "$(xwininfo | awk '
+  /Absolute upper-left X/ {print "X="$4}
+  /Absolute upper-left Y/ {print "Y="$4}
+  /^ *Width:/  {print "W="$2}
+  /^ *Height:/ {print "H="$2}')"
+
+ffmpeg -y -f x11grab -framerate 30 -video_size "$((W-2))x$H" -i "$DISPLAY+$X,$Y" -t 30 \
+  -c:v libx264 -crf 18 -pix_fmt yuv420p demo.mp4
+kill %2 %1
+```
+
+- 30 seconds is one whole cycle of both sweeps, so the clip loops.
+- The grab is 2 pixels narrower than the window because the window manager's border puts a
+  screen-wide window 1 pixel in from the edge, and `x11grab` refuses an area that leaves the
+  screen. Use a window smaller than the screen (`--window-size 1600x900`) to grab all of it.
+- Run the `eval` and `ffmpeg` in the same shell: the variables do not carry to another terminal.
+- A sweep wider than the picture's interesting part shows black or empty sky; narrow
+  `--amplitude` until it stays on the subject. For a flat film use about `--amplitude 15
+  --pitch-amplitude 8`.
+- To shrink the file: `ffmpeg -i demo.mp4 -c:v libx264 -preset slow -crf 23 -pix_fmt yuv420p
+  -movflags +faststart small.mp4` (the 30 s clip went from 26 MB to 13 MB).
 
 ## Install on Gentoo
 

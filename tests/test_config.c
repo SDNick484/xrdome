@@ -1601,6 +1601,65 @@ static void ini_rejects_new_keys(void **state)
     }
 }
 
+static void window_size_and_eye_flags(void **state)
+{
+    (void)state;
+    char err[256] = "";
+    xrd_config c;
+
+    xrd_config_defaults(&c);
+    assert_int_equal(c.window_w, 0);
+    assert_int_equal(c.window_h, 0);
+    assert_int_equal(c.window_eye, XRD_WINDOW_EYE_BOTH);
+
+    /* each flag implies --windowed */
+    char *a1[] = {"xrdome", "--window-size", "1920x540", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, a1, err, sizeof err), 0);
+    assert_int_equal(c.window_w, 1920);
+    assert_int_equal(c.window_h, 540);
+    assert_true(c.windowed);
+    assert_int_equal(c.window_eye, XRD_WINDOW_EYE_BOTH);
+
+    xrd_config_defaults(&c);
+    char *a2[] = {"xrdome", "--window-eye", "right", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, a2, err, sizeof err), 0);
+    assert_int_equal(c.window_eye, XRD_WINDOW_EYE_RIGHT);
+    assert_true(c.windowed);
+    assert_int_equal(c.window_w, 0);
+
+    xrd_config_defaults(&c);
+    char *a3[] = {"xrdome", "--window-eye", "left", "--window-size", "1920x1080", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 6, a3, err, sizeof err), 0);
+    assert_int_equal(c.window_eye, XRD_WINDOW_EYE_LEFT);
+    assert_int_equal(c.window_w, 1920);
+    assert_int_equal(c.window_h, 1080);
+
+    /* both is the default and does not by itself ask for a window */
+    xrd_config_defaults(&c);
+    char *a4[] = {"xrdome", "--window-eye", "both", "a.mp4", NULL};
+    assert_int_equal(xrd_config_parse_args(&c, 4, a4, err, sizeof err), 0);
+    assert_false(c.windowed);
+
+    static const char *const bad[] = {"1920", "1920x", "x540", "1920x540x2", "1920X540",
+                                      "8x540", "1920x8", "8193x540", "1920x8193", "-1x540",
+                                      "1920x540 ", "wide"};
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        char v[32];
+        snprintf(v, sizeof v, "%s", bad[i]);
+        char *b[] = {"xrdome", "--window-size", v, "a.mp4", NULL};
+        xrd_config_defaults(&c);
+        err[0] = '\0';
+        assert_int_equal(xrd_config_parse_args(&c, 4, b, err, sizeof err), -1);
+        assert_non_null(strstr(err, "--window-size"));
+        assert_false(c.windowed);
+    }
+
+    char *b2[] = {"xrdome", "--window-eye", "middle", "a.mp4", NULL};
+    xrd_config_defaults(&c);
+    assert_int_equal(xrd_config_parse_args(&c, 4, b2, err, sizeof err), -1);
+    assert_non_null(strstr(err, "--window-eye"));
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -1676,6 +1735,7 @@ int main(void)
         cmocka_unit_test(sbs_switch_flag),
         cmocka_unit_test(sbs_switch_ini),
         cmocka_unit_test(hwdec_flag_and_ini),
+        cmocka_unit_test(window_size_and_eye_flags),
     };
     save_env(NULL);
     int failed = cmocka_run_group_tests(tests, NULL, NULL);

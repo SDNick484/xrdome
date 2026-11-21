@@ -9,6 +9,10 @@
 #include "store/filestate.h"
 #include "video/player_mpv.h"
 
+enum { XRD_WINDOW_EYE_BOTH = 0, XRD_WINDOW_EYE_LEFT, XRD_WINDOW_EYE_RIGHT };
+#define XRD_WINDOW_MIN 16
+#define XRD_WINDOW_MAX 8192
+
 typedef struct {
     char file[4096];
     char pose[128];        /* default "udp-opentrack:port=4242" */
@@ -23,6 +27,10 @@ typedef struct {
     char hwdec[32];        /* --hwdec, [general] hwdec: mpv hwdec; "" = the platform's
                               default (xrd_platform_default_hwdec) */
     bool windowed;         /* development: skip the 3840x1080 check, 1280x360 window */
+    int window_w, window_h; /* --window-size WxH: the --windowed window's size; 0 = default.
+                               Implies --windowed */
+    int window_eye;        /* --window-eye both|left|right: XRD_WINDOW_EYE_*; one eye fills
+                              the window instead of both side by side. Implies --windowed */
     bool sbs_switch;       /* --sbs-switch auto|off, [general] sbs_switch; default auto (true):
                               ask XRLinuxDriver to switch 1080p glasses to SBS at start */
     char timing_log[4096]; /* empty = off */
