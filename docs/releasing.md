@@ -12,11 +12,15 @@ with the matching CHANGELOG section as its notes; the maintainer publishes it by
 
 ## Release checklist (maintainer)
 
-1. Bump `version` in `meson.build`.
+1. Bump `version` in `meson.build`, `pkgver` in `packaging/arch/PKGBUILD` (with `pkgrel=1`), and add
+   an `X.Y.Z-1` entry to `packaging/debian/changelog`: CI checks all three against `meson.build`.
 2. In `CHANGELOG.md`, move `[Unreleased]` into the new version's section and give it the date.
 3. Merge to `main` through a pull request with CI green, including `dist`.
 4. Tag and push: `git tag -a vX.Y.Z -m "xrdome vX.Y.Z"` (or `-s` with a signing key), then
    `git push origin vX.Y.Z`.
 5. Wait for CI to finish the draft release, check its notes and the two attached files, publish it.
-6. Generate the Gentoo `Manifest` (`ebuild xrdome-X.Y.Z.ebuild manifest`) and put the tarball's
-   sha256 in `packaging/arch/PKGBUILD` in a follow-up pull request.
+6. Generate the Gentoo `Manifest` (`ebuild xrdome-X.Y.Z.ebuild manifest`), put the tarball's
+   sha256 in `packaging/arch/PKGBUILD` and regenerate `packaging/arch/.SRCINFO` in a follow-up pull
+   request.
+7. Push `PKGBUILD` and `.SRCINFO` to the AUR ([packaging/arch/README.md](../packaging/arch/README.md))
+   and upload the source package to the PPA ([packaging/debian/README.md](../packaging/debian/README.md)).

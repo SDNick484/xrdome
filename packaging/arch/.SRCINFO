@@ -1,0 +1,26 @@
+pkgbase = xrdome
+	pkgdesc = VR180 and flat video player for XR glasses with head tracking
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/SDNick484/xrdome
+	arch = x86_64
+	license = GPL-2.0-or-later
+	license = MIT
+	checkdepends = cmocka
+	checkdepends = xorg-server-xvfb
+	checkdepends = xorg-xauth
+	checkdepends = xorg-xrandr
+	checkdepends = diffutils
+	checkdepends = ttf-dejavu
+	makedepends = meson
+	makedepends = cmocka
+	depends = glibc
+	depends = mpv
+	depends = sdl2
+	depends = libepoxy
+	depends = ffmpeg
+	optdepends = python: xrdome-tools (run from the source tree, not installed by this package)
+	source = xrdome-0.1.0.tar.xz::https://github.com/SDNick484/xrdome/releases/download/v0.1.0/xrdome-0.1.0.tar.xz
+	sha256sums = b895efed5d1403d92971f2142246a6d4fd4a0885167ff5504dec5038619d658e
+
+pkgname = xrdome

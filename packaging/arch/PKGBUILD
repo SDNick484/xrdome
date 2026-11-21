@@ -8,7 +8,7 @@ url='https://github.com/SDNick484/xrdome'
 # GPL-2.0-or-later, plus AMD's MIT licence for the sharpen.frag shader.
 license=('GPL-2.0-or-later' 'MIT')
 # ffmpeg is here for ffprobe, which xrdome runs to detect the format; nothing is linked.
-depends=('mpv' 'sdl2' 'libepoxy' 'ffmpeg')
+depends=('glibc' 'mpv' 'sdl2' 'libepoxy' 'ffmpeg')
 # cmocka is also a makedepend: meson.build asks for it at configure time, even for --nocheck.
 makedepends=('meson' 'cmocka')
 # The smoke tests need Xvfb; diffutils and a font are what the Arch CI job installs for them.
@@ -31,4 +31,10 @@ check() {
 
 package() {
   meson install -C build --destdir "$pkgdir"
+  # MIT is not one of Arch's common licences, so its text goes with the package: AMD's notice,
+  # which is only in the shader's header comment.
+  sed -n 's|^// \{0,1\}||; /^Copyright (c) 2017-2019 Advanced Micro Devices/,/DEALINGS IN THE SOFTWARE\.$/p' \
+    "$pkgname-$pkgver/src/render/shaders/sharpen.frag" > LICENSE-MIT-AMD
+  grep -q 'DEALINGS IN THE SOFTWARE' LICENSE-MIT-AMD
+  install -Dm644 LICENSE-MIT-AMD "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT-AMD"
 }

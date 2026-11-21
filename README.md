@@ -73,7 +73,8 @@ On the glasses, with the driver running:
 
 [docs/setup.md](docs/setup.md) has the build dependencies, the udev rules, how to start the
 driver and the test patterns. Packages: [Gentoo](packaging/gentoo/README.md) (an ebuild for a
-local overlay) and [Arch](packaging/arch/PKGBUILD) (a `PKGBUILD`).
+local overlay), [Arch](packaging/arch/README.md) (a `PKGBUILD` for the AUR) and
+[Debian and Ubuntu](packaging/debian/README.md) (build a `.deb` from the tarball).
 
 ## Keys
 

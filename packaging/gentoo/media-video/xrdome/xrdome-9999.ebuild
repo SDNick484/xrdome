@@ -25,11 +25,10 @@ RDEPEND="
 	media-video/ffmpeg
 	media-video/mpv[libmpv]
 "
-# meson.build asks for cmocka unconditionally (dependency('cmocka')), even
-# when the tests are not run, so it is a build dependency without the flag.
+# cmocka is only for the unit tests (meson's -Dtests, from USE=test).
 DEPEND="
 	${RDEPEND}
-	dev-util/cmocka
+	test? ( dev-util/cmocka )
 "
 # tools/embed_shaders.py generates shaders_gen.h at build time.
 BDEPEND="
@@ -37,8 +36,15 @@ BDEPEND="
 	virtual/pkgconfig
 "
 
+src_configure() {
+	local emesonargs=(
+		$(meson_feature test tests)
+	)
+	meson_src_configure
+}
+
 src_test() {
-	# The three smoke tests need xvfb-run and skip (77) without it; the unit
+	# The smoke tests need xvfb-run and skip (77) without it; the unit
 	# tests run either way.
 	meson_src_test
 }

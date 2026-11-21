@@ -5,6 +5,14 @@ All notable changes to xrdome are listed here, in the format of
 
 ## [Unreleased]
 
+### Added
+- `debian/` packaging (`packaging/debian/`): builds a `.deb` from the release tarball; built and
+  installed on Ubuntu 24.04 and Debian 13, and by a new CI job on Ubuntu 24.04.
+- `packaging/arch/.SRCINFO` and instructions for publishing the `PKGBUILD` on the AUR; CI checks
+  that `.SRCINFO` matches the `PKGBUILD`.
+- meson option `tests` (`auto` by default): cmocka is needed only for the unit tests, which are
+  left out when it is missing (`-Dtests=enabled` requires it). The live Gentoo ebuild uses it.
+
 ### Fixed
 - `xrdome-tools to3d` on a Radeon PyTorch's ROCm build has no code for (the Radeon 860M,
   gfx1152) no longer says `compute=rocm` and then crashes inside iw3 with `HIP error: invalid
