@@ -19,19 +19,29 @@ DEFAULT_DIVERGENCE = 2.0
 DEFAULT_CONVERGENCE = 0.5
 DEFAULT_FG_SCALE = 0.0
 INTERMEDIATE_CRF = "12"
+# iw3's depth models are vision transformers. On Radeons PyTorch keeps its fast attention
+# kernels (AOTriton) switched off as "experimental" unless this is set, and every attention
+# layer falls back to the slow math path. Radeon 860M, Any_V2_S, 608x1080 source: 2.46 -> 5.34
+# frames/s, output PSNR 48.7 dB / SSIM 0.994 against the default path (measured 2026-11-20).
+# Ignored on CUDA and the CPU. An explicit value in the environment (for example 0) wins.
+AOTRITON_VAR = "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"
+MIN_DEPTH_RESOLUTION = 224  # iw3's MIN_RESOLUTION for Depth Anything
 
 
 def _num(x: float) -> str:
     return str(float(x))  # 2 -> "2.0", 0.65 -> "0.65", as sbs-test names them
 
 
-def output_stem(stem: str, model: str, divergence: float, convergence: float, fg_scale: float) -> str:
-    """`<stem>_<AnyV2S|VDAS>_div<D>[_c<C>][_fs<F>]`; c and fs only when not the default."""
+def output_stem(stem: str, model: str, divergence: float, convergence: float, fg_scale: float,
+                depth_resolution: int | None = None) -> str:
+    """`<stem>_<AnyV2S|VDAS>_div<D>[_c<C>][_fs<F>][_dr<N>]`; c, fs and dr only when not the default."""
     out = f"{stem}_{MODEL_TOKEN.get(model, model.replace('_', ''))}_div{_num(divergence)}"
     if float(convergence) != DEFAULT_CONVERGENCE:
         out += f"_c{_num(convergence)}"
     if float(fg_scale) != DEFAULT_FG_SCALE:
         out += f"_fs{_num(fg_scale)}"
+    if depth_resolution is not None:
+        out += f"_dr{int(depth_resolution)}"
     return out
 
 
@@ -45,12 +55,14 @@ def max_fps(fps: tuple[int, int]) -> int:
 
 def iw3_argv(paths: config.Paths, src: Path, dst: Path, *, model: str, divergence: float,
              convergence: float, fg_scale: float, fps: tuple[int, int], half: bool, nvenc: bool,
-             cpu: bool = False) -> list[str]:
+             cpu: bool = False, depth_resolution: int | None = None) -> list[str]:
     argv = [str(iw3env.python(paths)), "-m", "iw3.cli", "-i", safe_arg(src), "-o", safe_arg(dst),
             "--depth-model", model, "--divergence", _num(divergence),
             "--convergence", _num(convergence), "--max-fps", str(max_fps(fps))]
     if float(fg_scale) != DEFAULT_FG_SCALE:
         argv += ["--foreground-scale", _num(fg_scale)]
+    if depth_resolution is not None:
+        argv += ["--resolution", str(int(depth_resolution))]
     if model == "VDA_S":
         argv += ["--ema-normalize", "--scene-detect"]
     if half:
@@ -71,6 +83,9 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     ap.add_argument("--divergence", type=float, default=DEFAULT_DIVERGENCE, metavar="D")
     ap.add_argument("--convergence", type=float, default=DEFAULT_CONVERGENCE, metavar="C")
     ap.add_argument("--foreground-scale", type=float, default=DEFAULT_FG_SCALE, metavar="F")
+    ap.add_argument("--depth-resolution", type=int, metavar="N",
+                    help=f"depth model input, short side (iw3's default 392; at least {MIN_DEPTH_RESOLUTION}); "
+                         "smaller is faster and softer")
     ap.add_argument("--half", action="store_true", help="half SBS (1920x1080 in all) instead of full")
     ap.add_argument("--cpu", action="store_true", help="run on the CPU when there is no CUDA or ROCm (slow)")
     ap.add_argument("--quality", choices=["high", "normal", "small"], default="high",
@@ -89,6 +104,9 @@ def run(args: argparse.Namespace) -> int:
         known = f" ({m.licence})" if m else ""
         raise ToolError(f"{args.model}{known}: not an allowed model for to3d; use "
                         + " or ".join(MODELS), EXIT_SETUP)
+    if args.depth_resolution is not None and args.depth_resolution < MIN_DEPTH_RESOLUTION:
+        raise ToolError(f"--depth-resolution {args.depth_resolution}: at least {MIN_DEPTH_RESOLUTION}",
+                        EXIT_SETUP)
     if not args.input.is_file():
         raise ToolError(f"{args.input}: no such file", EXIT_SETUP)
     p = config.paths()
@@ -101,6 +119,9 @@ def run(args: argparse.Namespace) -> int:
     why = iw3env.installed(p)
     if why:
         raise ToolError(f"{why}; run `xrdome-tools setup to3d` first", EXIT_SETUP)
+    # Set before the GPU test, so the test's attention kernel runs the way iw3's will.
+    aot_given = os.environ.get(AOTRITON_VAR)
+    os.environ.setdefault(AOTRITON_VAR, "1")
     tc = iw3env.check(Runner(), p)
     compute = tc.compute
     if compute == "none":
@@ -112,6 +133,13 @@ def run(args: argparse.Namespace) -> int:
     else:
         say("compute", compute, "PyTorch in the iw3 environment ran its GPU test"
             + (f" on {tc.arch}" if tc.arch else ""))
+    if compute == "rocm":
+        if aot_given is None:
+            say("attention", "aotriton", f"{AOTRITON_VAR}=1: PyTorch's fast attention kernels on "
+                "Radeon, about twice as fast as the default path")
+        else:
+            say("attention", "aotriton" if aot_given == "1" else "default",
+                f"{AOTRITON_VAR}={aot_given} from the environment")
     models.require(args.model, p)
     transcode._require_programs()
 
@@ -122,13 +150,14 @@ def run(args: argparse.Namespace) -> int:
               "to 60 fps or upscaling, run `xrdome-tools enhance` first, then to3d on its output")
 
     stem = output_stem(args.input.stem, args.model, args.divergence, args.convergence,
-                       args.foreground_scale)
+                       args.foreground_scale, args.depth_resolution)
     fmt = formats.Format("flat", "sbs-lr", "half" if args.half else "full")
     dst = formats.output_target(args.input, formats.output_name(stem, fmt), args.out, args.outdir,
                                 args.force)
     nvenc = compute == "cuda"
     say("depth", args.model, f"divergence {_num(args.divergence)}, convergence "
-             f"{_num(args.convergence)}, foreground scale {_num(args.foreground_scale)}")
+             f"{_num(args.convergence)}, foreground scale {_num(args.foreground_scale)}, depth input "
+             + (str(args.depth_resolution) if args.depth_resolution else "iw3's default (392)"))
     say("max-fps", str(max_fps(info.fps)), "the source rate rounded up, so no frame is dropped")
     if nvenc:
         say("iw3-encode", "hevc_nvenc", "CUDA: iw3 encodes HEVC itself; transcode only remuxes and tags")
@@ -147,7 +176,8 @@ def run(args: argparse.Namespace) -> int:
         runner = Runner(dry_run=args.dry_run, log=log)
         runner.run(iw3_argv(p, args.input, inter, model=args.model, divergence=args.divergence,
                             convergence=args.convergence, fg_scale=args.foreground_scale,
-                            fps=info.fps, half=args.half, nvenc=nvenc, cpu=compute == "none"),
+                            fps=info.fps, half=args.half, nvenc=nvenc, cpu=compute == "none",
+                            depth_resolution=args.depth_resolution),
                    cleanup=[inter])
         as_ = "hsbs" if args.half else "fsbs"
         if args.dry_run:
