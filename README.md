@@ -4,7 +4,12 @@ A Linux player for VR180 video, ordinary and 3D films, and photos on XR glasses,
 
 Version 0.1.0 (tagged `v0.1.0`; see [Releases](docs/releasing.md) and [CHANGELOG.md](CHANGELOG.md)).
 
-<!-- Picture slot: add ![xrdome](docs/images/demo.png) here once the owner supplies docs/images/demo.png. -->
+![The left eye of a VR180 video in xrdome: a city skyline and a bridge at night](docs/images/demo.jpg)
+
+One eye of a VR180 file as the glasses show it, taken from a desktop window with a scripted head
+sweep and no glasses ([how](docs/setup.md#recording-a-demo-clip)).
+
+<!-- Demo video slot: drag the clip into GitHub's web editor here; it embeds only from the attachment URL that gives. -->
 
 ## What it does
 

@@ -12,6 +12,11 @@ All notable changes to xrdome are listed here, in the format of
   that `.SRCINFO` matches the `PKGBUILD`.
 - meson option `tests` (`auto` by default): cmocka is needed only for the unit tests, which are
   left out when it is missing (`-Dtests=enabled` requires it). The live Gentoo ebuild uses it.
+- `--window-size WxH` sets the size of the `--windowed` desktop window, and
+  `--window-eye left|right` fills it with one eye instead of both side by side, for demos and
+  screen recordings without glasses. Either one implies `--windowed`.
+- `tools/ot_sweep.py` can sweep pitch as well as yaw: `--pitch-amplitude DEG`,
+  `--pitch-period SEC` and a constant `--pitch DEG`. The default is unchanged (no pitch).
 
 ### Fixed
 - `xrdome-tools to3d` on a Radeon PyTorch's ROCm build has no code for (the Radeon 860M,

@@ -1143,6 +1143,9 @@ int main(int argc, char **argv)
     SDL_Window *win = NULL;
     SDL_GLContext gl = NULL;
     xrd_renderer *r = NULL;
+    /* --window-eye left|right: both eyes are drawn into this offscreen target,
+     * twice the window's width, and one half is copied to the window. */
+    GLuint eye_fbo = 0, eye_tex = 0;
     xrd_player *p = NULL;
     int presented = 0; /* frames swapped since the first video frame (--frames) */
     bool done = false; /* --frames reached, or the glasses went away */
@@ -1203,6 +1206,12 @@ int main(int argc, char **argv)
 
     int x = SDL_WINDOWPOS_CENTERED, y = SDL_WINDOWPOS_CENTERED;
     int w = WINDOWED_W, h = WINDOWED_H;
+    if (cfg.window_w > 0) {
+        w = cfg.window_w;
+        h = cfg.window_h;
+    } else if (cfg.window_eye != XRD_WINDOW_EYE_BOTH) {
+        w = WINDOWED_W / 2; /* one eye of the default window */
+    }
     int display = -1; /* SDL display index of the glasses; -1 when windowed */
     int refresh_hz = 0; /* 0 = unknown: pace at 60 Hz */
     Uint32 wflags = SDL_WINDOW_OPENGL;
@@ -1308,8 +1317,41 @@ int main(int argc, char **argv)
             refresh_hz = dm.refresh_rate;
     }
 
-    int out_w, out_h;
-    SDL_GL_GetDrawableSize(win, &out_w, &out_h);
+    /* win_w x win_h is the window's drawable; out_w x out_h is what the eye
+     * pass draws into: the same, or with --window-eye twice as wide. */
+    int out_w, out_h, win_w, win_h;
+    SDL_GL_GetDrawableSize(win, &win_w, &win_h);
+    out_w = win_w;
+    out_h = win_h;
+    if (cfg.window_eye != XRD_WINDOW_EYE_BOTH) {
+        GLint max_tex = 0;
+        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_tex);
+        out_w = win_w * 2;
+        if (out_w > max_tex) {
+            snprintf(err, sizeof err, "--window-eye: a %d pixel wide window needs a %d pixel "
+                     "wide texture, and this GPU's largest is %d", win_w, out_w, (int)max_tex);
+            fail("%s", err);
+            goto out;
+        }
+        glGenTextures(1, &eye_tex);
+        glBindTexture(GL_TEXTURE_2D, eye_tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, out_w, out_h, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                     NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glGenFramebuffers(1, &eye_fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, eye_fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, eye_tex, 0);
+        GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        if (st != GL_FRAMEBUFFER_COMPLETE) {
+            snprintf(err, sizeof err, "--window-eye: cannot make a %dx%d render target "
+                     "(status 0x%x)", out_w, out_h, (unsigned)st);
+            fail("%s", err);
+            goto out;
+        }
+    }
 
     r = xrd_renderer_new(err, sizeof err);
     if (!r) {
@@ -1440,14 +1482,16 @@ int main(int argc, char **argv)
             depth_fits(&app);
         }
 
-        if (size_dirty) {
+        if (size_dirty && !eye_fbo) { /* the one-eye target keeps its size */
             SDL_GL_GetDrawableSize(win, &out_w, &out_h);
             if (out_w < 2)
                 out_w = 2;
             if (out_h < 1)
                 out_h = 1;
-            size_dirty = false;
+            win_w = out_w;
+            win_h = out_h;
         }
+        size_dirty = false;
         /* geometry, the mipmap decision and the texture size for this frame */
         if (tex && update_view(&app, out_w, out_h) < 0) {
             fail("%s", xrd_player_error(p));
@@ -1496,7 +1540,7 @@ int main(int argc, char **argv)
         /* Video frames to the depth helper, before the pose sample: never waits */
         video_step(&app, timing, tex);
 
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, eye_fbo); /* 0, the window, without --window-eye */
         glViewport(0, 0, out_w, out_h);
 
         /* The pose is sampled as late as possible: right before the eye pass. */
@@ -1554,6 +1598,15 @@ int main(int argc, char **argv)
             glClear(GL_COLOR_BUFFER_BIT);
         }
 
+        if (eye_fbo) { /* --window-eye: copy the chosen eye's half to the window, 1:1 */
+            int x0 = cfg.window_eye == XRD_WINDOW_EYE_RIGHT ? out_w / 2 : 0;
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, eye_fbo);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+            glBlitFramebuffer(x0, 0, x0 + out_w / 2, out_h, 0, 0, win_w, win_h,
+                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        }
+
         bool last = false;
         if (cfg.frames > 0 && shown) {
             presented++;
@@ -1569,7 +1622,7 @@ int main(int argc, char **argv)
                 }
             } else if (presented >= cfg.frames) {
                 last = true;
-                if (cfg.dump_frame[0] && dump_ppm(cfg.dump_frame, out_w, out_h) != 0) {
+                if (cfg.dump_frame[0] && dump_ppm(cfg.dump_frame, win_w, win_h) != 0) {
                     fail("cannot write %s", cfg.dump_frame);
                     goto out;
                 }
@@ -1622,8 +1675,13 @@ out:
     xrd_imagedir_free(&app.photos);
     xrd_depthclient_free(app.dc); /* a helper it started keeps running, warm, until idle */
     xrd_renderer_free(r);
-    if (gl)
+    if (gl) {
+        if (eye_fbo)
+            glDeleteFramebuffers(1, &eye_fbo);
+        if (eye_tex)
+            glDeleteTextures(1, &eye_tex);
         SDL_GL_DeleteContext(gl);
+    }
     if (win)
         SDL_DestroyWindow(win);
     /* Switch back only what xrdome switched. Glasses that went away come back
