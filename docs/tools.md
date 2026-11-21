@@ -230,9 +230,10 @@ depth model in place (see `models`).
 - `--divergence` (default 2.0), `--convergence` (default 0.5), `--foreground-scale` (default
   0, not passed to iw3): iw3's own options, defaults from the owner's sbs-test.
 - `--depth-resolution N`: the depth model's input size (short side), passed to iw3 as
-  `--resolution`. iw3's default is 392; at least 224. The depth model is most of the time per
-  frame, so smaller is much faster, at the cost of softer depth edges (hair, fingers). Judge it on
-  the glasses before using it for a whole video.
+  `--resolution`; at least 224. The default is 280 on ROCm and iw3's own 392 on NVIDIA and the
+  CPU (`path: depth-resolution=` says which, and why). The depth model is most of the time per
+  frame, so smaller is much faster, at the cost of softer depth edges (hair, fingers).
+  `--depth-resolution 392` gives iw3's default on ROCm.
 - `--half`: half SBS instead of full SBS.
 - `--cpu`: run without CUDA or ROCm. Without it, `to3d` refuses (exit 2) when it has no GPU to
   run on: on the CPU a few minutes of video takes hours, against about 60 fps on an RTX 5070 Ti.
@@ -290,11 +291,17 @@ Measured 2026-11-20 on a ThinkPad P14s (Radeon 860M, torch 2.9.1+rocm6.4 under t
 |---|---|---|
 | default attention, depth 392 | 2.5 | about 4 h |
 | fast attention, depth 392 | 5.3 | about 1.9 h |
-| fast attention, `--depth-resolution 280` | 9.9 | about 1 h |
+| fast attention, depth 280 (the ROCm default) | 9.9 | about 1 h |
 
 The fast path's output against the default path's: PSNR 48.7 dB, SSIM 0.994 (the same picture,
 with rounding differences). Larger iw3 batches were slower on this iGPU, and the stereo network
 is under a tenth of the time. Long videos are still faster on an NVIDIA machine.
+
+Why 280 on ROCm: on the glasses, 280 and 392 looked the same for this source, at half the time.
+That source is only 608 px wide; on 1080p or 4K video, 280 drops more of the source's detail,
+so compare one clip at `--depth-resolution 392` when fine edges matter. The name gets `_dr280`
+(`_dr<N>` whenever the depth input is not iw3's 392), so a laptop run and an NVIDIA run of the
+same video do not overwrite each other.
 
 Not yet verified on hardware: ROCm on other Radeons, and how iw3 fits a source that is not 16:9
 into the 1920x1080 eye (letterbox expected, not checked).

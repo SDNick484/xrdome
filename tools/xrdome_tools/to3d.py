@@ -26,6 +26,11 @@ INTERMEDIATE_CRF = "12"
 # Ignored on CUDA and the CPU. An explicit value in the environment (for example 0) wins.
 AOTRITON_VAR = "TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL"
 MIN_DEPTH_RESOLUTION = 224  # iw3's MIN_RESOLUTION for Depth Anything
+IW3_DEPTH_RESOLUTION = 392  # iw3's own default for both models
+# On ROCm the GPU is usually an iGPU, and the depth model is most of the time per frame.
+# Radeon 860M, fast attention, 608x1080 source: 280 ran 9.9 frames/s against 5.3 at 392, and
+# the owner saw no difference on the glasses (2026-11-20). NVIDIA keeps iw3's default.
+ROCM_DEPTH_RESOLUTION = 280
 
 
 def _num(x: float) -> str:
@@ -84,7 +89,8 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     ap.add_argument("--convergence", type=float, default=DEFAULT_CONVERGENCE, metavar="C")
     ap.add_argument("--foreground-scale", type=float, default=DEFAULT_FG_SCALE, metavar="F")
     ap.add_argument("--depth-resolution", type=int, metavar="N",
-                    help=f"depth model input, short side (iw3's default 392; at least {MIN_DEPTH_RESOLUTION}); "
+                    help=f"depth model input, short side (default {ROCM_DEPTH_RESOLUTION} on ROCm, "
+                         f"{IW3_DEPTH_RESOLUTION} otherwise; at least {MIN_DEPTH_RESOLUTION}); "
                          "smaller is faster and softer")
     ap.add_argument("--half", action="store_true", help="half SBS (1920x1080 in all) instead of full")
     ap.add_argument("--cpu", action="store_true", help="run on the CPU when there is no CUDA or ROCm (slow)")
@@ -140,6 +146,17 @@ def run(args: argparse.Namespace) -> int:
         else:
             say("attention", "aotriton" if aot_given == "1" else "default",
                 f"{AOTRITON_VAR}={aot_given} from the environment")
+    if args.depth_resolution is not None:
+        depth_res, why_res = args.depth_resolution, "--depth-resolution given"
+    elif compute == "rocm":
+        depth_res, why_res = ROCM_DEPTH_RESOLUTION, (
+            f"ROCm default: about twice as fast as {IW3_DEPTH_RESOLUTION}, no visible difference on "
+            f"a Radeon 860M test; --depth-resolution {IW3_DEPTH_RESOLUTION} for iw3's default")
+    else:
+        depth_res, why_res = IW3_DEPTH_RESOLUTION, "iw3's default"
+    say("depth-resolution", str(depth_res), why_res)
+    # iw3's default is not passed and not in the name, so names match runs without the option.
+    passed_res = None if depth_res == IW3_DEPTH_RESOLUTION else depth_res
     models.require(args.model, p)
     transcode._require_programs()
 
@@ -150,14 +167,13 @@ def run(args: argparse.Namespace) -> int:
               "to 60 fps or upscaling, run `xrdome-tools enhance` first, then to3d on its output")
 
     stem = output_stem(args.input.stem, args.model, args.divergence, args.convergence,
-                       args.foreground_scale, args.depth_resolution)
+                       args.foreground_scale, passed_res)
     fmt = formats.Format("flat", "sbs-lr", "half" if args.half else "full")
     dst = formats.output_target(args.input, formats.output_name(stem, fmt), args.out, args.outdir,
                                 args.force)
     nvenc = compute == "cuda"
     say("depth", args.model, f"divergence {_num(args.divergence)}, convergence "
-             f"{_num(args.convergence)}, foreground scale {_num(args.foreground_scale)}, depth input "
-             + (str(args.depth_resolution) if args.depth_resolution else "iw3's default (392)"))
+             f"{_num(args.convergence)}, foreground scale {_num(args.foreground_scale)}")
     say("max-fps", str(max_fps(info.fps)), "the source rate rounded up, so no frame is dropped")
     if nvenc:
         say("iw3-encode", "hevc_nvenc", "CUDA: iw3 encodes HEVC itself; transcode only remuxes and tags")
@@ -177,7 +193,7 @@ def run(args: argparse.Namespace) -> int:
         runner.run(iw3_argv(p, args.input, inter, model=args.model, divergence=args.divergence,
                             convergence=args.convergence, fg_scale=args.foreground_scale,
                             fps=info.fps, half=args.half, nvenc=nvenc, cpu=compute == "none",
-                            depth_resolution=args.depth_resolution),
+                            depth_resolution=passed_res),
                    cleanup=[inter])
         as_ = "hsbs" if args.half else "fsbs"
         if args.dry_run:
