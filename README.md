@@ -9,7 +9,8 @@ Version 0.1.0 (tagged `v0.1.0`; see [Releases](docs/releasing.md) and [CHANGELOG
 One eye of a VR180 file as the glasses show it, taken from a desktop window with a scripted head
 sweep and no glasses ([how](docs/setup.md#recording-a-demo-clip)).
 
-<!-- Demo video slot: drag the clip into GitHub's web editor here; it embeds only from the attachment URL that gives. -->
+
+https://github.com/user-attachments/assets/2784a7f1-cfec-43a9-bb9f-51663e81bfd9
 
 ## What it does
 
