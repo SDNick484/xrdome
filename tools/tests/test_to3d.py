@@ -127,7 +127,7 @@ def test_pipeline_half_rocm(env):
     assert opt(iw3, "--video-codec") == "libx264" and "--half-sbs" in iw3
     (_, dst, kw, _), = env["transcode"]
     assert kw["as_"] == "hsbs"
-    assert dst.name == "pan_VDAS_div2.0_HSBS.mkv"
+    assert dst.name == "pan_VDAS_div2.0_dr280_HSBS.mkv"  # ROCm's depth default
 
 
 def test_intermediate_removed_on_failure(env, monkeypatch):
@@ -247,10 +247,37 @@ def test_depth_resolution(env, capsys):
     assert opt(iw3, "--resolution") == "280"
     (_, dst, _, _), = env["transcode"]
     assert dst.name == "pan_AnyV2S_div2.0_dr280_FSBS.mkv"
-    assert "depth input 280" in capsys.readouterr().out
+    assert "path: depth-resolution=280 (--depth-resolution given)" in capsys.readouterr().out
 
 
 def test_depth_resolution_too_small(env, capsys):
     assert cli.main(["to3d", str(env["src"]), "--depth-resolution", "100"]) == 2
     assert "at least 224" in capsys.readouterr().err
     assert env["calls"] == []
+
+
+def test_rocm_depth_default(env, capsys):
+    env["compute"] = "rocm"
+    assert cli.main(["to3d", str(env["src"])]) == 0
+    (iw3,) = env["calls"]
+    assert opt(iw3, "--resolution") == "280"
+    (_, dst, _, _), = env["transcode"]
+    assert dst.name == "pan_AnyV2S_div2.0_dr280_FSBS.mkv"
+    assert "path: depth-resolution=280 (ROCm default" in capsys.readouterr().out
+
+
+def test_rocm_back_to_iw3_default(env, capsys):
+    env["compute"] = "rocm"
+    assert cli.main(["to3d", str(env["src"]), "--depth-resolution", "392"]) == 0
+    (iw3,) = env["calls"]
+    assert "--resolution" not in iw3
+    (_, dst, _, _), = env["transcode"]
+    assert dst.name == "pan_AnyV2S_div2.0_FSBS.mkv"
+
+
+@pytest.mark.parametrize("compute,extra", [("cuda", []), ("none", ["--cpu"])])
+def test_depth_default_off_rocm(env, capsys, compute, extra):
+    env["compute"] = compute
+    assert cli.main(["to3d", str(env["src"]), *extra]) == 0
+    assert "--resolution" not in env["calls"][0]
+    assert "path: depth-resolution=392 (iw3's default)" in capsys.readouterr().out
