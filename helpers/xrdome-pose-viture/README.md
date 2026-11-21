@@ -21,8 +21,8 @@ download the SDK from VITURE.
 - Glasses VITURE reports through the IMU callback: the Pro, One, Lite, Luma, Luma Pro and the others
   of its Gen 1 and Gen 2 families. Luma Ultra (Carina) reports its pose through another call and is
   refused with a message.
-- Linux: the udev rule that lets your user open the glasses (the xrdome README's "udev rules and
-  group"), and XRLinuxDriver stopped (see below).
+- Linux: the udev rule that lets your user open the glasses ("udev rules and group" in
+  [xrdome's setup notes](../../docs/setup.md#udev-rules-and-group)), and XRLinuxDriver stopped (see below).
 
 ## Build
 

@@ -107,14 +107,14 @@ typedef struct {
     const char *action;
 } xrd_key_help;
 
-/* The key list, in the order of the README's Keys table (test_controls
- * checks the keys and the order against README.md). */
+/* The key list, in the order of the Keys table in docs/usage.md
+ * (test_controls checks the keys and the order against it). */
 extern const xrd_key_help xrd_key_list[];
 extern const size_t xrd_key_list_len;
 
 /* True for the keys that act on key repeat (an SDL keycode): zoom, seek, and
  * the depth strength and plane.
- * Every other key acts once per press (README, Keys). */
+ * Every other key acts once per press (docs/usage.md, Keys). */
 bool xrd_key_repeats(int32_t sdl_keycode);
 
 #endif

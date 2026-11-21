@@ -447,20 +447,20 @@ static void depth_steps(void **state)
     assert_true(c.depth_strength == 0.0f && c.depth_plane == 0.0f);
 }
 
-/* The ? list has the README's Keys table's keys, in its order. */
-static void key_list_matches_readme(void **state)
+/* The ? list has the Keys table's keys in docs/usage.md, in its order. */
+static void key_list_matches_usage_doc(void **state)
 {
     (void)state;
-    FILE *f = fopen(XRD_TESTS_DIR "/../README.md", "r");
+    FILE *f = fopen(XRD_TESTS_DIR "/../docs/usage.md", "r");
     assert_non_null(f);
     char line[512];
     bool in_section = false, in_table = false;
     size_t n = 0;
     while (fgets(line, sizeof line, f)) {
-        if (strncmp(line, "### ", 4) == 0) {
+        if (strncmp(line, "## ", 3) == 0) {
             if (in_section)
                 break;
-            in_section = strcmp(line, "### Keys\n") == 0;
+            in_section = strcmp(line, "## Keys\n") == 0;
             continue;
         }
         if (!in_section)
@@ -486,7 +486,7 @@ static void key_list_matches_readme(void **state)
     assert_int_equal(n, xrd_key_list_len);
 }
 
-/* README, Keys: key repeat is ignored except for zoom and seek. A held R
+/* docs/usage.md, Keys: key repeat is ignored except for zoom and seek. A held R
  * used to recenter on every repeat, which hid the view's drift. */
 static void key_repeat_only_for_zoom_and_seek(void **state)
 {
@@ -527,7 +527,7 @@ int main(void)
         cmocka_unit_test(filter_cycles),
         cmocka_unit_test(sharpen_steps),
         cmocka_unit_test(depth_steps),
-        cmocka_unit_test(key_list_matches_readme),
+        cmocka_unit_test(key_list_matches_usage_doc),
         cmocka_unit_test(key_repeat_only_for_zoom_and_seek),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);

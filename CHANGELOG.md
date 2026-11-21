@@ -12,7 +12,7 @@ All notable changes to xrdome are listed here, in the format of
   failure name the chip, the error and the fix: on the 860M,
   `HSA_OVERRIDE_GFX_VERSION=11.0.2` (verified; about 2.4 frames per second) or `--cpu`.
 
-## [0.1.0] - unreleased
+## [0.1.0] - 2026-11-19
 
 First release: Linux only, built from the source tarball. "Verified" means the owner ran it on the
 glasses named; everything else passed the unit and Xvfb smoke tests in CI and nothing more.
