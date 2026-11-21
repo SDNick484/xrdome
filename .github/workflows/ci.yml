@@ -115,6 +115,18 @@ jobs:
             echo "::error::no xrdome-$have.ebuild for meson.build's version"; exit 1
           fi
 
+      # The AUR reads .SRCINFO, not the PKGBUILD: it must be what makepkg makes of the
+      # PKGBUILD now. makepkg refuses root, so a user of its own runs it.
+      - name: Check .SRCINFO against the PKGBUILD
+        run: |
+          set -eu
+          useradd -m srcinfo
+          cp packaging/arch/PKGBUILD /home/srcinfo/
+          su srcinfo -c 'cd ~ && makepkg --printsrcinfo' > "$RUNNER_TEMP/SRCINFO"
+          if ! diff -u packaging/arch/.SRCINFO "$RUNNER_TEMP/SRCINFO"; then
+            echo "::error::packaging/arch/.SRCINFO is stale: run makepkg --printsrcinfo > .SRCINFO"; exit 1
+          fi
+
       - name: Configure
         run: meson setup build -Dwerror=true -Dviture_sdk_include=helpers/xrdome-pose-viture/tests/fake_include
 
@@ -396,6 +408,59 @@ jobs:
             build-dist/meson-dist/xrdome-*.tar.xz.sha256sum
           if-no-files-found: error
           compression-level: 0
+
+  # The Debian package (packaging/debian) built from the `dist` tarball on Ubuntu 24.04,
+  # the release a Launchpad PPA would build for first: source and binary packages, the
+  # unit tests (dh_auto_test; the smoke tests skip without xvfb-run), lintian, then the
+  # .deb is installed and run. It checks the packaging; it uploads nothing.
+  deb:
+    needs: [dist]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: xrdome-dist
+          path: dist-files
+
+      # The orig tarball's name comes from debian/changelog's upstream version, so it
+      # must be meson.build's (Release checklist, docs/releasing.md).
+      - name: Check debian/changelog against meson.build
+        run: |
+          have=$(sed -n "s/^[[:space:]]*version[[:space:]]*:[[:space:]]*'\([^']*\)'.*/\1/p" meson.build | head -n 1)
+          deb=$(sed -n '1s/^xrdome (\(.*\)-[^-]*).*/\1/p' packaging/debian/changelog)
+          if [ "$deb" != "$have" ]; then
+            echo "::error::debian/changelog says $deb, meson.build says $have"; exit 1
+          fi
+
+      - name: Install the packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends devscripts equivs lintian
+
+      - name: Build the packages
+        run: |
+          set -eu
+          ver=$(sed -n '1s/^xrdome (\(.*\)-[^-]*).*/\1/p' packaging/debian/changelog)
+          mkdir "$RUNNER_TEMP/deb" && cd "$RUNNER_TEMP/deb"
+          cp "$GITHUB_WORKSPACE"/dist-files/xrdome-"$ver".tar.xz xrdome_"$ver".orig.tar.xz
+          tar -xf xrdome_"$ver".orig.tar.xz
+          cp -r "$GITHUB_WORKSPACE/packaging/debian" xrdome-"$ver"/debian
+          cd xrdome-"$ver"
+          sudo mk-build-deps -i -r -t 'apt-get -y --no-install-recommends' debian/control
+          dpkg-buildpackage -us -uc
+          ls -l ..
+
+      - name: Lintian
+        run: lintian --fail-on error --info --display-info "$RUNNER_TEMP"/deb/*.dsc "$RUNNER_TEMP"/deb/*.deb
+
+      - name: Install and run
+        run: |
+          sudo apt-get install -y "$RUNNER_TEMP"/deb/xrdome_*.deb
+          xrdome --version
+          dpkg -L xrdome
 
   # A draft GitHub release for a pushed vX.Y.Z tag: the tarball and its checksum from
   # `dist`, and the version's CHANGELOG section as the notes. Draft only; the maintainer

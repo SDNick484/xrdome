@@ -67,7 +67,11 @@ viture_test_args = [
 ]
 viture_test_args += cc.get_supported_arguments('-Wno-gnu-zero-variadic-macro-arguments')
 
-foreach t : ['convert', 'options', 'packet', 'loader', 'usb', 'xrdriver_check', 'bridge']
+viture_unit_tests = ['convert', 'options', 'packet', 'loader', 'usb', 'xrdriver_check', 'bridge']
+if not cmocka_dep.found()
+  viture_unit_tests = []
+endif
+foreach t : viture_unit_tests
   exe = executable('test_viture_' + t, 'tests/test_' + t + '.c',
     include_directories : [viture_inc, inc, include_directories('../../tests')],
     c_args : viture_test_args,

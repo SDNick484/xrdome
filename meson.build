@@ -16,7 +16,8 @@ endif
 add_project_arguments('-DXRD_VERSION="' + meson.project_version() + '"', language : 'c')
 # Windows: the maths functions are in the C runtime, no libm.
 m_dep = cc.find_library('m', required : not is_windows)
-cmocka_dep = dependency('cmocka')
+# cmocka only for the unit tests (-Dtests); without it they are left out.
+cmocka_dep = dependency('cmocka', required : get_option('tests'))
 threads_dep = dependency('threads')
 epoxy_dep = dependency('epoxy')
 # EGL: Linux only (the render test's surfaceless context); macOS uses CGL and
@@ -126,6 +127,9 @@ if not egl_dep.found()
     endif
   endforeach
   test_names = kept
+endif
+if not cmocka_dep.found()
+  test_names = []
 endif
 
 inc = include_directories('src')

@@ -3,8 +3,9 @@
 ## Build and run
 
 Dependencies: `media-video/mpv` (with `libmpv` and `vaapi` USE flags), `media-libs/libsdl2`
-(with `X` and `opengl`), `media-libs/libepoxy`, `media-libs/mesa` (EGL), `dev-util/cmocka` and
-`dev-build/meson`. At run time xrdome also runs the `ffprobe` program from `media-video/ffmpeg`
+(with `X` and `opengl`), `media-libs/libepoxy`, `media-libs/mesa` (EGL) and `dev-build/meson`; `dev-util/cmocka` for the unit
+tests (without it `meson setup` leaves them out; `-Dtests=enabled` makes it required, `-Dtests=disabled`
+leaves them out even when it is installed). At run time xrdome also runs the `ffprobe` program from `media-video/ffmpeg`
 (already a dependency of mpv) to detect the format; without it every file plays as VR180 side
 by side unless flags say otherwise (one `xrdome: note:` line). Nothing from FFmpeg is linked.
 The test patterns and the smoke tests also need `media-video/ffmpeg` (`x264`/`x265`) and
