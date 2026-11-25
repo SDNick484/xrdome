@@ -1,11 +1,11 @@
 #include "render/renderer_gl.h"
 
-#include <epoxy/gl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "math/quat.h"
+#include "render/gl.h"
 #include "shaders_gen.h"
 
 struct xrd_renderer {
@@ -76,12 +76,11 @@ static GLuint link_program(GLuint vs, GLuint fs, char *err, size_t errlen)
     return prog;
 }
 
-/* vr180.vert with fs_lines as the fragment shader. */
-static GLuint build(const char *const *fs_lines, int fs_n, const char *fs_what, char *err,
-                    size_t errlen)
+/* The vertex shader vs_lines with fs_lines as the fragment shader. */
+static GLuint build(const char *const *vs_lines, int vs_n, const char *const *fs_lines, int fs_n,
+                    const char *fs_what, char *err, size_t errlen)
 {
-    GLuint vs = compile(GL_VERTEX_SHADER, XRD_SHADER_VR180_VERT,
-                        XRD_SHADER_LINES(XRD_SHADER_VR180_VERT), "vr180.vert", err, errlen);
+    GLuint vs = compile(GL_VERTEX_SHADER, vs_lines, vs_n, "vr180.vert", err, errlen);
     if (!vs)
         return 0;
     GLuint fs = compile(GL_FRAGMENT_SHADER, fs_lines, fs_n, fs_what, err, errlen);
@@ -94,12 +93,21 @@ static GLuint build(const char *const *fs_lines, int fs_n, const char *fs_what, 
 
 xrd_renderer *xrd_renderer_new(char *err, size_t errlen)
 {
-    GLuint prog = build(XRD_SHADER_VR180_FRAG, XRD_SHADER_LINES(XRD_SHADER_VR180_FRAG),
-                        "vr180.frag", err, errlen);
+    bool es = xrd_gl_is_es();
+    GLuint prog = es ? build(XRD_SHADER_VR180_VERT_ES, XRD_SHADER_LINES(XRD_SHADER_VR180_VERT_ES),
+                             XRD_SHADER_VR180_FRAG_ES, XRD_SHADER_LINES(XRD_SHADER_VR180_FRAG_ES),
+                             "vr180.frag", err, errlen)
+                     : build(XRD_SHADER_VR180_VERT, XRD_SHADER_LINES(XRD_SHADER_VR180_VERT),
+                             XRD_SHADER_VR180_FRAG, XRD_SHADER_LINES(XRD_SHADER_VR180_FRAG),
+                             "vr180.frag", err, errlen);
     if (!prog)
         return NULL;
-    GLuint sharp = build(XRD_SHADER_SHARPEN_FRAG, XRD_SHADER_LINES(XRD_SHADER_SHARPEN_FRAG),
-                         "sharpen.frag", err, errlen);
+    GLuint sharp = es ? build(XRD_SHADER_VR180_VERT_ES, XRD_SHADER_LINES(XRD_SHADER_VR180_VERT_ES),
+                              XRD_SHADER_SHARPEN_FRAG_ES, XRD_SHADER_LINES(XRD_SHADER_SHARPEN_FRAG_ES),
+                              "sharpen.frag", err, errlen)
+                      : build(XRD_SHADER_VR180_VERT, XRD_SHADER_LINES(XRD_SHADER_VR180_VERT),
+                              XRD_SHADER_SHARPEN_FRAG, XRD_SHADER_LINES(XRD_SHADER_SHARPEN_FRAG),
+                              "sharpen.frag", err, errlen);
     if (!sharp) {
         glDeleteProgram(prog);
         return NULL;
@@ -194,6 +202,14 @@ void xrd_renderer_set_sharpen(xrd_renderer *r, float strength)
 bool xrd_renderer_set_depth(xrd_renderer *r, const uint16_t *px, int w, int h, char *err,
                             size_t errlen)
 {
+    if (xrd_gl_is_es()) {
+        /* GL_R16 needs an extension in GLES 3.0; NULL (drop) has nothing to drop. */
+        if (!px)
+            return true;
+        if (err && errlen)
+            snprintf(err, errlen, "depth 3D needs desktop GL");
+        return false;
+    }
     /* A new map of the size the texture has (every frame of a film) is
      * written into it, not made anew. */
     bool reuse = px && r->depth_tex && w == r->depth_w && h == r->depth_h;
@@ -346,7 +362,8 @@ void xrd_renderer_draw(xrd_renderer *r, unsigned video_tex, const float rot[9],
     glDisable(GL_CULL_FACE);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_STENCIL_TEST);
-    glDisable(GL_FRAMEBUFFER_SRGB);
+    if (!xrd_gl_is_es())
+        glDisable(GL_FRAMEBUFFER_SRGB);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
     /* With sharpening the eye pass draws into the intermediate, undithered
