@@ -3,6 +3,7 @@
 #endif
 
 #include "config.h"
+#include "devices.h"
 #include "platform/exepath.h"
 #include "platform/platform.h"
 #include "util/printf_attr.h"
@@ -21,11 +22,6 @@
 
 #define FOV_MIN 10.f
 #define FOV_MAX 120.f
-
-static const struct { const char *name; float fov_diag; } builtin_devices[] = {
-    {"viture-pro", 43.0f},
-    {"xreal-air2pro", 45.0f},
-};
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...)
     XRD_PRINTF(3, 4);
@@ -768,13 +764,7 @@ int xrd_config_load(xrd_config *c, const char *ini_path, int argc, char **argv,
     /* Pass 2: fresh defaults for that device, built-in FOV, then the ini. */
     xrd_config_defaults(c);
     memcpy(c->device, device, sizeof device);
-    bool builtin = false;
-    for (size_t i = 0; i < sizeof builtin_devices / sizeof builtin_devices[0]; i++) {
-        if (!strcmp(device, builtin_devices[i].name)) {
-            c->fov_diag = builtin_devices[i].fov_diag;
-            builtin = true;
-        }
-    }
+    bool builtin = xrd_device_builtin(device, &c->fov_diag);
 
     if (!builtin)
         c->fov_diag = 0.f; /* sentinel: the ini must supply it (range check forbids 0) */
@@ -784,7 +774,8 @@ int xrd_config_load(xrd_config *c, const char *ini_path, int argc, char **argv,
         return -1;
     if (!builtin && !found) {
         set_err(err, errlen,
-                "unknown device '%s' (built in: viture-pro, xreal-air2pro; or add a [device.%s] section)",
+                "unknown device '%s' (built in: " XRD_DEVICE_BUILTIN_NAMES
+                "; or add a [device.%s] section)",
                 device, device);
         return -1;
     }

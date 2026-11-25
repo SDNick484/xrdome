@@ -4,21 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-typedef enum { XRD_STEREO_NONE, XRD_STEREO_2D, XRD_STEREO_SBS, XRD_STEREO_TB,
-               XRD_STEREO_OTHER } xrd_probe_stereo;
-typedef enum { XRD_SPH_NONE, XRD_SPH_EQUIRECT, XRD_SPH_OTHER } xrd_probe_spherical;
-
-typedef struct {
-    bool have_size;            /* width and height are both > 0 */
-    int width, height;         /* coded frame, pixels */
-    int sar_num, sar_den;      /* 1:1 when absent, N/A or non-positive */
-    xrd_probe_stereo stereo;
-    bool stereo_inverted;
-    char stereo_name[32];      /* ffprobe's own word, for notes */
-    xrd_probe_spherical spherical;
-    char spherical_name[32];
-    bool image;                /* the container is an image demuxer (see xrd_probe_format_is_image) */
-} xrd_probe;
+#include "detect/probe_info.h"
 
 /* True for the name of an image demuxer, as ffprobe prints it in format_name:
  * "image2", "image2pipe" and every "<codec>_pipe" (jpeg_pipe, png_pipe,
@@ -46,9 +32,6 @@ typedef enum { XRD_PROBE_OK, XRD_PROBE_SKIPPED, XRD_PROBE_FAILED } xrd_probe_sta
  * or prints no video stream. *out is zeroed (sar 1:1) unless the status is OK. */
 xrd_probe_status xrd_probe_run(const char *ffprobe, const char *file, int timeout_ms,
                                xrd_probe *out, char *err, size_t errlen);
-
-/* *p as after a failed parse: zeroed, sar 1:1. */
-void xrd_probe_zero(xrd_probe *p);
 
 /* One argument for a Windows command line, quoted so the C runtime's startup
  * code (and CommandLineToArgvW) splits it back to the same bytes: as it is

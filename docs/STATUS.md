@@ -1302,6 +1302,35 @@ flicker` on a near-static shot, `--timing-log` with 3D on against off.
   `viture_connection.c` (Gen1, derived from a decompiled SDK), with a companion app holding VITURE's AAR as the
   fallback if VITURE objects (spec 4.1). Next check: H5b after Task 7 (the backend on Linux).
 
+## Android Task 1: `libxrdome-core` (issue #102, 2026-11-25)
+- Spec 5.1, plan Task 1. A Linux-only refactor: no file moved, no behaviour meant to change.
+  `src/core_sources.txt` lists the 16 core files; `meson.build` reads it (`fs.read`) into the static
+  library `xrdome_core` (m, threads, epoxy, rt, win_deps; no SDL, mpv or EGL) and `xrdome_core_dep`;
+  `xrdcore` keeps the front end (config, display, driver, video, probe, session, imagedir, platform,
+  exepath, depthmap, depthclient, framesink, the SDL key-repeat helper) and links the core.
+- Split out for the core: `platform/paths.{c,h}` (the platform, absolute paths, per-user paths,
+  `xrd_mkdir`, `xrd_replace_file`; `platform.h` includes it), `detect/probe_info.{c,h}` (`xrd_probe`
+  and `xrd_probe_zero`; `detect.h` includes it, not `probe.h`), `devices.{c,h}` (the built-in device
+  table, `viture-pro` 43 deg and `xreal-air2pro` 45 deg, out of `config.c`) and
+  `app/controls_keys.{c,h}` (`xrd_key_repeats`, SDL, front end only).
+- New tests: `devices` (cmocka), `core_link` (cmocka; built against `xrdome_core_dep` and cmocka
+  only), `core_clean` (`tools/check_core.py`: no `mpv/`, `SDL`, `X11/`, `GL/glx` or `epoxy/glx`
+  include in a core file or a `src/` header it reaches) and `tools/tests/test_check_core.py`.
+- Laptop (no cmocka, no xvfb-run): `-Dwerror=true` build clean, also with the CI's
+  `-Dviture_sdk_include` stand-in headers; `version`, `core_clean` and `viture_process` pass, the
+  seven smoke tests skip. The cmocka tests and smoke tests are proven by CI only. Outside the gate, a
+  local cmocka stand-in ran `test_core_link` linked against `libxrdome_core.a` with only epoxy, libm
+  and pthread (8/8), and `devices`, `controls`, `config`, `platform`, `filestate`, `probe`,
+  `detect`, `probe_run`, `values`, `projection`, `quat`, `tracker`, `timing`, `opentrack`, all
+  passing.
+- Step 6, `grep -rln -E 'X11|glX|Xlib|mpv'` over the 16 listed files: `src/render/renderer_gl.c`
+  only, a comment (line 225, "The unpack state is mpv's as much as ours"). Their headers: no match.
+- Step 8, the timing comparison (owner, before merge): **not yet run**. On AC, `balanced`,
+  `test2.mp4`, same zoom, alternate `main` and this branch three times each with
+  `./build/xrdome --frames 3600 --timing-log run-N.csv test2.mp4`; pass when every branch run's
+  missed vsyncs are at most `main`'s worst plus 4. The six numbers go here.
+- Step 9, H5: recorded above (PR #114).
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship

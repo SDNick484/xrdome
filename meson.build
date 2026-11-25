@@ -56,29 +56,31 @@ framesink_gen = custom_target('framesink_gen',
   command : [py, files('tools/embed_shaders.py'), '@OUTPUT@',
              'FRAMESINK_VERT=@INPUT0@', 'FRAMESINK_FRAG=@INPUT1@'])
 
-# Core sources: append one line per task.
-core_sources = files(
-  'src/math/quat.c',
-  'src/render/projection.c',
-  'src/values.c',
+# libxrdome-core: the sources every front end shares, listed in
+# src/core_sources.txt (one path per line; blank and '#' lines dropped), which
+# the Android CMake build reads too. Add a core file there, not here.
+fs = import('fs')
+core_list = []
+foreach line : fs.read('src/core_sources.txt').split('\n')
+  line = line.strip()
+  if line != '' and not line.startswith('#')
+    core_list += line
+  endif
+endforeach
+core_sources = files(core_list)
+
+# The Linux, macOS and Windows front end (SDL, mpv, the window, the probe):
+# append one line per task.
+front_sources = files(
   'src/config.c',
-  'src/util/timing.c',
-  'src/pose/opentrack_packet.c',
-  'src/pose/pose.c',
-  'src/pose/pose_null.c',
-  'src/pose/pose_udp_opentrack.c',
-  'src/track/tracker.c',
-  'src/render/renderer_gl.c',
   'src/display/output.c',
   'src/driver/xrdriver.c',
   'src/display/sbs.c',
   'src/video/player_mpv.c',
   'src/video/mpv_scale.c',
-  'src/app/controls.c',
-  'src/store/filestate.c',
+  'src/app/controls_keys.c',
   'src/detect/probe.c',
   'src/detect/probe_win.c',
-  'src/detect/detect.c',
   'src/app/session.c',
   'src/app/imagedir.c',
   'src/platform/platform.c',
@@ -117,6 +119,7 @@ test_names = [
   'depthclient',
   'framesink',
   'framesink_gl',
+  'devices',
 ]
 # test_render and test_framesink_gl draw through a surfaceless Mesa EGL context.
 if not egl_dep.found()
@@ -134,9 +137,18 @@ endif
 
 inc = include_directories('src')
 
-xrdcore = static_library('xrdcore', core_sources, shaders_gen, framesink_gen,
+# The core: no SDL, mpv or EGL dependency (test_core_link proves it links
+# without them; core_clean checks its includes).
+xrdome_core = static_library('xrdome_core', core_sources, shaders_gen,
   include_directories : inc,
-  dependencies : [m_dep, threads_dep, epoxy_dep, sdl2_dep, mpv_dep, rt_dep, win_deps])
+  dependencies : [m_dep, threads_dep, epoxy_dep, rt_dep, win_deps])
+xrdome_core_dep = declare_dependency(link_with : xrdome_core,
+  include_directories : inc,
+  dependencies : [m_dep, threads_dep, epoxy_dep, rt_dep, win_deps])
+
+xrdcore = static_library('xrdcore', front_sources, framesink_gen,
+  include_directories : inc,
+  dependencies : [xrdome_core_dep, sdl2_dep, mpv_dep])
 
 # test_probe_run's stand-in for ffprobe: a program, so it runs on Windows too.
 fake_ffprobe = executable('fake_ffprobe', 'tests/fake_ffprobe.c')
@@ -161,12 +173,26 @@ foreach t : test_names
     include_directories : inc,
     c_args : test_c_args,
     link_with : xrdcore,
-    dependencies : [cmocka_dep, m_dep, threads_dep, epoxy_dep, egl_dep, sdl2_dep, mpv_dep, rt_dep,
-                    win_deps],
+    dependencies : [xrdome_core_dep, cmocka_dep, m_dep, threads_dep, epoxy_dep, egl_dep, sdl2_dep,
+                    mpv_dep, rt_dep, win_deps],
     win_subsystem : 'console')
   test(t, exe, depends : fake_ffprobe, env : ['LIBGL_ALWAYS_SOFTWARE=1', 'EGL_PLATFORM=surfaceless',
                       'XRD_TEST_DATA=' + (meson.current_source_dir() / 'tests/data')])
 endforeach
+
+# The core links alone: test_core_link against xrdome_core_dep and cmocka
+# only (no SDL, mpv or EGL).
+if cmocka_dep.found()
+  core_link_exe = executable('test_core_link', 'tests/test_core_link.c',
+    c_args : test_c_args,
+    dependencies : [xrdome_core_dep, cmocka_dep],
+    win_subsystem : 'console')
+  test('core_link', core_link_exe)
+endif
+
+# No X11, GLX, mpv or SDL include in a core file or a src/ header it includes.
+test('core_clean', py,
+  args : [files('tools/check_core.py'), files('src/core_sources.txt'), meson.current_source_dir()])
 
 # Windows: the manifest sets the process code page to UTF-8 (argv, fopen and
 # opendir take UTF-8 file names, as on Linux) and makes it long-path aware.
@@ -179,7 +205,8 @@ endif
 xrdome_exe = executable('xrdome', xrdome_sources,
   include_directories : inc,
   link_with : xrdcore,
-  dependencies : [m_dep, threads_dep, epoxy_dep, sdl2_dep, mpv_dep, rt_dep, win_deps],
+  dependencies : [xrdome_core_dep, m_dep, threads_dep, epoxy_dep, sdl2_dep, mpv_dep, rt_dep,
+                  win_deps],
   win_subsystem : 'console',
   install : true)
 

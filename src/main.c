@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "app/controls.h"
+#include "app/controls_keys.h"
 #include "app/depthclient.h"
 #include "app/imagedir.h"
 #include "app/session.h"

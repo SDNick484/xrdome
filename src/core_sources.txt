@@ -1,0 +1,23 @@
+# libxrdome-core: the sources shared by every front end (Linux now, Android
+# next). One path per line, relative to the repository root; blank lines and
+# lines starting with '#' are ignored. meson.build (fs.read) reads this file,
+# and so will the Android CMake build, so the two cannot drift.
+#
+# No file here, nor any src/ header it includes, may include an X11, GLX, mpv
+# or SDL header: the core_clean test (tools/check_core.py) checks it.
+src/math/quat.c
+src/render/projection.c
+src/values.c
+src/detect/detect.c
+src/detect/probe_info.c
+src/track/tracker.c
+src/pose/pose.c
+src/pose/pose_null.c
+src/pose/pose_udp_opentrack.c
+src/pose/opentrack_packet.c
+src/store/filestate.c
+src/util/timing.c
+src/render/renderer_gl.c
+src/platform/paths.c
+src/devices.c
+src/app/controls.c
