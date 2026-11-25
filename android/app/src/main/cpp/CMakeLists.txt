@@ -55,6 +55,6 @@ target_compile_options(xrdome_core PRIVATE -Wall -Wextra)
 # libm and pthread are part of bionic's libc; GLESv3 comes from the NDK sysroot.
 target_link_libraries(xrdome_core PUBLIC GLESv3 EGL android log)
 
-add_library(xrdome_jni SHARED jni_bridge.c)
+add_library(xrdome_jni SHARED jni_bridge.c gl_info.c)
 target_link_libraries(xrdome_jni PRIVATE xrdome_core)
 target_compile_options(xrdome_jni PRIVATE -Wall -Wextra)
