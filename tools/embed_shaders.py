@@ -6,7 +6,11 @@ source for GLES 3.0: the first line "#version 330 core" becomes "#version 300 es
 followed by precision statements. A source whose first line is not
 "#version 330 core" is an error (exit 1, the file named). One string per line
 keeps every literal short of the 4095 characters C99 promises
-(-Woverlength-strings)."""
+(-Woverlength-strings).
+
+Usage: embed_shaders.py --dump-es DIR file ... -- writes each file's ES text to
+DIR/<stem>.es<suffix> (vr180.frag -> vr180.es.frag), for glslangValidator in CI."""
+import os
 import sys
 
 VERSION = "#version 330 core"
@@ -26,15 +30,40 @@ def emit(o, name, lines):
     o.write("};\n")
 
 
+def es_lines(lines):
+    return ES_HEAD + lines[1:]
+
+
+def read_shader(path):
+    with open(path) as f:
+        lines = f.read().splitlines()
+    if not lines or lines[0].strip() != VERSION:
+        sys.stderr.write("embed_shaders: %s: first line must be '%s'\n" % (path, VERSION))
+        return None
+    return lines
+
+
+def dump_es(outdir, paths):
+    os.makedirs(outdir, exist_ok=True)
+    for path in paths:
+        lines = read_shader(path)
+        if lines is None:
+            return 1
+        stem, suffix = os.path.splitext(os.path.basename(path))
+        with open(os.path.join(outdir, stem + ".es" + suffix), "w") as o:
+            o.write("\n".join(es_lines(lines)) + "\n")
+    return 0
+
+
 def main(argv):
+    if len(argv) >= 3 and argv[1] == "--dump-es":
+        return dump_es(argv[2], argv[3:])
     out = argv[1]
     shaders = []
     for arg in argv[2:]:
         name, path = arg.split("=", 1)
-        with open(path) as f:
-            lines = f.read().splitlines()
-        if not lines or lines[0].strip() != VERSION:
-            sys.stderr.write("embed_shaders: %s: first line must be '%s'\n" % (path, VERSION))
+        lines = read_shader(path)
+        if lines is None:
             return 1
         shaders.append((name, lines))
     with open(out, "w") as o:
@@ -42,7 +71,7 @@ def main(argv):
         o.write("#define XRD_SHADER_LINES(s) ((int)(sizeof (s) / sizeof (s)[0]))\n")
         for name, lines in shaders:
             emit(o, "XRD_SHADER_" + name, lines)
-            emit(o, "XRD_SHADER_%s_ES" % name, ES_HEAD + lines[1:])
+            emit(o, "XRD_SHADER_%s_ES" % name, es_lines(lines))
     return 0
 
 

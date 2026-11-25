@@ -25,6 +25,8 @@ https://github.com/user-attachments/assets/2784a7f1-cfec-43a9-bb9f-51663e81bfd9
 - Switches the glasses to side-by-side mode through XRLinuxDriver at start and back at exit
   (works on the XREAL Air 2 Pro; see below for the Viture).
 
+An Android front end (VR180 on a phone and USB glasses) is being built: [docs/android.md](docs/android.md).
+
 The companion `xrdome-tools` command (preparing video for xrdome: transcoding, 2D to 3D, depth
 for photos) is documented in [docs/tools.md](docs/tools.md).
 

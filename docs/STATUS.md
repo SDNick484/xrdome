@@ -1352,6 +1352,30 @@ flicker` on a near-static shot, `--timing-log` with 3D on against off.
   device was involved: the Adreno/Mali driver's shader compiler is untested (owner steps H2 onward,
   not yet run).
 
+## Android Task 3: Android project, CMake core build, CI (issue #104, 2026-11-25)
+- Spec 5.2, plan Task 3. `android/` is a Gradle project (AGP 8.7.3, Kotlin 2.0.21, Gradle 8.9 wrapper
+  with the distribution's SHA-256 pinned; `minSdk 33`, `arm64-v8a` only, debug-signed, package
+  `io.github.sdnick484.xrdome`). `app/src/main/cpp/CMakeLists.txt` reads `src/core_sources.txt` with
+  `file(STRINGS)` (same filtering as meson), runs `tools/embed_shaders.py` for `shaders_gen.h`, builds
+  `xrdome_core` static and links `libxrdome_jni.so` with `GLESv3 EGL android log`. `XRD_VERSION` is
+  parsed from `meson.build`; `NativeBridge.version()` returns it and `MainActivity` shows it.
+- `oes_copy.frag` (ESSL 3.00, `samplerExternalOES`, `u_st`) is added but not yet compiled into the app
+  (the copy pass is Task 5/6). `embed_shaders.py --dump-es DIR` writes the `_ES` text of each source
+  for glslang; `android.yml` runs `glslangValidator` on the ES vr180 vertex and fragment, sharpen and
+  `oes_copy.frag`. On this laptop glslang's `-S frag` accepted `oes_copy.frag` including
+  `samplerExternalOES`; whether the CI's glslang does is shown by the workflow.
+- Found while checking the CMake build with host gcc and `-D__ANDROID__` against Mesa's GLES3
+  headers: `renderer_gl.c` names `GL_R16` and `GL_FRAMEBUFFER_SRGB`, which `<GLES3/gl3.h>` lacks.
+  `src/render/gl.h` now defines them under `__ANDROID__` (code the ES path never runs).
+  The core then compiled with `-Wall -Wextra` and no warnings. The NDK's clang and bionic are untested.
+- Gradle wrapper: `gradle-wrapper.jar` is the official one from the `v8.9.0` tag of `gradle/gradle`
+  (SHA-256 498495120a03b9a6ab5d155f5de3c8f0d986a449153702fb80fc80e134484f17); the workflow also
+  runs `gradle/actions/wrapper-validation`.
+- Laptop: pytest passes (including `test_dump_es`); the gradle build, lint, the Kotlin test and the
+  APK are proven by the `android` workflow only (no JDK or Android SDK here).
+- Owner steps, not yet run: install the CI APK with `adb install` on the Pixel 9 Pro XL and confirm it
+  opens and shows the version.
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship

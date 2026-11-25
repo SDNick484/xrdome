@@ -1,0 +1,74 @@
+# Android: build the debug APK (CMake core, JNI, Kotlin), run lint and the Kotlin unit tests, and
+# check the GLES shaders with glslangValidator. This workflow is the only proof of the Android
+# build: the owner's laptop has no JDK or Android SDK. Third-party actions are pinned to full
+# release tags.
+name: android
+
+on:
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'src/**'
+      - 'tools/embed_shaders.py'
+      - 'meson.build'
+      - '.github/workflows/android.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - 'src/**'
+      - 'tools/embed_shaders.py'
+      - 'meson.build'
+      - '.github/workflows/android.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  android-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4.3.1
+
+      - name: Validate the Gradle wrapper jar
+        uses: gradle/actions/wrapper-validation@v4.4.4
+
+      - uses: actions/setup-java@v4.8.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4.4.4
+
+      # The runner image has an SDK; the NDK and CMake the build pins (app/build.gradle.kts) are
+      # installed by name so a newer image cannot change them.
+      - name: Install the pinned NDK and CMake
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "ndk;27.2.12479018" "cmake;3.22.1" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Gradle build, lint and unit tests
+        working-directory: android
+        run: ./gradlew --no-daemon assembleDebug lintDebug testDebugUnitTest
+
+      # The only shader check CI can do without a phone: the ES 3.00 text the app compiles at run
+      # time (embed_shaders.py --dump-es) and the OES copy shader. Whether glslang accepts
+      # samplerExternalOES under the essl3 extension is not known in advance; this step says.
+      - name: Check the shaders with glslangValidator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends glslang-tools
+          python3 tools/embed_shaders.py --dump-es "$RUNNER_TEMP/es" \
+            src/render/shaders/vr180.vert src/render/shaders/vr180.frag src/render/shaders/sharpen.frag
+          glslangValidator -S vert "$RUNNER_TEMP/es/vr180.es.vert"
+          glslangValidator -S frag "$RUNNER_TEMP/es/vr180.es.frag"
+          glslangValidator -S frag "$RUNNER_TEMP/es/sharpen.es.frag"
+          glslangValidator -S frag android/app/src/main/cpp/oes_copy.frag
+
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: xrdome-android-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

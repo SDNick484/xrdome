@@ -43,3 +43,25 @@ def test_bad_version_fails(tmp_path):
     r, out = run(tmp_path, "#version 150\nvoid main() { }\n")
     assert r.returncode == 1
     assert "a.frag" in r.stderr
+
+
+def test_dump_es(tmp_path):
+    src = tmp_path / "a.frag"
+    src.write_text(SRC)
+    out = tmp_path / "es"
+    r = subprocess.run([sys.executable, str(SCRIPT), "--dump-es", str(out), str(src)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    got = (out / "a.es.frag").read_text().splitlines()
+    assert got[:4] == ["#version 300 es", "precision highp float;", "precision highp int;",
+                       "precision highp sampler2D;"]
+    assert got[4:] == SRC.splitlines()[1:]
+
+
+def test_dump_es_bad_version_fails(tmp_path):
+    src = tmp_path / "b.frag"
+    src.write_text("#version 450\nvoid main() { }\n")
+    r = subprocess.run([sys.executable, str(SCRIPT), "--dump-es", str(tmp_path / "es"), str(src)],
+                       capture_output=True, text=True)
+    assert r.returncode == 1
+    assert "b.frag" in r.stderr

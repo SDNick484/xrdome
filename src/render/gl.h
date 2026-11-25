@@ -8,6 +8,14 @@
 
 #ifdef __ANDROID__
 #include <GLES3/gl3.h>
+/* Desktop-only enums the renderer names in code the ES path never runs (depth
+ * R16, GL_FRAMEBUFFER_SRGB); GLES 3.0 headers lack them. */
+#ifndef GL_R16
+#define GL_R16 0x822A
+#endif
+#ifndef GL_FRAMEBUFFER_SRGB
+#define GL_FRAMEBUFFER_SRGB 0x8DB9
+#endif
 #else
 #include <epoxy/gl.h>
 #endif
