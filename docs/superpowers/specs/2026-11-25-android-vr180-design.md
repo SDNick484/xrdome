@@ -88,6 +88,19 @@ VITURE's SDK instead**: M4 stops, and options A and B above (with H9, the SDK's 
 for a choice; nobody captures the SDK's traffic, the step the VITURE licence question attaches to. H5 needs only
 Linux, so it runs during M1, before any Android pose work is planned in detail. M6 (XREAL) does not depend on it.
 
+**H5 result (owner, 2026-11-25): fail.** The Pro XR is `35ca:101d` and has two HID interfaces (0: endpoints
+`0x81`/`0x01`; 1: `0x82`/`0x02`) plus a CDC serial pair; viture-v2 (its product id patched to `0x101D`, since its
+command line only looks for `0x1301`) found the device over usbfs and timed out starting the IMU on interface 0.
+The Pro XR speaks VITURE's older protocol, not Gen2.
+
+**Owner's revised choice: C′, with B as the fallback.** Port `mgschwan/viture_virtual_display`'s
+`viture_connection.c` (MIT, last push 2026-03-26), a reimplementation of the Pro XR's protocol whose comments say
+it was taken from the **decompiled** SDK. The owner accepts that provenance for now; **if VITURE asks for its
+removal, the project switches to option B** (a separate MIT companion app holding VITURE's AAR, sending OpenTrack
+UDP to the unchanged `udp-opentrack` source). To keep that switch cheap, the Viture code stays in its own files
+(`src/pose/viture_*`, `pose_viture_usb.c`) that nothing else depends on, and the app treats the pose source as a
+spec string it can swap. Not legal advice; `docs/licence.md` states the provenance plainly.
+
 ### 4.2 How a decoded frame reaches the eye shader
 
 `vr180.frag` samples the video with `textureLod(..., 0.0)` (implicit LOD is undefined inside its per-fragment
@@ -204,20 +217,35 @@ file picker (SAF) -> Media3 ExoPlayer -> MediaCodec -> SurfaceTexture (OES textu
 
 ### 5.4 Milestone 4: Viture pose over USB
 
-- New pose backend `viture-usb` in the core (`src/pose/pose_viture_usb.c`), spec string
-  `viture-usb:fd=N[,yaw=..,pitch=..,roll=..]`, behind the existing `xrd_pose_source` interface, so the tracker,
-  recenter and staleness handling are unchanged. Written from viture-v2's `PROTOCOL.md` (MIT notice and credit
-  in the file and in `docs/licence.md`): frame header, byte-sum checksum, IMU control `0x0301` with the pose
-  stream, reply `MsgID + 0x2000`.
-- Transport: Kotlin asks `UsbManager` for permission (device filter on vendor `0x35CA`), opens the device,
-  claims the HID interface with force (detaching the kernel driver), and passes the file descriptor to native
-  code. A reader thread in C does interrupt transfers on usbfs and keeps the newest pose; `latest()` stays
-  non-blocking. The usbfs transport is its own small file so the XREAL backend reuses it.
-- Frame conversion: the protocol's quaternion basis to xrdome's GL convention, unit-tested with captured or
-  documented frames; the sign check on glasses is the same as issue #64's checklist (look left, up, tilt).
+- New pose backend `viture-usb` in the core (`src/pose/pose_viture_usb.c`), behind the existing
+  `xrd_pose_source` interface, so the tracker, recenter and staleness handling are unchanged. Ported from
+  mgschwan's `viture_connection.c` (MIT notice and credit in the file and in `docs/licence.md`, with its
+  provenance). The protocol as that file has it (from reading it; nothing here has been run):
+  - Interface 1 (MCU, endpoints `0x82` IN / `0x02` OUT) carries commands and their replies; interface 0 (IMU,
+    `0x81` IN) carries the pose stream. Reports are 64 bytes.
+  - Command frame: `FF FE`, CRC-16 (2 bytes), length (2 bytes, = 12 + data length), 8 zero bytes, command id
+    (2 bytes) at offset `0x0E`, 2 zero bytes, data from offset `0x12`; little-endian. CRC-16-CCITT, polynomial
+    `0x1021`, initial value 0, over the length field and the `length` bytes after it. Always sent as 64 bytes.
+  - Reply: the same frame; status in the first data byte (0 = success). mgschwan's code treats a header command
+    id of 0 as "reply to the pending command" and notes the decompiled code compares it with the request's id
+    instead; accept either.
+  - IMU on/off: command `0x15`, one data byte, 1 on / 0 off.
+  - IMU packet: starts `FF FC`, same layout; a 32-bit timestamp at offset 6; data at `0x12` holds roll, pitch,
+    yaw as **big-endian** 32-bit floats, in degrees (mgschwan negates yaw). Euler angles, not a quaternion: the
+    rotation order is assumed to be XRLinuxDriver's (`q = Rz(yaw) * Ry(pitch) * Rx(roll)`, NWU, as
+    `pose_udp_opentrack.c` documents), since XRLinuxDriver reads the same glasses; the sign check confirms it.
+- Spec string `viture-usb:fd=N` (Android: the app's descriptor) or `viture-usb:dev=/dev/bus/usb/BBB/DDD`
+  (Linux: the backend opens the node itself), plus `yaw`, `pitch`, `roll` (±1). The Linux form exists so the
+  owner can check the protocol on the laptop with the existing player before any Android pose work (H5b).
+- Transport: on Android, Kotlin asks `UsbManager` for permission (device filter on vendor `0x35CA`), opens the
+  device, claims interfaces 0 and 1 with force (detaching the kernel driver) and passes the descriptor down; on
+  Linux the backend detaches and claims both itself. A reader thread in C does interrupt transfers on usbfs
+  and keeps the newest pose; `latest()` stays non-blocking. The usbfs transport is its own small file so the
+  XREAL backend reuses it.
+- The sign check on glasses is the same as issue #64's checklist (look left, up, tilt).
 - Touchpad gains double-tap (yaw recenter, `R`), long-press (full level recenter, `Shift+R`), swipe up/down
   (zoom, `[` `]`).
-- Gate: H5 first. If the Pro XR does not speak the Gen2 protocol, stop and report to the owner (4.1).
+- Gate: H5b (the backend on Linux, above) before the Android wiring.
 
 ### 5.5 Milestone 5: SBS switching from the app
 
@@ -226,9 +254,10 @@ file picker (SAF) -> Media3 ExoPlayer -> MediaCodec -> SurfaceTexture (OES textu
   cannot restore it (as on Linux).
 - The display re-enumerates on a mode switch; the app waits for the 3840x1080 display to appear (with a
   timeout and a message), then opens the Presentation.
-- Whether viture-v2's document covers *setting* the mode (it reads it) is unverified. If it does not (my call):
-  the glasses' own SBS button, already the path in M3, stays the Viture's way in; M5 is cut to the XREAL in M6
-  and comes back to the owner before any capture, under the same rule as 4.1.
+- mgschwan's file has no display-mode command, so for the Pro XR the command is **unknown**. The builder looks
+  for it in other open sources (licences checked; not XRLinuxDriver's source, project rule). If none documents
+  it (my call): the glasses' own SBS button, already the path in M3, stays the Viture's way in; M5 is cut to the
+  XREAL in M6 and comes back to the owner before anyone captures traffic.
 
 ### 5.6 Milestone 6: XREAL Air 2 Pro
 
@@ -266,20 +295,23 @@ at stop. The record's path label is the picker's display name.
   options on some builds). The app needs a plain secondary display, not a desktop session.
 - **H4 Phone screen.** Whether the Presentation keeps showing if the phone screen times out or is locked (my
   reading of the API is that it stops with the activity); battery drain with the black screen on.
-- **H5 Viture protocol.** `lsusb -d 35ca:` on Linux for the Pro XR's product id, and viture-v2's `probe` against
-  it (XRLinuxDriver stopped). Then on Android: the USB permission flow, the forced claim, pose rate.
+- **H5 Viture protocol.** Done 2026-11-25: fail for the Gen2 protocol (4.1).
+- **H5b Viture Gen1 backend on Linux.** After M4's C backend: XRLinuxDriver stopped, `xrdome --pose
+  viture-usb:dev=/dev/bus/usb/BBB/DDD pattern_sbs.mp4`; the IMU starts, the pose follows the head with the
+  right signs, about the rate XRLinuxDriver gives (365 packets per second measured). Then on Android: the USB
+  permission flow, the forced claim, pose rate.
 - **H6 XREAL protocol.** The same for the Air 2 Pro with ar-drivers-rs.
 - **H7 Audio.** Where sound goes with the glasses connected (glasses speakers or phone), and whether it changes
   on the SBS switch.
 - **H8 Full-film run.** The success test of section 1, with the timing log, and the phone's temperature and
   battery at the end (thermal throttling on a two-hour film is unknown).
-- **H9 VITURE Android SDK terms.** Not needed by this design (option C); recorded because it decides whether
-  option B is a fallback if H5 fails. Contact named on VITURE's licence page: bd@viture.com.
+- **H9 VITURE Android SDK terms.** Needed only if option B replaces C′ (4.1): whether the AAR exists, supports
+  the Pro XR, and may be redistributed in a companion APK. Contact named on VITURE's licence page: bd@viture.com.
 
 ## 7. Unverified and unknown
 
-- The Pro XR's protocol (H5); viture-v2's coverage of setting the display mode; the XREAL Air 2 Pro in
-  ar-drivers-rs.
+- Whether mgschwan's protocol reading works (H5b), the Euler order, and the Pro XR's display-mode command; the
+  XREAL Air 2 Pro in ar-drivers-rs.
 - `textureLod` absence for OES textures and glslang's handling of `samplerExternalOES`: from documentation only.
 - The cost of the copy pass on each GPU; the SurfaceFlinger frame of latency (stated, not measured here).
 - Whether Android exposes 3840x1080 for these glasses on these phones (H3).
