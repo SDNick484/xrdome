@@ -19,13 +19,6 @@
 #include <unistd.h>
 #endif
 
-void xrd_probe_zero(xrd_probe *p)
-{
-    memset(p, 0, sizeof *p);
-    p->sar_num = 1;
-    p->sar_den = 1;
-}
-
 static void copy_name(char *dst, size_t n, const char *src, size_t len)
 {
     if (len >= n)

@@ -3,7 +3,7 @@
 
 #include "store/filestate.h"
 
-#include "platform/platform.h"
+#include "platform/paths.h"
 #include "util/printf_attr.h"
 #include "values.h"
 

@@ -1,6 +1,5 @@
 #include "app/controls.h"
 
-#include <SDL_keycode.h>
 #include <math.h>
 
 void xrd_controls_init(xrd_controls *c, float zoom, xrd_layout layout)
@@ -264,22 +263,3 @@ const xrd_key_help xrd_key_list[] = {
     {"Q", "quit"},
 };
 const size_t xrd_key_list_len = sizeof xrd_key_list / sizeof xrd_key_list[0];
-
-bool xrd_key_repeats(int32_t sdl_keycode)
-{
-    switch (sdl_keycode) {
-    case SDLK_LEFT:
-    case SDLK_RIGHT:
-    case SDLK_UP:
-    case SDLK_DOWN:
-    case SDLK_LEFTBRACKET:
-    case SDLK_RIGHTBRACKET:
-    case SDLK_MINUS:
-    case SDLK_EQUALS:
-    case SDLK_COMMA:
-    case SDLK_PERIOD:
-        return true;
-    default:
-        return false;
-    }
-}

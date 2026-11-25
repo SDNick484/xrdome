@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "detect/probe.h"
+#include "detect/probe_info.h"
 #include "render/projection.h"
 
 typedef enum { XRD_SRC_NONE, XRD_SRC_FLAG, XRD_SRC_RECORD, XRD_SRC_METADATA, XRD_SRC_NAME,

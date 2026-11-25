@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "app/controls.h"
+#include "app/controls_keys.h"
 #include "math/quat.h"
 
 #define TOL 1e-4
