@@ -1396,6 +1396,55 @@ flicker` on a near-static shot, `--timing-log` with 3D on against off.
   the glasses' ids. If the Pixel 9 Pro XL has no hardware decoder for 4320x2160 H.264 or AV1, stop before
   Task 6 (#107 is rewritten first). Results go here.
 
+## Android Task 5: presentation on the glasses, render loop, test pattern (issue #106, 2026-11-25)
+- Spec 5.3 Display, GL, Frame pacing; plan Task 5. `play/DisplayPicker.kt` picks a presentation display
+  with a mode of exactly 3840x1080 at 59-61 Hz (nearest 60 if several): `Ok(displayId, modeId)`,
+  `NoExternal`, or `NotSbs(currentW, currentH)`. `MainActivity` has "Show test pattern": it shows a
+  `GlassesPresentation` (asks for that mode with `preferredDisplayModeId`, a full-window `SurfaceView`)
+  whose `RenderThread` (a `HandlerThread` driven by `Choreographer`) owns the EGL context and the
+  `SurfaceTexture`. Phone messages: "Connect the glasses", "Switch the glasses to 3D (SBS) mode: they
+  are at WxH", "Glasses disconnected" (display removed), and the GL error if setup fails.
+- Native: `render_loop.c` (EGL ES 3.0 context and window surface, swap interval 1, the shared
+  renderer, the OES texture, a tracker on the `null` pose source: identity view) and `oes_copy.c` (the
+  copy pass: OES -> `GL_RGB10_A2` of the video size, `GL_LINEAR`, clamp to edge, one level).
+  `oes_copy.frag` is now compiled in: CMake writes it into `oes_copy_frag_gen.h` at configure time
+  (`embed_shaders.py` only rewrites 330 sources, so it is left alone); the vertex stage is
+  `XRD_SHADER_VR180_VERT_ES`. The eye pass: half-equirect, SBS left-right, zoom 1, no trilinear, the
+  device FOV from the core's table (`NativeBridge.deviceFov("viture-pro")`, 43 degrees). The test
+  pattern is a 512x256 RGBA8 texture with `test_render.c`'s quadrant colours.
+- Decisions (beyond the plan's interface, which is kept): `draw` returns `Boolean` (false on a failed
+  copy or swap, reason in `lastError()`, and the thread stops drawing); `setVideoSize(h, w, height)` and
+  `deviceFov(name)` are added, because an OES texture's size cannot be queried in GLES 3.0 (Task 6
+  calls `setVideoSize` from the player's video-size callback); `lastError()` is per thread (read on the
+  render thread). Nothing is drawn unless the surface is 3840x1080, and if the display has not reached
+  the SBS mode 3 s after the Presentation asked, the pattern is taken down with the "Switch the
+  glasses to 3D" message: no squashed picture (Review Focus). A display change away from SBS after it
+  was reached gives that message too, not "Glasses disconnected". No `eglTerminate` on teardown (the
+  default display is shared with the device report). `onStop` dismisses the Presentation, which
+  releases the SurfaceTexture, EGL and the thread before its surface goes (waits up to 2 s).
+- Frame pacing: Choreographer ticks at the phone screen's vsync, not the glasses'; the swap (interval
+  1) blocks on the glasses' queue, so a 120 Hz phone screen does not draw the glasses faster. Whether
+  that leaves the frames evenly paced is for the timing log (Task 6).
+- Checked here: the four C files compile with host gcc and clang `-std=c11 -Wall -Wextra -Werror
+  -fsyntax-only -D__ANDROID__` against the EGL/GLES3 headers (stub `jni.h` and `android/*.h`, written
+  for the check only). The copy pass's program compiles, links and draws (no GL error, framebuffer
+  complete) on Mesa llvmpipe in a surfaceless ES 3.0 context; glslang accepts `oes_copy.frag`. The
+  Kotlin, `DisplayPickerTest`, lint and the NDK build are proven by the `android` workflow only (no JDK
+  or Android SDK here). Nothing has run on a phone.
+- Owner steps, not yet run:
+  - H2 (GLES on the three GPUs): the test pattern on the Pixel 9 Pro XL (Mali), Pixel 10 Pro XL
+    (PowerVR) and S24 Ultra (Adreno) with the Viture, then the XREAL. Check: the pattern shows (no
+    "cannot show the picture" error, i.e. the copy pass and eye shader compile), each eye shows its
+    own four colours (docs/android.md), the eye halves are not mixed, no seam at the SBS split, and it
+    matches the Linux renderer's picture of the same quadrants. Note `GL_RENDERER` and the driver
+    version from the device report (the Pixel 10's launch driver was reported to stay at idle clocks).
+  - H3 (DeX and desktop mode): with each pair on each phone, whether Samsung DeX starts on plug-in and
+    whether the pattern still reaches the glasses with DeX on and off; the same for the Pixels'
+    desktop mode / connected-displays setting. Also: whether `preferredDisplayModeId` switches the
+    glasses from 1920x1080 to 3840x1080 on its own (if 1080p mode lists a 3840x1080 mode at all), and
+    what the phone says when the glasses are in 1080p; unplugging with the pattern up shows "Glasses
+    disconnected" without a crash; Home and back returns to the main screen with the pattern down.
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship
