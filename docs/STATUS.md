@@ -1288,6 +1288,20 @@ flicker` on a near-static shot, `--timing-log` with 3D on against off.
   (needs the owner's account); the name `xrdome` was free on 2026-11-21.
 - Not run on glasses from either package.
 
+## Android: VITURE protocol check H5 (2026-11-25)
+- Spec `docs/superpowers/specs/2026-11-25-android-vr180-design.md` 4.1, plan Task 7. Owner's run on the laptop,
+  XRLinuxDriver stopped (`rc-service --user xr-driver stop`), elasticjava/viture-v2 at its 2026-11-16 head.
+- `lsusb -d 35ca:`: `35ca:101d VITURE Pro VITURE Pro XR Glasses`. Interfaces: 0 HID (`0x81` IN, `0x01` OUT, 64 B),
+  1 HID (`0x82` IN, `0x02` OUT, 64 B), 2 CDC (`0x86`), 3 CDC data (`0x03`, `0x85`). The Pro 2 XR viture-v2 was
+  measured on has one HID interface.
+- viture-v2's command line only looks for product `0x1301` (`PID_PRO2` in `src/main.rs`), whatever its README
+  says; with it patched to `0x101D`, `probe` found the usbfs node but no hidraw node (the only hidraw node was the
+  touchpad; XRLinuxDriver had probably detached the kernel's HID driver), and `pose 5 usbfs` (interface 0)
+  ended `could not start the IMU: timed out`.
+- Result: fail. The Pro XR does not speak the Gen2 protocol. Owner's decision: port mgschwan's MIT
+  `viture_connection.c` (Gen1, derived from a decompiled SDK), with a companion app holding VITURE's AAR as the
+  fallback if VITURE objects (spec 4.1). Next check: H5b after Task 7 (the backend on Linux).
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship
