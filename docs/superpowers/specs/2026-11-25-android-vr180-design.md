@@ -1,7 +1,7 @@
 # Android front end, VR180 first: design
 
-Status: draft for the owner's review (2026-11-25). Plan: to follow in
-`docs/superpowers/plans/2026-11-25-android-vr180.md` once this is approved.
+Status: approved by the owner on 2026-11-25. Plan:
+`docs/superpowers/plans/2026-11-25-android-vr180.md`.
 
 ## 1. Intent
 
