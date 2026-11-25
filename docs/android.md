@@ -13,6 +13,12 @@ which comes from the native library (the shared core's build), so the version ma
 player's `xrdome --version`. Playback, the glasses display, head tracking and the file picker come
 in later steps; each adds its behaviour here.
 
+The "Device report" button lists what the phone offers: its decoders (H.264, HEVC, AV1) with whether each
+takes 4320x2160 at 30 and 60 fps, its displays and their modes, the GL driver, and attached USB devices.
+It also writes `device-report.txt`; read it from the computer with
+
+    adb pull /sdcard/Android/data/io.github.sdnick484.xrdome/files/device-report.txt
+
 Requirements: Android 13 or later (`minSdk 33`), a 64-bit ARM phone (`arm64-v8a` only).
 
 ## Install a CI build

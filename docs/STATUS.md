@@ -1376,6 +1376,26 @@ flicker` on a near-static shot, `--timing-log` with 3D on against off.
 - Owner steps, not yet run: install the CI APK with `adb install` on the Pixel 9 Pro XL and confirm it
   opens and shows the version.
 
+## Android Task 4: device report (issue #105, 2026-11-25)
+- Spec 5.3 Device report, plan Task 4. `MainActivity` has a "Device report" button that opens
+  `ReportActivity`, which shows `DeviceReport.collect(context).toText()` and writes it to
+  `getExternalFilesDir(null)/device-report.txt`. Sections in order: `[build]`, `[decoders]` (H.264, HEVC,
+  AV1 decoders: name, hardware or software, `isSizeSupported(4320,2160)`, `areSizeAndRateSupported` at 30
+  and 60, as yes/no), `[displays]` (id, name, flags, presentation category, every mode), `[gl]`
+  (`GL_RENDERER`, `GL_VERSION`, `GL_SHADING_LANGUAGE_VERSION`, the essl3 OES extension; from a pbuffer
+  ES 3.0 context in `gl_info.c` via `NativeBridge.glInfo()`), `[usb]` (vendor:product, product name; no
+  serial, no permission asked).
+- Checked here: `gl_info.c` compiles with host `gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only` against
+  the EGL and GLES3 headers. The Kotlin, `DeviceReportFormatTest`, lint and the NDK build are proven by the
+  `android` workflow only.
+- Owner steps, not yet run: H1 on the Pixel 9 Pro XL, Pixel 10 Pro XL and S24 Ultra, each with the Viture
+  and then the XREAL attached (also the `[displays]` half of H3 and the `[usb]` half of H5): open
+  "Device report", `adb pull` the file. Look at: `[decoders]` for a hardware `video/avc` and `video/av01`
+  with `size4320x2160=yes` and `rate30`/`rate60`; `[displays]` for a presentation display with a
+  `3840x1080@60` mode (and what shows in 1080p); `[gl]` for the renderer and `essl3 ... yes`; `[usb]` for
+  the glasses' ids. If the Pixel 9 Pro XL has no hardware decoder for 4320x2160 H.264 or AV1, stop before
+  Task 6 (#107 is rewritten first). Results go here.
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship
