@@ -121,6 +121,8 @@ test_names = [
   'framesink_gl',
   'devices',
   'render_gles',
+  'viture_proto',
+  'pose_viture_usb',
 ]
 # test_render and test_framesink_gl draw through a surfaceless Mesa EGL context.
 if not egl_dep.found()

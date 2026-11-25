@@ -17,6 +17,26 @@ look straight ahead when starting, or press `R`. If head right does not move the
 head up does not move it down, flip the axis in the pose spec, e.g.
 `--pose udp-opentrack:port=4242,yaw=-1` (keys `yaw`, `pitch`, `roll`, each `1` or `-1`).
 
+### Head tracking straight from the VITURE Pro XR (`viture-usb`, experimental)
+
+On Linux, xrdome can read the VITURE Pro XR's IMU itself over USB, without XRLinuxDriver or
+VITURE's SDK (the same code the Android app uses; see [Licence](licence.md) for where its protocol
+comes from). Not yet checked on the glasses (hardware check H5b in `docs/STATUS.md`). Stop the
+driver first, since only one program can hold the glasses' interfaces, and find the bus and device
+numbers:
+
+```sh
+rc-service --user xr-driver stop      # or however the driver runs on your system
+lsusb -d 35ca:                         # Bus 003 Device 007: ID 35ca:101d VITURE Pro ...
+./build/xrdome --pose viture-usb:dev=/dev/bus/usb/003/007 file.mp4
+```
+
+The device node must be writable by you (XRLinuxDriver's udev rule usually grants it; otherwise
+add a rule for vendor `35ca`). `yaw`, `pitch` and `roll` (`1` or `-1`) flip an axis as for
+`udp-opentrack`, e.g. `viture-usb:dev=/dev/bus/usb/003/007,yaw=-1`. If the glasses do not answer,
+xrdome exits with `viture-usb: the glasses did not start the IMU`. At exit it prints how many bad
+packets it dropped. The `fd=N` form is for the Android app, which opens the device itself.
+
 ## Keys
 
 | Key | Action |
@@ -83,7 +103,8 @@ start gives a tilted picture, and `R` does not correct that. Hold your head leve
 
 ## Flags
 
-`--pose SPEC` (`null`, or `udp-opentrack` with `port`, `yaw`, `pitch`, `roll`), `--output NAME`,
+`--pose SPEC` (`null`, `udp-opentrack` with `port`, `yaw`, `pitch`, `roll`, or `viture-usb` with
+`dev=/dev/bus/usb/BBB/DDD` or `fd=N` and `yaw`, `pitch`, `roll`; Linux only), `--output NAME`,
 `--device viture-pro|xreal-air2pro`, `--zoom F`, `--proj auto|hequirect|flat`,
 `--layout auto|sbs-lr|sbs-rl|tb-lr|tb-rl|mono`, `--packing auto|half|full`,
 `--zoom-mode screen|magnify`, `--screen fixed|locked`, `--screen-curve off|R`, `--mipmap on|off`,

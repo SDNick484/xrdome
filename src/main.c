@@ -1669,6 +1669,9 @@ out:
     if (pose && strcmp(pose->name, "udp-opentrack") == 0)
         fprintf(stderr, "pose: %u malformed UDP packets dropped\n",
                 (unsigned)xrd_pose_udp_dropped(pose));
+    if (pose && strcmp(pose->name, "viture-usb") == 0)
+        fprintf(stderr, "pose: %u bad viture-usb packets dropped\n",
+                (unsigned)xrd_pose_viture_dropped(pose));
     video_stop(&app);         /* needs the GL context current */
     free(app.vdepth);
     xrd_timing_close(timing); /* prints the missed-vsync summary */
