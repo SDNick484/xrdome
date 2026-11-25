@@ -359,12 +359,14 @@ jobs:
             fi
           done
           # What must never be in it: a build tree, the git directory, an SDK library, or
-          # VITURE's own headers (only the stand-ins under tests/fake_include are ours).
+          # VITURE's own headers (the stand-ins under tests/fake_include, the helper's
+          # loader and the viture-usb backend's protocol header are ours).
           if grep -E '(^|/)(\.git|build[^/]*|meson-[a-z]+)/|\.(o|a|so|dylib|dll|exe)$|libglasses' "$RUNNER_TEMP/files.txt"; then
             echo "::error::the tarball holds build output or a library"; exit 1
           fi
           if grep -E '(^|/)viture_[a-z_]+\.h$' "$RUNNER_TEMP/files.txt" \
-               | grep -v -e '/tests/fake_include/' -e '/helpers/xrdome-pose-viture/viture_loader\.h$'; then
+               | grep -v -e '/tests/fake_include/' -e '/helpers/xrdome-pose-viture/viture_loader\.h$' \
+                         -e '/src/pose/viture_proto\.h$'; then
             echo "::error::the tarball holds a VITURE SDK header"; exit 1
           fi
           # Nothing from an FFmpeg or mpv build or source (the owner's FFmpeg is non-free).
