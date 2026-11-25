@@ -23,7 +23,7 @@ typedef enum {
  * the video texture's chain holds levels 0 to this. */
 #define XRD_MIP_MAX_LEVEL 3
 
-/* Needs a current GL 3.3 core context. Returns NULL and fills err on failure. */
+/* Needs a current GL 3.3 core or GLES 3.0 context (src/render/gl.h). Returns NULL and fills err on failure. */
 xrd_renderer *xrd_renderer_new(char *err, size_t errlen);
 void xrd_renderer_free(xrd_renderer *r);
 

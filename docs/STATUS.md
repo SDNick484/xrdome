@@ -1331,6 +1331,27 @@ flicker` on a near-static shot, `--timing-log` with 3D on against off.
   missed vsyncs are at most `main`'s worst plus 4. The six numbers go here.
 - Step 9, H5: recorded above (PR #114).
 
+## Android Task 2: shared shader and renderer on GLES 3.0 (issue #103, 2026-11-25)
+- Spec 5.3 GL, plan Task 2. `tools/embed_shaders.py` now emits, for every `NAME=file`, the unchanged
+  `XRD_SHADER_NAME` and `XRD_SHADER_NAME_ES` (`#version 330 core` becomes `#version 300 es`, then
+  `precision highp float/int/sampler2D`); a source not starting with `#version 330 core` exits 1
+  naming the file. `src/render/gl.h` picks `<GLES3/gl3.h>` on Android, libepoxy elsewhere, and
+  `xrd_gl_is_es()` (Android: true; else `!epoxy_is_desktop_gl()`).
+- `xrd_renderer_new` compiles the `_ES` sources (eye and sharpen programs, the vertex shader too) when
+  `xrd_gl_is_es()`. On ES `xrd_renderer_set_depth` returns false with "depth 3D needs desktop GL"
+  (a NULL map, which only drops, still returns true), `has_depth` stays false and the
+  `GL_FRAMEBUFFER_SRGB` disable is skipped. The desktop path is unchanged: same shader text, same calls.
+- New tests: `tools/tests/test_embed_shaders.py` (`test_es_rewrite`, `test_bad_version_fails`) and
+  `test_render_gles` (cmocka; surfaceless EGL, `EGL_OPENGL_ES_API`, an ES 3.0 context; exit 77 when
+  Mesa cannot make one): `hequirect_centre_colour`, `sbs_eyes_not_mixed`, `flat_corners_black`,
+  `depth_refused_on_es`, plus `is_es` and a sharpen/dither draw (compiles the ES sharpen program).
+  The expected colours are the desktop test's, within +-2 per channel.
+- Laptop (no cmocka): gate builds clean with `-Dwerror=true`, pytest passes. A local cmocka stand-in
+  ran `test_render_gles` on this machine's Mesa llvmpipe (ES 3.2): all 6 pass, no skip. The cmocka
+  test as built by meson, and its running in the Ubuntu and Arch jobs, are proven by CI only. No Android
+  device was involved: the Adreno/Mali driver's shader compiler is untested (owner steps H2 onward,
+  not yet run).
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship

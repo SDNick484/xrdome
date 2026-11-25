@@ -120,12 +120,13 @@ test_names = [
   'framesink',
   'framesink_gl',
   'devices',
+  'render_gles',
 ]
 # test_render and test_framesink_gl draw through a surfaceless Mesa EGL context.
 if not egl_dep.found()
   kept = []
   foreach n : test_names
-    if n != 'render' and n != 'framesink_gl'
+    if n != 'render' and n != 'framesink_gl' and n != 'render_gles'
       kept += n
     endif
   endforeach
