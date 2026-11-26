@@ -29,6 +29,8 @@ xrd_pose_source *xrd_pose_source_create(const char *spec, char *err, size_t errl
         s = xrd_pose_null_alloc();
     else if (nlen == 13 && strncmp(spec, "udp-opentrack", 13) == 0)
         s = xrd_pose_udp_alloc();
+    else if (nlen == 10 && strncmp(spec, "viture-usb", 10) == 0)
+        s = xrd_pose_viture_usb_alloc();
     else {
         char msg[160];
         snprintf(msg, sizeof msg, "unknown pose backend '%.*s'", (int)nlen, spec);
@@ -43,6 +45,8 @@ xrd_pose_source *xrd_pose_source_create(const char *spec, char *err, size_t errl
     if (s->open(s, args) != 0) {
         if (strcmp(s->name, "udp-opentrack") == 0)
             set_err(err, errlen, xrd_pose_udp_open_error(s));
+        else if (strcmp(s->name, "viture-usb") == 0)
+            set_err(err, errlen, xrd_pose_viture_open_error(s));
         else
             set_err(err, errlen, "failed to open pose backend");
         free(s);

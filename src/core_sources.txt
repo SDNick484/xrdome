@@ -21,3 +21,6 @@ src/render/renderer_gl.c
 src/platform/paths.c
 src/devices.c
 src/app/controls.c
+src/pose/usbfs.c
+src/pose/viture_proto.c
+src/pose/pose_viture_usb.c

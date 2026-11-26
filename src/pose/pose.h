@@ -19,9 +19,15 @@ typedef struct xrd_pose_source {
     void (*close)(struct xrd_pose_source *);
 } xrd_pose_source;
 
-/* spec = "name" or "name:key=val,key=val". Names: "null", "udp-opentrack".
+/* spec = "name" or "name:key=val,key=val". Names: "null", "udp-opentrack",
+ * "viture-usb".
  * udp-opentrack keys: port (default 4242), yaw, pitch, roll (each 1 or -1,
- * default 1). Allocates the backend, calls open(); returns NULL with err set
+ * default 1).
+ * viture-usb keys: fd=N (a usbfs descriptor with interfaces 0 and 1 claimed,
+ * as an Android app gets from UsbManager) or dev=/dev/bus/usb/BBB/DDD
+ * (opened and claimed by the backend), and yaw, pitch, roll as above. Linux
+ * and Android only; elsewhere it fails with "viture-usb: Linux and Android
+ * only". Allocates the backend, calls open(); returns NULL with err set
  * on failure. */
 xrd_pose_source *xrd_pose_source_create(const char *spec, char *err, size_t errlen);
 
@@ -32,5 +38,9 @@ void xrd_pose_source_destroy(xrd_pose_source *s);
 
 /* Datagrams rejected by the parser so far; 0 for other backends or NULL. */
 uint32_t xrd_pose_udp_dropped(const xrd_pose_source *s);
+
+/* viture-usb packets rejected by xrd_viture_parse (bad header, length or
+ * CRC) or carrying no usable angles; 0 for other backends or NULL. */
+uint32_t xrd_pose_viture_dropped(const xrd_pose_source *s);
 
 #endif

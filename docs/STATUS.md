@@ -1445,6 +1445,38 @@ flicker` on a near-static shot, `--timing-log` with 3D on against off.
     what the phone says when the glasses are in 1080p; unplugging with the pattern up shows "Glasses
     disconnected" without a crash; Home and back returns to the main screen with the pattern down.
 
+## Android Task 7: VITURE Pro XR USB protocol, `viture-usb` pose backend (issue #108, 2026-11-25)
+- Spec 4.1 and 5.4, plan Task 7. New core files (in `src/core_sources.txt`): `pose/usbfs.c` (usbfs
+  transfers, Linux and Android; an empty unit elsewhere), `pose/viture_proto.c` (frames, CRC, IMU
+  packets, Euler to GL), `pose/pose_viture_usb.c` (the backend); headers `pose/usb_io.h`,
+  `pose/usbfs.h`, `pose/viture_proto.h`. Spec strings `viture-usb:dev=/dev/bus/usb/BBB/DDD` (Linux:
+  opens, detaches and claims interfaces 0 and 1) and `viture-usb:fd=N` (Android: the app's descriptor
+  and claims), with `yaw`, `pitch`, `roll`; on macOS and Windows both fail with `viture-usb: Linux and
+  Android only`. Linux behaviour with the default pose source is unchanged; `xrdome` prints the
+  backend's dropped-packet count at exit, as it does for `udp-opentrack`.
+- Ported from mgschwan/viture_virtual_display `viture_connection.c` (and `makeFloat` in `v4l2_gl.c`),
+  commit `6d50d39` (MIT; derived from a decompiled VITURE SDK): notice in both `.c` files, provenance
+  and the option B fallback in `docs/licence.md`. Read from the source, not run.
+- Choices made from the source (H5b checks them): the IMU-on reply is accepted with header id 0 or
+  `0x15`; a frame whose CRC fails is dropped (mgschwan only warns), so a high dropped count at exit
+  means the glasses' CRC differs from the reading; the default signs are all +1 (the angles taken as
+  NWU; mgschwan's yaw negation is read as the scene-inverse of `glRotatef`); the reader also drains
+  the MCU interface every 100 ms, as mgschwan's driver reads it continuously.
+- Tests: `viture_proto` (12) and `pose_viture_usb` (13, fake endpoint pairs, including
+  `bad_checksum_dropped` and `read_error_goes_stale`), cmocka. Laptop (no cmocka, no xvfb-run):
+  `-Dwerror=true` build clean; the cmocka tests and smoke tests are proven by CI only. Outside the
+  gate, a local cmocka stand-in ran both new tests with ASan/UBSan and the backend test under TSan
+  (all pass, no reports), plus `pose_udp` and `tracker`; the non-Linux path was compiled and run with
+  `-U__linux__`, gcc and clang.
+- Step 6, H5b (owner, on the laptop with the glasses): **not yet run**. `rc-service --user xr-driver
+  stop`; `lsusb -d 35ca:` for bus BBB and device DDD; `./build/xrdome --pose
+  viture-usb:dev=/dev/bus/usb/BBB/DDD --windowed --timing-log h5b.csv pattern_sbs.mp4`; look left, up,
+  tilt (signs as issue #64 item 1); the pose rate from the CSV's `pose_age_us` (XRLinuxDriver gives
+  about 365 packets per second); note the `bad viture-usb packets dropped` line at exit;
+  `rc-service --user xr-driver start`. A wrong sign: fix the default in `pose_viture_usb.c`
+  (`map_angles`), not with a flag. If the IMU does not start, stop: Tasks 8 and 9 wait and option B
+  comes back to the owner.
+
 ## Decisions
 - Architecture B: one C11 process, libmpv render API + own GL projection pass. meson, cmocka.
 - Pose sources are pluggable; XRLinuxDriver is reached over UDP only. Never link or ship
